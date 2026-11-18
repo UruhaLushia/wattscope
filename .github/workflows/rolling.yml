@@ -1,0 +1,67 @@
+name: Rolling
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rolling
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-cross.yml
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: wattscope-*
+          path: artifacts
+
+      - name: Publish rolling prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          packages=(artifacts/wattscope-*/**/wattscope[-_]*)
+          ((${#packages[@]} > 0))
+          declare -A published
+          for package in "${packages[@]}"; do
+            [[ -f "$package" && -s "$package" ]]
+            name=${package##*/}
+            if [[ ${published[$name]+present} ]]; then
+              echo "::error::Duplicate release asset $name"
+              exit 1
+            fi
+            published[$name]=1
+          done
+
+          notes="$RUNNER_TEMP/rolling-notes.md"
+          git log -1 --format='%s%n%n%b' > "$notes"
+          if previous_assets=$(gh release view rolling --json assets --jq '.assets[].name'); then
+            gh release upload rolling "${packages[@]}" --clobber
+            while IFS= read -r name; do
+              if [[ "$name" == wattscope[-_]* && ! ${published[$name]+present} ]]; then
+                gh release delete-asset rolling "$name" --yes
+              fi
+            done <<< "$previous_assets"
+            gh release edit rolling --title Rolling --draft=false --prerelease --latest=false --notes-file "$notes"
+          else
+            gh release create rolling "${packages[@]}" --target "$GITHUB_SHA" --title Rolling --prerelease --latest=false --notes-file "$notes"
+          fi
+          git push --force origin "$GITHUB_SHA:refs/tags/rolling"

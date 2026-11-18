@@ -1,0 +1,102 @@
+name: Build Android
+
+on:
+  workflow_call:
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: true
+      ANDROID_KEYSTORE_PASSWORD:
+        required: true
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: android/arm64 (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cli, gui]
+    env:
+      ANDROID_BUILD_TOOLS: '35.0.0'
+      ANDROID_NDK_VERSION: '30.0.16248370'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-java@v6.3.0
+        if: matrix.variant == 'gui'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4.0.4
+        if: matrix.variant == 'gui'
+        with:
+          packages: >-
+            platforms;android-36
+            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+
+      - uses: gradle/actions/setup-gradle@v6.4.1
+        if: matrix.variant == 'gui'
+        with:
+          cache-provider: basic
+
+      - name: Build Android packages
+        if: matrix.variant == 'gui'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          MYGO_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          : "${ANDROID_KEYSTORE_BASE64:?Set ANDROID_KEYSTORE_BASE64}" "${MYGO_ANDROID_KEYSTORE_PASSWORD:?Set ANDROID_KEYSTORE_PASSWORD}"
+          keystore=$(mktemp "$RUNNER_TEMP/wattscope.XXXXXX")
+          config="$RUNNER_TEMP/mygo-android.json"
+          trap 'rm -f "$keystore" "$config"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          unset ANDROID_KEYSTORE_BASE64
+          jq --arg keystore "$keystore" '.android += {keystore: $keystore, keyAlias: "wattscope"}' mygo.json > "$config"
+          mv "$config" mygo.json
+
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          go tool mygo build -platform android/arm64
+          "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner" verify build/android/*.apk
+          jarsigner -verify -strict -keystore "$keystore" -storetype PKCS12 \
+            -storepass:env MYGO_ANDROID_KEYSTORE_PASSWORD build/android/*.aab wattscope
+
+      - name: Build Android CLI
+        if: matrix.variant == 'cli'
+        env:
+          CGO_ENABLED: '0'
+          GOOS: android
+          GOARCH: arm64
+        run: go build -trimpath -tags no_gui -ldflags='-s -w' -o build/android/wattscope-cli-android-arm64 ./cmd/wattscope
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: matrix.variant == 'gui'
+        with:
+          name: wattscope-android-arm64-gui
+          path: |
+            build/android/*.apk
+            build/android/*.aab
+            LICENSE
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: matrix.variant == 'cli'
+        with:
+          name: wattscope-android-arm64-cli
+          path: |
+            build/android/wattscope-cli-android-arm64
+            LICENSE
+          if-no-files-found: error
+          retention-days: 7

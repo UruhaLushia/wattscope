@@ -1,0 +1,4 @@
+/build/
+/.mygo/
+/wattscope.p12
+*.exe

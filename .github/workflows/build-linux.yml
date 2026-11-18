@@ -1,0 +1,51 @@
+name: Build Linux
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: linux/${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64, loong64, riscv64]
+    env:
+      CGO_ENABLED: '0'
+      TARGET_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Linux packages
+        run: go tool mygo build -platform "linux/$TARGET_ARCH"
+
+      - name: Verify Linux packages
+        shell: bash
+        run: |
+          shopt -s nullglob
+          archives=("build/linux-$TARGET_ARCH/"*.tar.gz)
+          debs=("build/linux-$TARGET_ARCH/"*.deb)
+          ((${#archives[@]} > 0))
+          for package in "${archives[@]}" "${debs[@]}"; do
+            test -s "$package"
+          done
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: wattscope-linux-${{ matrix.arch }}-combined
+          path: |
+            build/linux-${{ matrix.arch }}/*.tar.gz
+            build/linux-${{ matrix.arch }}/*.deb
+            LICENSE
+          if-no-files-found: error
+          retention-days: 7

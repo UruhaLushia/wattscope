@@ -1,0 +1,26 @@
+name: Cross-platform build
+
+on:
+  workflow_call:
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: true
+      ANDROID_KEYSTORE_PASSWORD:
+        required: true
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    uses: ./.github/workflows/build-linux.yml
+  macos:
+    uses: ./.github/workflows/build-macos.yml
+  windows:
+    uses: ./.github/workflows/build-windows.yml
+  android:
+    uses: ./.github/workflows/build-android.yml
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

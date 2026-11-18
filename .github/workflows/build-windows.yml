@@ -1,0 +1,73 @@
+name: Build Windows
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: windows/${{ matrix.arch }} (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        variant: [cli, gui]
+    env:
+      CGO_ENABLED: '0'
+      TARGET_ARCH: ${{ matrix.arch }}
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify Windows build tags
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          case "$VARIANT" in
+            cli) tag=no_gui; excluded=github.com/egoist/mygo ;;
+            gui) tag=no_cli; excluded=github.com/spf13/cobra ;;
+          esac
+          dependencies="$(go list -deps -tags "$tag" ./cmd/wattscope)"
+          if grep -Fxq "$excluded" <<< "$dependencies"; then
+            echo "::error::$excluded is present in the Windows $VARIANT build"
+            exit 1
+          fi
+
+      - name: Build Windows CLI
+        if: matrix.variant == 'cli'
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          exe="build/wattscope-windows-$TARGET_ARCH.exe"
+          go build -trimpath -tags no_gui -ldflags='-s -w -H=windows' -o "$exe" ./cmd/wattscope
+          [[ "$(file -b "$exe")" == *'(console)'* ]]
+
+      - name: Build Windows GUI
+        if: matrix.variant == 'gui'
+        env:
+          GOFLAGS: -tags=no_cli
+        run: |
+          go tool mygo build -platform "windows/$TARGET_ARCH" -skip-installer
+          exe="build/wattscope-gui-windows-$TARGET_ARCH.exe"
+          cp "build/windows-$TARGET_ARCH/WattScope.exe" "$exe"
+          [[ "$(file -b "$exe")" == *'(GUI)'* ]]
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: wattscope-windows-${{ matrix.arch }}-${{ matrix.variant }}
+          path: |
+            build/wattscope-${{ matrix.variant == 'gui' && 'gui-' || '' }}windows-${{ matrix.arch }}.exe
+            LICENSE
+          if-no-files-found: error
+          retention-days: 7

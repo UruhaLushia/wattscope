@@ -1,0 +1,42 @@
+name: Build macOS
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: darwin/${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      CGO_ENABLED: '0'
+      TARGET_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build macOS app
+        run: go tool mygo build -platform "darwin/$TARGET_ARCH" -skip-dmg
+
+      - name: Archive macOS app
+        run: tar -czf "build/wattscope-darwin-$TARGET_ARCH.tar.gz" README.md LICENSE -C "build/darwin-$TARGET_ARCH" WattScope.app
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: wattscope-darwin-${{ matrix.arch }}-combined
+          path: |
+            build/wattscope-darwin-${{ matrix.arch }}.tar.gz
+            LICENSE
+          if-no-files-found: error
+          retention-days: 7

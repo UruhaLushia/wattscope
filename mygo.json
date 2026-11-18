@@ -1,0 +1,18 @@
+{
+  "name": "WattScope",
+  "slug": "wattscope",
+  "identifier": "io.github.UruhaLushia.wattscope",
+  "version": "0.1.0",
+  "license": "GPL-3.0-only",
+  "main": "./cmd/wattscope",
+  "icon": "assets/icon/icon.png",
+  "android": {
+    "keystore": "wattscope.p12",
+    "keyAlias": "wattscope"
+  },
+  "i18n": {
+    "dir": "locales",
+    "source": "en"
+  },
+  "out": "build"
+}

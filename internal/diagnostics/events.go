@@ -1,0 +1,25 @@
+package diagnostics
+
+const (
+	AppStarted           = "log_app_started"
+	ScanStarted          = "log_scan_started"
+	ScanFailed           = "log_scan_failed"
+	ScanCompleted        = "log_scan_completed"
+	MeterFound           = "log_meter_found"
+	Connecting           = "log_connecting"
+	SessionFailed        = "log_session_failed"
+	AcquisitionStarted   = "log_acquisition_started"
+	AcquisitionStopped   = "log_acquisition_stopped"
+	MeterOpened          = "log_meter_opened"
+	ConnectionFailed     = "log_connection_failed"
+	InvalidReport        = "log_invalid_report"
+	FirstMeasurement     = "log_first_measurement"
+	AndroidOpening       = "log_android_opening"
+	AndroidAccessGranted = "log_android_access_granted"
+	DriverScanFinished   = "log_driver_scan_finished"
+	OpeningMeter         = "log_opening_meter"
+	ConnectionAttempt    = "log_connection_attempt"
+	RetryScheduled       = "log_retry_scheduled"
+	KM003CRequest        = "log_km003c_request"
+	KM003CReply          = "log_km003c_reply"
+)
