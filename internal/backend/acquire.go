@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"time"
 
@@ -167,6 +168,19 @@ func (s *Service) accept(v device.Sample) error {
 	}
 	v.Segment = s.segment
 	s.snapshot.Statistics.add(v, s.previous, s.opts.StaleAfter.Seconds())
+	values := [7]*float64{&v.Power, &v.Voltage, &v.Current, v.Temperature, v.DP, v.DN, v.ExternalTemperature}
+	for index, value := range values {
+		if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
+			continue
+		}
+		bounds := &s.snapshot.ChartRanges[index]
+		if !bounds.Valid {
+			*bounds = ChartRange{Min: *value, Max: *value, Valid: true}
+		} else {
+			bounds.Min = min(bounds.Min, *value)
+			bounds.Max = max(bounds.Max, *value)
+		}
+	}
 	if s.snapshot.Latest == nil {
 		s.snapshot.Latest = new(device.Sample)
 	}

@@ -531,6 +531,13 @@ func trendAxis(low, high float64) chart.Linear {
 	return axis
 }
 
+func chartAxis(bounds backend.ChartRange, stat channelStat) chart.Linear {
+	if bounds.Valid {
+		return trendAxis(bounds.Min, bounds.Max)
+	}
+	return trendAxis(stat.low, stat.high)
+}
+
 type chartSamplesKey struct {
 	first *device.Sample
 	count int
@@ -643,7 +650,7 @@ func formatCompactMetric(value float64, decimals int) string {
 	return fmt.Sprintf("%.*f", decimals, value)
 }
 
-func sampleNormalizedSeries(history []device.Sample, ch measurement, axis chart.Linear, winStart, winEnd float64, pixelWidth int, smooth bool) (xs, ysUp []float32, peak *device.Sample, peakVal, peakPlotted, lastValue float64) {
+func sampleNormalizedSeries(history []device.Sample, ch measurement, axis chart.Linear, winStart, winEnd float64, pixelWidth int, smooth bool) (xs, ysUp []float32, lastValue float64) {
 	const (
 		smoothingSigma  = 0.08
 		smoothingRadius = 0.24
@@ -660,7 +667,6 @@ func sampleNormalizedSeries(history []device.Sample, ch measurement, axis chart.
 	xs = make([]float32, 0, n)
 	ysUp = make([]float32, 0, n)
 	gap := float32(math.NaN())
-	peakVal = math.Inf(-1)
 
 	runStart, runEnd := 0, 0
 	for runStart < n {
@@ -712,18 +718,13 @@ func sampleNormalizedSeries(history []device.Sample, ch measurement, axis chart.
 			yf := clampFloat32(axis.At(plotted), 0, 1)
 			xs = append(xs, xf)
 			ysUp = append(ysUp, yf)
-			if val > peakVal && rec.Elapsed >= winStart-1e-6 && rec.Elapsed <= winEnd+1e-6 {
-				peakVal = val
-				peakPlotted = plotted
-				peak = rec
-			}
 		}
 		runStart = runEnd
 	}
 	if pixelWidth > 8 && len(xs) > pixelWidth*2 {
 		xs, ysUp = chart.MinMax(nil, nil, xs, ysUp, pixelWidth)
 	}
-	return xs, ysUp, peak, peakVal, peakPlotted, lastValue
+	return xs, ysUp, lastValue
 }
 
 func seriesPointsFromNormalized(plotRect ui.Rect, xs, ysUp []float32) [][2]float32 {
@@ -754,20 +755,24 @@ type chartGeometryKey struct {
 	primary    int
 	series     uint8
 	smooth     bool
+	axes       [len(channels)][2]float64
 }
 
 type chartGeometry struct {
-	key         chartGeometryKey
-	lines       [len(channels)][][2]float32
-	area        *ui.Path
-	peak        *device.Sample
-	peakValue   float64
-	peakPlotted float64
-	lastValue   float64
+	key       chartGeometryKey
+	lines     [len(channels)][][2]float32
+	area      *ui.Path
+	lastValue float64
 }
 
-func (d *dashboard) prepareChartGeometry(history []device.Sample, rect ui.Rect, start, end float64, primary int, series uint8) *chartGeometry {
+func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]backend.ChartRange, rect ui.Rect, start, end float64, primary int, series uint8) *chartGeometry {
 	key := chartGeometryKey{samples: chartSamplesIdentity(history), rect: rect, start: start, end: end, primary: primary, series: series, smooth: d.settings.SmoothChart}
+	for index := range channels {
+		if index == primary || series&uint8(1<<index) != 0 {
+			axis := chartAxis(ranges[index], d.visibleChartStat(history, index))
+			key.axes[index] = [2]float64{axis.Lo, axis.Hi}
+		}
+	}
 	cache := &d.chartGeometry
 	if cache.key == key {
 		return cache
@@ -781,11 +786,10 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, rect ui.Rect, 
 		if stat.count == 0 {
 			continue
 		}
-		axis := trendAxis(stat.low, stat.high)
-		xs, ys, peak, peakValue, peakPlotted, lastValue := sampleNormalizedSeries(history, channel, axis, start, end, int(rect.W), key.smooth)
+		axis := chart.NewLinear(key.axes[index][0], key.axes[index][1])
+		xs, ys, lastValue := sampleNormalizedSeries(history, channel, axis, start, end, int(rect.W), key.smooth)
 		cache.lines[index] = seriesPointsFromNormalized(rect, xs, ys)
 		if index == primary {
-			cache.peak, cache.peakValue, cache.peakPlotted = peak, peakValue, peakPlotted
 			cache.lastValue = lastValue
 			if len(xs) >= 2 {
 				var zeroRef []float32
@@ -1121,9 +1125,9 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 
 		// Horizontal grid + Primary Right Y-axis (compute live pill band first to avoid tick overlap).
 		tone := channel.color(p)
-		axis := trendAxis(stat.low, stat.high)
+		axis := chartAxis(snap.ChartRanges[primary], stat)
 		ticks := axis.Ticks(4)
-		geometry := d.prepareChartGeometry(history, plotRect, winStart, winEnd, primary, seriesMask)
+		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, winStart, winEnd, primary, seriesMask)
 		hasLivePill := false
 		var livePos ui.Point
 		var liveStr string
@@ -1181,7 +1185,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 			secCh := channels[secIdx]
 			secStat := d.visibleChartStat(history, secIdx)
 			if secStat.count > 0 {
-				secAxis := trendAxis(secStat.low, secStat.high)
+				secAxis := chartAxis(snap.ChartRanges[secIdx], secStat)
 				secTone := secCh.color(p)
 				secTicks := secAxis.Ticks(4)
 				for idx, tick := range secTicks {
@@ -1226,25 +1230,6 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 			}
 			if points := geometry.lines[primary]; len(points) >= 2 {
 				painter.StrokePolyline(points, 2.2, tone)
-			}
-
-			if geometry.peak != nil && stat.high > stat.low && !d.hasCursor && !d.hasHover && plotRect.W >= 220 {
-				pkPos := toPoint(geometry.peak.Elapsed, geometry.peakPlotted, axis)
-				nearLive := hasLivePill && liveStr != "" && math.Abs(float64(pkPos.X-livePos.X)) < 48 && math.Abs(float64(pkPos.Y-livePos.Y)) < 24
-				if !nearLive {
-					painter.Fill(ui.Rect{X: pkPos.X - 3, Y: pkPos.Y - 3, W: 6, H: 6}, tone, 3)
-					tag := fmt.Sprintf("%s %s %s", msgs.GuiMax(), formatCompactMetric(geometry.peakValue, channel.decimals), channel.unit)
-					tw, _ := painter.MeasureText(1<<20, ui.Span{Text: tag, Size: 10})
-					pw, ph := tw+10, float32(18)
-					px := clampFloat32(pkPos.X-pw/2, left+4, right-pw-4)
-					py := pkPos.Y - ph - 6
-					if py < top+4 {
-						py = pkPos.Y + 6
-					}
-					painter.Fill(ui.Rect{X: px, Y: py, W: pw, H: ph}, p.Surface.Alpha(0.92), kit.RadiusS)
-					painter.Stroke(ui.Rect{X: px, Y: py, W: pw, H: ph}, tone.Alpha(0.42), kit.RadiusS, 1)
-					painter.Text(px+5, py+3, tag, 10, tone)
-				}
 			}
 		})
 

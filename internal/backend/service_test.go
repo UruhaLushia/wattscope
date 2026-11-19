@@ -306,6 +306,28 @@ func TestSampledHistoryStaysStableAfterWritesAndReset(t *testing.T) {
 	}
 }
 
+func TestChartRangesCoverSessionAndReset(t *testing.T) {
+	service := historyService(t, 2)
+	temp := 32.0
+	for _, sample := range []device.Sample{
+		{Power: 15, Voltage: 9, Current: 2, Temperature: &temp},
+		{Power: 3, Voltage: 5, Current: 1},
+		{Power: 4, Voltage: 6, Current: 1},
+	} {
+		if err := service.accept(sample); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ranges := service.Snapshot(0).ChartRanges
+	if ranges[0] != (ChartRange{Min: 3, Max: 15, Valid: true}) || ranges[3] != (ChartRange{Min: 32, Max: 32, Valid: true}) || ranges[4].Valid {
+		t.Fatalf("unexpected session ranges: %+v", ranges)
+	}
+	service.ResetStatistics()
+	if got := service.Snapshot(0).ChartRanges; got != [7]ChartRange{} {
+		t.Fatalf("ranges after reset: %+v", got)
+	}
+}
+
 func BenchmarkServiceAccept(b *testing.B) {
 	service := historyService(b, 1024)
 	b.ReportAllocs()

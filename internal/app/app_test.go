@@ -410,18 +410,15 @@ func TestChartSmoothing(t *testing.T) {
 	}
 	rect := ui.Rect{W: 320, H: 160}
 	var d dashboard
-	raw := d.prepareChartGeometry(history, rect, 0, 1, 0, 1)
+	raw := d.prepareChartGeometry(history, [7]backend.ChartRange{}, rect, 0, 1, 0, 1)
 	rawPeakY, rawNewSegmentY := raw.lines[0][1][1], raw.lines[0][4][1]
 	d.settings.SmoothChart = true
-	smoothed := d.prepareChartGeometry(history, rect, 0, 1, 0, 1)
+	smoothed := d.prepareChartGeometry(history, [7]backend.ChartRange{}, rect, 0, 1, 0, 1)
 	points := smoothed.lines[0]
 	rawSpike := points[0][1] - rawPeakY
 	smoothedSpike := points[0][1] - points[1][1]
 	if smoothedSpike <= 0 || smoothedSpike >= rawSpike*0.1 {
 		t.Fatalf("expected a single-sample spike to shrink below 10%%, got %g px from %g px", smoothedSpike, rawSpike)
-	}
-	if smoothed.peak != &history[1] || smoothed.peakValue != 20 {
-		t.Fatal("expected the raw peak to be preserved")
 	}
 	if !math.IsNaN(float64(points[3][0])) || points[4][1] != rawNewSegmentY || smoothed.lastValue != 5 {
 		t.Fatal("expected smoothing to restart on a new segment or after a gap")
@@ -1707,7 +1704,7 @@ func TestConnectionLogTextAndFormatting(t *testing.T) {
 		t.Fatalf("expected usb formatted as USB, got %q", got)
 	}
 	zh := locales.In("zh-Hans")
-	if got := zh.DiagnosticField("transport", "hid"); got != "传输方式: HID" {
+	if got := zh.DiagnosticField("transport", "hid"); got != "传输方式：HID" {
 		t.Fatalf("expected hid formatted as HID, got %q", got)
 	}
 
@@ -1880,13 +1877,6 @@ func TestSettingsRowAlignmentAndSmoothPeak(t *testing.T) {
 	}
 	if ds.chartGeometry.key.end > 90.05 {
 		t.Fatalf("expected live >60s chart to stay anchored at latest timestamp 90, got end=%v", ds.chartGeometry.key.end)
-	}
-	g := ds.chartGeometry
-	if g.peak == nil || math.Abs(g.peakValue-23.4) > 0.05 {
-		t.Fatalf("expected raw peak near 23.4W, got %v (peak=%v)", g.peakValue, g.peak)
-	}
-	if g.peakPlotted <= 16.0 || g.peakPlotted > g.peakValue+1e-6 {
-		t.Fatalf("expected plotted peak height on smoothed curve to track near peak, got %v (raw=%v)", g.peakPlotted, g.peakValue)
 	}
 }
 

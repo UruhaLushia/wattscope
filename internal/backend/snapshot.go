@@ -28,6 +28,7 @@ type Snapshot struct {
 	HistoryEnd     float64         `json:"history_end_s,omitempty"`
 	HistoryCount   int             `json:"history_count,omitempty"`
 	HistoryVersion uint64          `json:"-"`
+	ChartRanges    [7]ChartRange   `json:"-"` // power, voltage, current, temperature, D+, D-, external temperature
 	InvalidReports uint64          `json:"invalid_reports"`
 	OtherReports   uint64          `json:"other_reports"`
 	Connections    uint64          `json:"connections"`
@@ -36,6 +37,12 @@ type Snapshot struct {
 	Recording      Recording       `json:"recording"`
 	Error          string          `json:"error,omitempty"`
 	ErrorKind      string          `json:"error_kind,omitempty"`
+}
+
+// ChartRange tracks the complete session, including samples outside the view.
+type ChartRange struct {
+	Min, Max float64
+	Valid    bool
 }
 
 type ConnectionStatus struct {
@@ -284,6 +291,7 @@ func (s *Service) ResetStatistics() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snapshot.Statistics = Statistics{}
+	s.snapshot.ChartRanges = [7]ChartRange{}
 	s.snapshot.HistoryVersion++
 	s.previous = nil
 	s.ring = nil
