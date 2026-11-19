@@ -73,7 +73,7 @@ jobs:
           jarsigner -verify -strict -keystore "$keystore" -storetype PKCS12 \
             -storepass:env MYGO_ANDROID_KEYSTORE_PASSWORD build/android/*.aab wattscope
           apk="${apks[0]}"
-          mv "$apk" "${apk%.apk}-arm64-v8a.apk"
+          mv "$apk" "${apk%.apk}-android-arm64-v8a.apk"
 
       - name: Build Android CLI
         if: matrix.variant == 'cli'
@@ -88,7 +88,7 @@ jobs:
         with:
           name: wattscope-android-arm64-gui
           path: |
-            build/android/*-arm64-v8a.apk
+            build/android/*-android-arm64-v8a.apk
             build/android/*.aab
             LICENSE
           if-no-files-found: error
