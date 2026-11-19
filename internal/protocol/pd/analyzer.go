@@ -1,6 +1,9 @@
 package pd
 
-import "slices"
+import (
+	"encoding/hex"
+	"slices"
+)
 
 // Analysis records evidence available when this packet arrived. Codes are
 // language-independent. Durations use host receive times, not CC wire timing.
@@ -51,6 +54,9 @@ type conversation struct {
 	sources        []PDO
 	sourceSequence uint64
 	sourceCaps     *SourceCapabilities
+	eprSources     []PDO
+	eprSequence    uint64
+	chunks         map[string]extendedAssembly
 	pending        *Analysis
 	current        *Analysis
 	requestAt      float64
@@ -101,6 +107,12 @@ func (a *Analyzer) Observe(p *Packet) {
 	}()
 	if p.Error != "" {
 		p.Analysis.Findings = append(p.Analysis.Findings, "invalid_packet")
+		if p.Extended {
+			delete(c.chunks, p.PowerRole)
+		}
+		if p.Type == "EPR_Source_Capabilities" && p.PowerRole == "Source" {
+			c.eprSources, c.eprSequence = nil, 0
+		}
 		// An unreadable capability update makes the older PDO list uncertain.
 		if p.Type == "Source_Capabilities" {
 			c.sources, c.sourceSequence, c.pending, c.current = nil, 0, nil, nil
@@ -139,12 +151,45 @@ func (a *Analyzer) Observe(p *Packet) {
 			r := *previous.Request
 			p.Request = &r
 		}
+		if p.Extension != nil && previous.Extension != nil && previous.Extension.ReassembledHex != "" {
+			reassembled, _ := hex.DecodeString(previous.Extension.ReassembledHex)
+			p.Extension.ReassembledHex = previous.Extension.ReassembledHex
+			p.decodeExtended(reassembled)
+		}
 		p.Analysis = cloneAnalysis(previous.Analysis)
 		if !slices.Contains(p.Analysis.Findings, "retransmission") {
 			p.Analysis.Findings = append(p.Analysis.Findings, "retransmission")
 		}
 		c.last[p.PowerRole] = Clone(*p)
 		return
+	}
+	if p.SOP == "SOP" && p.EPRMode != nil {
+		switch p.EPRMode.Action {
+		case 1, 4, 5:
+			c.eprSources, c.eprSequence = nil, 0
+			c.pending, c.current, c.hasPrevious = nil, nil, false
+			delete(c.chunks, "Source")
+			delete(c.chunks, "Sink")
+		}
+	}
+	if p.Extended {
+		c.observeExtended(p)
+		if p.Type == "EPR_Source_Capabilities" {
+			p.Analysis.CapabilitiesSequence = 0
+			if p.SOP == "SOP" && p.PowerRole == "Source" && p.Extension != nil && !p.Extension.RequestChunk {
+				c.eprSources, c.eprSequence = nil, 0
+				if len(p.PDOs) != 0 && p.Error == "" {
+					c.eprSources, c.eprSequence = slices.Clone(p.PDOs), p.Sequence
+					p.Analysis.CapabilitiesSequence = p.Sequence
+				}
+			}
+		}
+		if p.Error != "" {
+			p.Analysis.Findings = append(p.Analysis.Findings, "invalid_packet")
+			return
+		}
+	} else {
+		delete(c.chunks, p.PowerRole)
 	}
 	if p.Type == "Source_Capabilities" {
 		c.sources, c.sourceSequence, c.pending, c.current = nil, 0, nil, nil
@@ -157,21 +202,21 @@ func (a *Analyzer) Observe(p *Packet) {
 			p.Analysis.Findings = append(p.Analysis.Findings, "unexpected_role")
 		}
 	}
-	if p.Request != nil && (p.SOP != "SOP" || p.PowerRole == "Sink") {
+	if p.Request != nil && p.Type == "Request" && (p.SOP != "SOP" || p.PowerRole == "Sink") {
 		r := DecodeRequest(p.Request.Raw, c.sources)
-		if p.Type == "EPR_Request" {
-			r = DecodeRequest(p.Request.Raw, nil)
-		}
 		p.Request = &r
-	} else if p.Request != nil {
+	} else if p.Request != nil && p.SOP == "SOP" && p.PowerRole != "Sink" {
 		p.Analysis.Findings = append(p.Analysis.Findings, "unexpected_role")
 	}
 	// Port/cable messages have different semantics from Source/Sink negotiation.
 	if p.SOP == "SOP" {
 		switch {
 		case p.Request != nil && p.PowerRole == "Sink":
-			r := *p.Request
 			x := p.Analysis
+			if p.Type == "EPR_Request" {
+				c.matchEPRRequest(p)
+			}
+			r := *p.Request
 			x.Stage, x.RequestSequence, x.Request = "requested", p.Sequence, &r
 			if c.pending != nil {
 				x.Findings = append(x.Findings, "incomplete_previous_request")
@@ -181,17 +226,17 @@ func (a *Analyzer) Observe(p *Packet) {
 				x.SameRequest = c.previousRaw == r.Raw
 			}
 			c.previousAt, c.previousRaw, c.hasPrevious = p.Elapsed, r.Raw, true
-			if p.Type == "EPR_Request" {
-				x.CapabilitiesSequence = 0
-				x.Findings = append(x.Findings, "epr_context_unavailable")
-			} else if len(c.sources) == 0 {
-				x.Findings = append(x.Findings, "source_capabilities_missing")
-			} else if r.Position < 1 || r.Position > len(c.sources) {
-				x.Findings = append(x.Findings, "pdo_position_out_of_range")
-			} else if r.Matched {
-				x.Findings = append(x.Findings, requestFindings(r, c.sources[r.Position-1])...)
-			} else {
-				x.Findings = append(x.Findings, "unsupported_supply")
+			if p.Type == "Request" {
+				switch {
+				case len(c.sources) == 0:
+					x.Findings = append(x.Findings, "source_capabilities_missing")
+				case r.Position < 1 || r.Position > len(c.sources):
+					x.Findings = append(x.Findings, "pdo_position_out_of_range")
+				case r.Matched:
+					x.Findings = append(x.Findings, requestFindings(r, c.sources[r.Position-1])...)
+				default:
+					x.Findings = append(x.Findings, "unsupported_supply")
+				}
 			}
 			if r.Mismatch {
 				x.Findings = append(x.Findings, "capability_mismatch")
@@ -226,7 +271,7 @@ func (a *Analyzer) Observe(p *Packet) {
 	}
 	if p.Analysis.Stage != "" {
 		c.current = cloneAnalysis(p.Analysis)
-	} else if c.current != nil && p.Type != "Source_Capabilities" && p.Type != "Accept" && p.Type != "Reject" && p.Type != "Wait" && p.Type != "PS_RDY" {
+	} else if c.current != nil && !p.Extended && p.EPRMode == nil && p.Type != "Source_Capabilities" && p.Type != "Accept" && p.Type != "Reject" && p.Type != "Wait" && p.Type != "PS_RDY" {
 		findings := p.Analysis.Findings
 		p.Analysis = cloneAnalysis(c.current)
 		p.Analysis.Findings = append(p.Analysis.Findings, findings...)
@@ -235,6 +280,31 @@ func (a *Analyzer) Observe(p *Packet) {
 	switch p.PowerRole {
 	case "Source", "Sink", "Port", "Cable":
 		c.last[p.PowerRole] = Clone(*p)
+	}
+}
+
+func (c *conversation) matchEPRRequest(p *Packet) {
+	analysis := p.Analysis
+	analysis.CapabilitiesSequence = c.eprSequence
+	index := slices.IndexFunc(c.eprSources, func(pdo PDO) bool { return pdo.Position == p.Request.Position })
+	switch {
+	case p.Request.Position < 1 || p.Request.Position > 11:
+		analysis.Findings = append(analysis.Findings, "pdo_position_out_of_range")
+	case len(c.eprSources) == 0:
+		analysis.Findings = append(analysis.Findings, "epr_context_unavailable")
+	case index < 0:
+		analysis.Findings = append(analysis.Findings, "pdo_position_out_of_range")
+	case p.RequestedPDO == nil || p.RequestedPDO.Raw != c.eprSources[index].Raw:
+		analysis.Findings = append(analysis.Findings, "epr_pdo_mismatch")
+	default:
+		offer := c.eprSources[index]
+		request := decodeRequest(p.Request.Raw, &offer)
+		p.Request = &request
+		if request.Matched {
+			analysis.Findings = append(analysis.Findings, requestFindings(request, offer)...)
+		} else {
+			analysis.Findings = append(analysis.Findings, "unsupported_supply")
+		}
 	}
 }
 
@@ -251,7 +321,17 @@ func requestFindings(r Request, source PDO) []string {
 	if r.VoltageV > 0 && (r.VoltageV < source.MinV-0.001 || r.VoltageV > source.MaxV+0.001) {
 		findings = append(findings, "voltage_out_of_range")
 	}
-	if source.MaxA > 0 && (r.OperatingA > source.MaxA+0.001 || !r.Mismatch && r.MaximumA > source.MaxA+0.001) {
+	maxCurrent := source.MaxA
+	switch source.Kind {
+	case "SPR AVS":
+		maxCurrent = source.MaxA15V
+		if r.VoltageV > 15 {
+			maxCurrent = source.MaxA20V
+		}
+	case "EPR AVS":
+		maxCurrent = 5
+	}
+	if maxCurrent > 0 && (r.OperatingA > maxCurrent+0.001 || !r.Mismatch && r.MaximumA > maxCurrent+0.001) {
 		findings = append(findings, "current_exceeds_source")
 	}
 	if source.MaxW > 0 && (r.OperatingW > source.MaxW+0.001 || !r.Mismatch && r.MaximumW > source.MaxW+0.001 || r.VoltageV*r.OperatingA > source.MaxW+0.001) {

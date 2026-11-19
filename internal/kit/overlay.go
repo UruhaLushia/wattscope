@@ -60,13 +60,14 @@ func adaptiveMenuWidth(ctx *ui.Context, items []MenuItem, touch, optionStyle boo
 		if item.Active || item.Check || item.Radio {
 			hasCheck = true
 		}
-		w, _ := ctx.MeasureText(1<<20, ui.Span{Text: item.Label, Size: fontSize, Weight: 650})
+		w, _ := ctx.MeasureText(0, ui.Span{Text: item.Label, Size: fontSize, Weight: 650})
 		if w > maxLabelW {
 			maxLabelW = w
 		}
 	}
-	const panelPad = float32(12)
-	width := maxLabelW + padX*2 + panelPad
+	const panelInsets = 2 * (6 + 1)
+	const textSlack = 2
+	width := maxLabelW + padX*2 + panelInsets + textSlack
 	if hasIcon {
 		width += 15 + 10
 	}
@@ -81,7 +82,9 @@ func adaptiveMenuWidth(ctx *ui.Context, items []MenuItem, touch, optionStyle boo
 	if optionStyle {
 		minW = 96
 	}
-	return min(260, max(minW, float32(math.Ceil(float64(width)))))
+	windowW, _ := ctx.Size()
+	maxW := min(260, max(1, windowW-16))
+	return min(maxW, max(minW, float32(math.Ceil(float64(width)))))
 }
 
 func styleMenuRow(ctx *ui.Context, p Palette, row ui.Element, entry MenuItem, fontSize, minH, padY, padX float32, highlighted, optionStyle bool) {
@@ -127,7 +130,7 @@ func styleMenuRow(ctx *ui.Context, p Palette, row ui.Element, entry MenuItem, fo
 			ui.Icon(ctx, entry.Icon).FontSize(15).TextColor(iconColor).Shrink(0)
 		}
 		ui.Text(ctx, entry.Label).FontSize(fontSize).FontWeight(weight).TextColor(fg).
-			Grow(1).MinWidth(0).SingleLine()
+			Grow(1).MinWidth(0).Wrap()
 		if entry.Active {
 			checkColor := p.AccentText
 			if optionStyle {

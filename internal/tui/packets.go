@@ -334,7 +334,7 @@ func packetDetails(p pd.Packet, w int, v View) []string {
 	rows = append(rows, packetBytes(p, w, v)...)
 	rows = append(rows, "")
 	rows = append(rows, packetAnalysisRows(p, w, v)...)
-	if len(p.Objects) > 0 {
+	if len(p.Objects) > 0 && !p.Extended {
 		rows = append(rows, "", strong(m.DataObjects(), primary))
 	}
 	rows = append(rows, pdoTable(p.PDOs, w, v)...)
@@ -344,11 +344,11 @@ func packetDetails(p pd.Packet, w int, v View) []string {
 			rows = append(rows, fmt.Sprintf("VDM cmd %d / type %d / ver %d", p.VDM.Command, p.VDM.CommandType, p.VDM.Version))
 		}
 	}
-	if p.Extension != nil {
-		e := p.Extension
-		rows = append(rows, strong(m.ExtendedHeader(), primary), m.ExtendedChunk(fmt.Sprint(e.DataSize), fmt.Sprint(e.ChunkNumber), fmt.Sprint(e.RequestChunk)), quietStyle.Render(m.ExtendedNote()))
+	if ext := p.Extension; ext != nil && ext.ReassembledHex != "" {
+		rows = append(rows, strong(m.PdChunkReassembled(fmt.Sprint(ext.DataSize)), primary))
+		rows = append(rows, hexRows(ext.ReassembledHex, w)...)
 	}
-	if len(p.PDOs) == 0 {
+	if len(p.PDOs) == 0 && !p.Extended {
 		for i, object := range p.Objects {
 			rows = append(rows, fmt.Sprintf("DO%d 0x%08X", i+1, object))
 		}

@@ -42,9 +42,15 @@ type PDO struct {
 	MaxV     float64 `json:"max_voltage_v"`
 	MaxA     float64 `json:"max_current_a,omitempty"`
 	MaxW     float64 `json:"max_power_w,omitempty"`
+	MaxA15V  float64 `json:"max_current_15v_a,omitempty"`
+	MaxA20V  float64 `json:"max_current_20v_a,omitempty"`
 }
 
 func DecodePDO(position int, raw uint32) PDO {
+	return decodePDO(position, raw, true)
+}
+
+func decodePDO(position int, raw uint32, source bool) PDO {
 	p := PDO{Position: position, Raw: raw}
 	switch raw >> 30 {
 	case 0:
@@ -66,6 +72,17 @@ func DecodePDO(position int, raw uint32) PDO {
 		case 1:
 			p.Kind = "EPR AVS"
 			p.MinV, p.MaxV, p.MaxW = float64(raw>>8&255)/10, float64(raw>>17&511)/10, float64(raw&255)
+		case 2:
+			p.Kind = "APDO (raw)"
+			if source {
+				p.Kind, p.MinV, p.MaxV = "SPR AVS", 9, 15
+				p.MaxA15V, p.MaxA20V = float64(raw>>10&1023)/100, float64(raw&1023)/100
+				p.MaxW = 15 * p.MaxA15V
+				if p.MaxA20V > 0 {
+					p.MaxV = 20
+					p.MaxW = max(p.MaxW, 20*p.MaxA20V)
+				}
+			}
 		default:
 			p.Kind = "APDO (raw)"
 		}
@@ -83,6 +100,13 @@ func (p PDO) Summary() string {
 	voltage := fmt.Sprintf("%g V", p.MaxV)
 	if p.MinV != p.MaxV {
 		voltage = fmt.Sprintf("%g–%g V", p.MinV, p.MaxV)
+	}
+	if p.Kind == "SPR AVS" {
+		bands := fmt.Sprintf("SPR AVS 9–15 V / %g A", p.MaxA15V)
+		if p.MaxA20V > 0 {
+			bands += fmt.Sprintf(" · 15–20 V / %g A", p.MaxA20V)
+		}
+		return bands
 	}
 	if p.MaxA > 0 {
 		return fmt.Sprintf("%s %s / %g A", p.Kind, voltage, p.MaxA)
@@ -109,11 +133,18 @@ type Request struct {
 // DecodeRequest only interprets units when a preceding Source_Capabilities
 // message identifies the selected supply. The object index alone is not enough.
 func DecodeRequest(raw uint32, source []PDO) Request {
+	position := int(raw >> 28 & 15)
+	if position >= 1 && position <= len(source) {
+		return decodeRequest(raw, &source[position-1])
+	}
+	return decodeRequest(raw, nil)
+}
+
+func decodeRequest(raw uint32, p *PDO) Request {
 	r := Request{Raw: raw, Position: int(raw >> 28 & 15), Kind: "RDO (raw)", Mismatch: raw&0x4000000 != 0}
-	if r.Position < 1 || r.Position > len(source) {
+	if p == nil {
 		return r
 	}
-	p := source[r.Position-1]
 	r.Kind, r.Matched = p.Kind, true
 	switch p.Kind {
 	case "Fixed", "Variable":
@@ -133,16 +164,16 @@ func DecodeRequest(raw uint32, source []PDO) Request {
 		}
 	case "PPS":
 		r.VoltageV, r.OperatingA = float64(raw>>9&4095)/50, float64(raw&127)/20
-	case "EPR AVS":
+	case "SPR AVS", "EPR AVS":
 		r.VoltageV, r.OperatingA = float64(raw>>9&4095)/40, float64(raw&127)/20
 	default:
-		r.Matched = false
+		r.Kind, r.Matched = "RDO (raw)", false
 	}
 	return r
 }
 
 func (r Request) Summary() string {
-	if !r.Matched {
+	if r.Kind == "" || r.Kind == "RDO (raw)" {
 		return fmt.Sprintf("PDO %d · 0x%08X", r.Position, r.Raw)
 	}
 	if r.OperatingW > 0 {

@@ -28,6 +28,9 @@ func FilterPackets(m locales.Messages, packets []pd.Packet, search string, hideG
 			}
 			explanation := ExplainPacket(m, packet)
 			text += " " + explanation.Summary + " " + strings.Join(explanation.Warnings, " ")
+			for _, field := range explanation.Fields {
+				text += " " + field.Label + " " + field.Value
+			}
 			if !strings.Contains(strings.ToLower(text), query) {
 				continue
 			}
@@ -41,7 +44,10 @@ type PacketExplanation struct {
 	Summary  string
 	Details  []string
 	Warnings []string
+	Fields   []Field
 }
+
+type Field struct{ Label, Value string }
 
 // ExplainPacket turns decoded fields and analysis findings into localized text.
 func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
@@ -55,10 +61,31 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 		return e
 	}
 	switch p.Type {
-	case "Source_Capabilities":
-		e.Summary = m.PdMeaningSourceCaps(len(p.PDOs))
-	case "Sink_Capabilities":
-		e.Summary = m.PdMeaningSinkCaps(len(p.PDOs))
+	case "Source_Capabilities", "EPR_Source_Capabilities":
+		if len(p.PDOs) > 0 {
+			e.Summary = m.PdMeaningSourceCaps(len(p.PDOs))
+		}
+	case "Sink_Capabilities", "EPR_Sink_Capabilities":
+		if len(p.PDOs) > 0 {
+			e.Summary = m.PdMeaningSinkCaps(len(p.PDOs))
+		}
+	case "Source_Capabilities_Extended", "Sink_Capabilities_Extended":
+		if caps := p.Capabilities; caps != nil {
+			e.Summary = fmt.Sprintf("SPR PDP %d W", caps.SPR.MaximumW)
+			if caps.EPR != nil && caps.EPR.MaximumW != 0 {
+				e.Summary += fmt.Sprintf(" · EPR PDP %d W", caps.EPR.MaximumW)
+			}
+			e.Fields = append(e.Fields,
+				Field{"VID / PID / XID", fmt.Sprintf("%04X / %04X / %08X", caps.VID, caps.PID, caps.XID)},
+				Field{"FW / HW", fmt.Sprintf("%02X / %02X", caps.Firmware, caps.Hardware)},
+			)
+			if p.Type == "Sink_Capabilities_Extended" {
+				e.Fields = append(e.Fields, Field{"SPR PDP", m.PdPdpRange(fmt.Sprint(caps.SPR.MinimumW), fmt.Sprint(caps.SPR.OperatingW), fmt.Sprint(caps.SPR.MaximumW))})
+				if caps.EPR != nil && caps.EPR.MaximumW != 0 {
+					e.Fields = append(e.Fields, Field{"EPR PDP", m.PdPdpRange(fmt.Sprint(caps.EPR.MinimumW), fmt.Sprint(caps.EPR.OperatingW), fmt.Sprint(caps.EPR.MaximumW))})
+				}
+			}
+		}
 	case "Request", "EPR_Request":
 		if p.Request != nil {
 			e.Summary = m.PdMeaningRequest(p.Request.Summary())
@@ -105,11 +132,70 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 			e.Summary = m.PdReportedRevision(p.RevisionInfo.Revision, p.RevisionInfo.Version)
 		}
 	case "Extended_Control":
-		if p.KeepAlive() {
-			e.Summary = m.PdMeaningEprKeepalive()
-			if p.Extension.DataHex == "0400" {
+		if p.Extension != nil {
+			switch p.Extension.Control {
+			case "EPR_Get_Source_Cap":
+				e.Summary = m.PdMeaningSourceQuery()
+			case "EPR_Get_Sink_Cap":
+				e.Summary = m.PdMeaningSinkQuery()
+			case "EPR_Keep_Alive":
+				e.Summary = m.PdMeaningEprKeepalive()
+			case "EPR_Keep_Alive_Ack":
 				e.Summary = m.PdMeaningEprKeepaliveAck()
 			}
+		}
+	case "EPR_Mode":
+		if mode := p.EPRMode; mode != nil {
+			switch mode.Action {
+			case 1:
+				e.Summary = m.PdEprEnter()
+				e.Fields = append(e.Fields, Field{m.PdEprSinkPower(), fmt.Sprintf("%d W", mode.Data)})
+			case 2:
+				e.Summary = m.PdEprEnterAck()
+			case 3:
+				e.Summary = m.PdEprEntered()
+			case 4:
+				e.Summary = m.PdEprEnterFailed()
+				e.Fields = append(e.Fields, Field{e.Summary, m.PdEprFailure(fmt.Sprint(mode.Data)) + fmt.Sprintf(" (0x%02X)", mode.Data)})
+			case 5:
+				e.Summary = m.PdEprExit()
+			}
+		}
+	case "PPS_Status":
+		if status := p.PPSStatus; status != nil {
+			voltage, current := "—", "—"
+			if status.VoltageV != nil {
+				voltage = fmt.Sprintf("%g V", *status.VoltageV)
+			}
+			if status.CurrentA != nil {
+				current = fmt.Sprintf("%g A", *status.CurrentA)
+			}
+			e.Summary = m.PdPpsOutput(voltage, current)
+			mode := "CV"
+			if status.CurrentLimit {
+				mode = "CL"
+			}
+			e.Fields = append(e.Fields, Field{m.ModeLabel(), mode}, Field{m.Temperature(), m.PdPpsTemperature(status.Temperature)})
+		}
+	}
+	if p.RequestedPDO != nil {
+		e.Fields = append(e.Fields, Field{m.PdCopiedPdo(), fmt.Sprintf("#%d · %s · 0x%08X", p.RequestedPDO.Position, p.RequestedPDO.Summary(), p.RequestedPDO.Raw)})
+	}
+	if ext := p.Extension; ext != nil {
+		value := m.ByteCount(int(ext.DataSize))
+		switch {
+		case ext.RequestChunk:
+			value = m.PdChunkRequest(fmt.Sprint(ext.ChunkNumber))
+			e.Summary = value
+		case ext.ReassembledHex != "":
+			value = m.PdChunkReassembled(fmt.Sprint(ext.DataSize))
+		case ext.Chunked && len(ext.DataHex)/2 < int(ext.DataSize):
+			value = m.PdChunkPartial(fmt.Sprint(ext.ChunkNumber), fmt.Sprint(ext.DataSize))
+			e.Summary = value
+		}
+		e.Fields = append(e.Fields, Field{m.ExtendedHeader(), value})
+		if ext.Control != "" {
+			e.Fields = append(e.Fields, Field{p.Type, ext.Control})
 		}
 	}
 	if e.Summary == "" {
@@ -183,6 +269,8 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 			warning = m.PdWarningRetry()
 		case "epr_context_unavailable":
 			warning = m.PdWarningEprContext()
+		case "epr_pdo_mismatch":
+			warning = m.PdWarningEprPdoMismatch()
 		case "unsupported_supply":
 			warning = m.PdWarningSupply()
 		case "unexpected_role":
@@ -193,7 +281,11 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 		}
 	}
 	if p.Analysis == nil && p.Request != nil && !p.Request.Matched {
-		e.Warnings = append(e.Warnings, m.RequestContextMissing())
+		if p.Type == "EPR_Request" {
+			e.Warnings = append(e.Warnings, m.PdWarningEprContext())
+		} else {
+			e.Warnings = append(e.Warnings, m.RequestContextMissing())
+		}
 	}
 	return e
 }

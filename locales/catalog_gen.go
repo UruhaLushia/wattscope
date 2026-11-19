@@ -4071,28 +4071,6 @@ func (msgs Messages) ExtendedHeader() string {
 	return Catalog.Format(msgs.locale, "extended_header", nil)
 }
 
-// ExtendedChunk says "Size {size} · chunk {chunk} · request {request}"
-// in the language the app shows.
-func ExtendedChunk(size string, chunk string, request string) string {
-	return In(i18n.Locale()).ExtendedChunk(size, chunk, request)
-}
-
-// ExtendedChunk says "Size {size} · chunk {chunk} · request {request}"
-// in the language of msgs.
-func (msgs Messages) ExtendedChunk(size string, chunk string, request string) string {
-	return Catalog.Format(msgs.locale, "extended_chunk", map[string]any{"size": size, "chunk": chunk, "request": request})
-}
-
-// ExtendedNote says "Extended chunks are shown individually; reassembly is not performed."
-// in the language the app shows.
-func ExtendedNote() string { return In(i18n.Locale()).ExtendedNote() }
-
-// ExtendedNote says "Extended chunks are shown individually; reassembly is not performed."
-// in the language of msgs.
-func (msgs Messages) ExtendedNote() string {
-	return Catalog.Format(msgs.locale, "extended_note", nil)
-}
-
 // RequestContextMissing says "No preceding source capability; RDO units remain undecoded."
 // in the language the app shows.
 func RequestContextMissing() string { return In(i18n.Locale()).RequestContextMissing() }
@@ -4903,14 +4881,160 @@ func (msgs Messages) PdMeaningEprKeepaliveAck() string {
 	return Catalog.Format(msgs.locale, "pd_meaning_epr_keepalive_ack", nil)
 }
 
-// PdMeaningExtended says "Extended message chunk; complete payload is not reassembled."
+// PdMeaningExtended says "Extended message."
 // in the language the app shows.
 func PdMeaningExtended() string { return In(i18n.Locale()).PdMeaningExtended() }
 
-// PdMeaningExtended says "Extended message chunk; complete payload is not reassembled."
+// PdMeaningExtended says "Extended message."
 // in the language of msgs.
 func (msgs Messages) PdMeaningExtended() string {
 	return Catalog.Format(msgs.locale, "pd_meaning_extended", nil)
+}
+
+// PdChunkRequest says "Requests chunk {chunk}"
+// in the language the app shows.
+func PdChunkRequest(chunk string) string { return In(i18n.Locale()).PdChunkRequest(chunk) }
+
+// PdChunkRequest says "Requests chunk {chunk}"
+// in the language of msgs.
+func (msgs Messages) PdChunkRequest(chunk string) string {
+	return Catalog.Format(msgs.locale, "pd_chunk_request", map[string]any{"chunk": chunk})
+}
+
+// PdChunkPartial says "Chunk {chunk} · {size} B total · incomplete"
+// in the language the app shows.
+func PdChunkPartial(chunk string, size string) string {
+	return In(i18n.Locale()).PdChunkPartial(chunk, size)
+}
+
+// PdChunkPartial says "Chunk {chunk} · {size} B total · incomplete"
+// in the language of msgs.
+func (msgs Messages) PdChunkPartial(chunk string, size string) string {
+	return Catalog.Format(msgs.locale, "pd_chunk_partial", map[string]any{"chunk": chunk, "size": size})
+}
+
+// PdChunkReassembled says "Reassembled · {size} B"
+// in the language the app shows.
+func PdChunkReassembled(size string) string { return In(i18n.Locale()).PdChunkReassembled(size) }
+
+// PdChunkReassembled says "Reassembled · {size} B"
+// in the language of msgs.
+func (msgs Messages) PdChunkReassembled(size string) string {
+	return Catalog.Format(msgs.locale, "pd_chunk_reassembled", map[string]any{"size": size})
+}
+
+// PdEprEnter says "Requests entry into EPR mode"
+// in the language the app shows.
+func PdEprEnter() string { return In(i18n.Locale()).PdEprEnter() }
+
+// PdEprEnter says "Requests entry into EPR mode"
+// in the language of msgs.
+func (msgs Messages) PdEprEnter() string {
+	return Catalog.Format(msgs.locale, "pd_epr_enter", nil)
+}
+
+// PdEprEnterAck says "Acknowledges EPR mode entry request"
+// in the language the app shows.
+func PdEprEnterAck() string { return In(i18n.Locale()).PdEprEnterAck() }
+
+// PdEprEnterAck says "Acknowledges EPR mode entry request"
+// in the language of msgs.
+func (msgs Messages) PdEprEnterAck() string {
+	return Catalog.Format(msgs.locale, "pd_epr_enter_ack", nil)
+}
+
+// PdEprEntered says "Entered EPR mode"
+// in the language the app shows.
+func PdEprEntered() string { return In(i18n.Locale()).PdEprEntered() }
+
+// PdEprEntered says "Entered EPR mode"
+// in the language of msgs.
+func (msgs Messages) PdEprEntered() string {
+	return Catalog.Format(msgs.locale, "pd_epr_entered", nil)
+}
+
+// PdEprEnterFailed says "EPR mode entry failed"
+// in the language the app shows.
+func PdEprEnterFailed() string { return In(i18n.Locale()).PdEprEnterFailed() }
+
+// PdEprEnterFailed says "EPR mode entry failed"
+// in the language of msgs.
+func (msgs Messages) PdEprEnterFailed() string {
+	return Catalog.Format(msgs.locale, "pd_epr_enter_failed", nil)
+}
+
+// PdEprExit says "Exits EPR mode"
+// in the language the app shows.
+func PdEprExit() string { return In(i18n.Locale()).PdEprExit() }
+
+// PdEprExit says "Exits EPR mode"
+// in the language of msgs.
+func (msgs Messages) PdEprExit() string {
+	return Catalog.Format(msgs.locale, "pd_epr_exit", nil)
+}
+
+// PdEprSinkPower says "EPR sink operating power"
+// in the language the app shows.
+func PdEprSinkPower() string { return In(i18n.Locale()).PdEprSinkPower() }
+
+// PdEprSinkPower says "EPR sink operating power"
+// in the language of msgs.
+func (msgs Messages) PdEprSinkPower() string {
+	return Catalog.Format(msgs.locale, "pd_epr_sink_power", nil)
+}
+
+// PdEprFailure says "{code, select, 1 {Cable does not support EPR} 2 {Source could not become VCONN source} 3 {RDO is missing the EPR-capa…"
+// in the language the app shows.
+func PdEprFailure(code string) string { return In(i18n.Locale()).PdEprFailure(code) }
+
+// PdEprFailure says "{code, select, 1 {Cable does not support EPR} 2 {Source could not become VCONN source} 3 {RDO is missing the EPR-capa…"
+// in the language of msgs.
+func (msgs Messages) PdEprFailure(code string) string {
+	return Catalog.Format(msgs.locale, "pd_epr_failure", map[string]any{"code": code})
+}
+
+// PdCopiedPdo says "PDO in request"
+// in the language the app shows.
+func PdCopiedPdo() string { return In(i18n.Locale()).PdCopiedPdo() }
+
+// PdCopiedPdo says "PDO in request"
+// in the language of msgs.
+func (msgs Messages) PdCopiedPdo() string {
+	return Catalog.Format(msgs.locale, "pd_copied_pdo", nil)
+}
+
+// PdPdpRange says "Min {minimum} W · Operating {operating} W · Max {maximum} W"
+// in the language the app shows.
+func PdPdpRange(minimum string, operating string, maximum string) string {
+	return In(i18n.Locale()).PdPdpRange(minimum, operating, maximum)
+}
+
+// PdPdpRange says "Min {minimum} W · Operating {operating} W · Max {maximum} W"
+// in the language of msgs.
+func (msgs Messages) PdPdpRange(minimum string, operating string, maximum string) string {
+	return Catalog.Format(msgs.locale, "pd_pdp_range", map[string]any{"minimum": minimum, "operating": operating, "maximum": maximum})
+}
+
+// PdPpsOutput says "PPS output · {voltage} / {current}"
+// in the language the app shows.
+func PdPpsOutput(voltage string, current string) string {
+	return In(i18n.Locale()).PdPpsOutput(voltage, current)
+}
+
+// PdPpsOutput says "PPS output · {voltage} / {current}"
+// in the language of msgs.
+func (msgs Messages) PdPpsOutput(voltage string, current string) string {
+	return Catalog.Format(msgs.locale, "pd_pps_output", map[string]any{"voltage": voltage, "current": current})
+}
+
+// PdPpsTemperature says "{status, select, normal {Normal} warning {Warning} over_temperature {Over-temperature} other {Unavailable}}"
+// in the language the app shows.
+func PdPpsTemperature(status string) string { return In(i18n.Locale()).PdPpsTemperature(status) }
+
+// PdPpsTemperature says "{status, select, normal {Normal} warning {Warning} over_temperature {Over-temperature} other {Unavailable}}"
+// in the language of msgs.
+func (msgs Messages) PdPpsTemperature(status string) string {
+	return Catalog.Format(msgs.locale, "pd_pps_temperature", map[string]any{"status": status})
 }
 
 // PdMeaningUnknown says "No detailed interpretation yet; raw bytes are preserved."
@@ -5125,14 +5249,24 @@ func (msgs Messages) PdWarningRetry() string {
 	return Catalog.Format(msgs.locale, "pd_warning_retry", nil)
 }
 
-// PdWarningEprContext says "Complete EPR capabilities are unavailable; EPR RDO units remain undecoded."
+// PdWarningEprContext says "EPR capabilities were not fully captured; values are decoded from the PDO in the request."
 // in the language the app shows.
 func PdWarningEprContext() string { return In(i18n.Locale()).PdWarningEprContext() }
 
-// PdWarningEprContext says "Complete EPR capabilities are unavailable; EPR RDO units remain undecoded."
+// PdWarningEprContext says "EPR capabilities were not fully captured; values are decoded from the PDO in the request."
 // in the language of msgs.
 func (msgs Messages) PdWarningEprContext() string {
 	return Catalog.Format(msgs.locale, "pd_warning_epr_context", nil)
+}
+
+// PdWarningEprPdoMismatch says "The PDO in the request differs from the one the source advertised at this position."
+// in the language the app shows.
+func PdWarningEprPdoMismatch() string { return In(i18n.Locale()).PdWarningEprPdoMismatch() }
+
+// PdWarningEprPdoMismatch says "The PDO in the request differs from the one the source advertised at this position."
+// in the language of msgs.
+func (msgs Messages) PdWarningEprPdoMismatch() string {
+	return Catalog.Format(msgs.locale, "pd_warning_epr_pdo_mismatch", nil)
 }
 
 // PdWarningSupply says "Selected supply format is not decoded; request units remain unknown."

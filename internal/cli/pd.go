@@ -203,6 +203,11 @@ func newPDAnalyzeCommand(source *sourceOptions) *cobra.Command {
 			if _, err := fmt.Fprintln(cmd.OutOrStdout(), packetLine(packet, explanation.Summary)); err != nil {
 				return err
 			}
+			for _, field := range explanation.Fields {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "         %s · %s\n", field.Label, field.Value); err != nil {
+					return err
+				}
+			}
 			for _, line := range append(explanation.Details, explanation.Warnings...) {
 				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "         "+line); err != nil {
 					return err

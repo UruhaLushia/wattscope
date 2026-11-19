@@ -114,18 +114,19 @@ func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages
 				OnSelect: follow,
 			})
 		}
-		items = append(items,
-			kit.MenuItem{
+		if len(visible) > 0 {
+			items = append(items, kit.MenuItem{
 				Label:    msgs.ExportPackets(),
 				Icon:     kit.IconDownload,
-				Disabled: len(visible) == 0 || d.busy,
+				Disabled: d.busy,
 				OnSelect: func() { d.exportPackets(msgs, visible) },
-			},
-			kit.MenuItem{
-				Label:    msgs.ActionClear(),
-				Icon:     kit.IconTrash,
-				Danger:   true,
-				Disabled: len(data.Packets) == 0,
+			})
+		}
+		if len(data.Packets) > 0 {
+			items = append(items, kit.MenuItem{
+				Label:  msgs.ActionClear(),
+				Icon:   kit.IconTrash,
+				Danger: true,
 				OnSelect: func() {
 					if view.offline != nil {
 						view.offline.Packets = nil
@@ -136,8 +137,8 @@ func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages
 					view.selected = 0
 					d.notify(msgs.PacketsCleared(), "", "info")
 				},
-			},
-		)
+			})
+		}
 		return items
 	}
 
@@ -185,7 +186,12 @@ func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages
 				}
 			}).Disabled(len(data.Packets) == 0 && view.held == nil)
 		}
-		kit.MenuButton(ctx.Key("more"), p, d.menuOpen("pd-more"), msgs.GuiMore(), kit.IconMore, kit.VariantSecondary, touch, moreItems())
+		menuOpen := d.menuOpen("pd-more")
+		if items := moreItems(); len(items) > 0 {
+			kit.MenuButton(ctx.Key("more"), p, menuOpen, msgs.GuiMore(), kit.IconMore, kit.VariantSecondary, touch, items)
+		} else {
+			*menuOpen = false
+		}
 	}
 
 	if compact {
@@ -451,15 +457,18 @@ func pdFilterChip(ctx *ui.Context, p kit.Palette, label string, hide *bool, touc
 
 func pdIsNegotiation(packet pd.Packet) bool {
 	switch packet.Type {
-	case "Source_Capabilities", "Sink_Capabilities", "Request", "EPR_Request", "Accept", "Reject", "Wait", "PS_RDY":
+	case "Source_Capabilities", "Sink_Capabilities", "EPR_Source_Capabilities", "Request", "EPR_Request", "Accept", "Reject", "Wait", "PS_RDY":
 		return true
 	}
 	return false
 }
 
 func pdPacketTag(msgs locales.Messages, packet pd.Packet) string {
+	if packet.Error != "" {
+		return ""
+	}
 	switch packet.Type {
-	case "Source_Capabilities", "Sink_Capabilities":
+	case "Source_Capabilities", "Sink_Capabilities", "EPR_Source_Capabilities", "EPR_Sink_Capabilities":
 		if len(packet.PDOs) > 0 {
 			return fmt.Sprintf("%d PDO", len(packet.PDOs))
 		}
@@ -488,10 +497,14 @@ func pdPacketTag(msgs locales.Messages, packet pd.Packet) string {
 		}
 	case "Extended_Control":
 		if packet.KeepAlive() {
-			if packet.Extension.DataHex == "0400" {
+			if packet.Extension.Control == "EPR_Keep_Alive_Ack" {
 				return msgs.GuiEprKeepaliveAck()
 			}
 			return msgs.GuiEprKeepalive()
+		}
+	case "EPR_Mode", "PPS_Status", "Source_Capabilities_Extended", "Sink_Capabilities_Extended":
+		if packet.EPRMode != nil || packet.PPSStatus != nil || packet.Capabilities != nil {
+			return pdview.ExplainPacket(msgs, packet).Summary
 		}
 	}
 	return ""
@@ -600,8 +613,8 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 						kit.Divider(ctx, p)
 					}
 					ui.Row(ctx).FillWidth().Padding(7, 0).Gap(10).AlignItems(ui.Center).Children(func() {
-						ui.Text(ctx, fmt.Sprintf("#%d", index+1)).FontFeatures("tnum").Font("monospace").FontSize(11).TextColor(p.Muted).Width(24)
-						ui.Text(ctx, offer.Summary()).Grow(1).MinWidth(0).FontSize(12).FontFeatures("tnum")
+						ui.Text(ctx, fmt.Sprintf("#%d", offer.Position)).FontFeatures("tnum").Font("monospace").FontSize(11).TextColor(p.Muted).Width(24)
+						ui.Text(ctx, offer.Summary()).Grow(1).MinWidth(0).FontSize(12).FontFeatures("tnum").Wrap()
 						if activePos > 0 && offer.Position == activePos {
 							kit.Badge(ctx, p, msgs.PdRequestStep(), kit.ToneAccent)
 						}
@@ -610,8 +623,7 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 			})
 		}
 
-		type pdField struct{ k, v string }
-		var rows []pdField
+		var rows []pdview.Field
 		if negotiation && packet.Analysis != nil {
 			analysis := packet.Analysis
 			req := packet.Request
@@ -619,43 +631,44 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 				req = analysis.Request
 			}
 			if req != nil && packet.Type != "Request" && packet.Type != "EPR_Request" {
-				rows = append(rows, pdField{msgs.PdRequestStep(), fmt.Sprintf("#%d · %s", analysis.RequestSequence, req.Summary())})
+				rows = append(rows, pdview.Field{Label: msgs.PdRequestStep(), Value: fmt.Sprintf("#%d · %s", analysis.RequestSequence, req.Summary())})
 			}
 			if analysis.ResponseSeconds != nil {
-				rows = append(rows, pdField{msgs.GuiNegotiationResponse(), fmt.Sprintf("%.1f ms", *analysis.ResponseSeconds*1000)})
+				rows = append(rows, pdview.Field{Label: msgs.GuiNegotiationResponse(), Value: fmt.Sprintf("%.1f ms", *analysis.ResponseSeconds*1000)})
 			}
 			if analysis.ReadySeconds != nil {
-				rows = append(rows, pdField{msgs.GuiNegotiationReady(), fmt.Sprintf("%.1f ms", *analysis.ReadySeconds*1000)})
+				rows = append(rows, pdview.Field{Label: msgs.GuiNegotiationReady(), Value: fmt.Sprintf("%.1f ms", *analysis.ReadySeconds*1000)})
 			}
 		}
 		if vdm := packet.VDM; vdm != nil {
-			rows = append(rows, pdField{"VDM", fmt.Sprintf("SVID 0x%04X · Cmd %d · Type %d · v%d", vdm.VendorID, vdm.Command, vdm.CommandType, vdm.Version)})
+			rows = append(rows, pdview.Field{Label: "VDM", Value: fmt.Sprintf("SVID 0x%04X · Cmd %d · Type %d · v%d", vdm.VendorID, vdm.Command, vdm.CommandType, vdm.Version)})
 		}
-		if ext := packet.Extension; ext != nil {
-			rows = append(rows, pdField{msgs.ExtendedHeader(), fmt.Sprintf("%d B · #%d", ext.DataSize, ext.ChunkNumber)})
-		}
-		if len(packet.Objects) > 0 && len(packet.PDOs) == 0 && packet.Request == nil {
+		rows = append(rows, explanation.Fields...)
+		if len(packet.Objects) > 0 && len(packet.PDOs) == 0 && packet.Request == nil && !packet.Extended {
 			objs := make([]string, len(packet.Objects))
 			for i, o := range packet.Objects {
 				objs[i] = fmt.Sprintf("0x%08X", o)
 			}
-			rows = append(rows, pdField{"Objects", strings.Join(objs, " ")})
+			rows = append(rows, pdview.Field{Label: msgs.DataObjects(), Value: strings.Join(objs, " ")})
 		}
 		if role := strings.Trim(packet.PowerRole+" / "+packet.DataRole, " /"); role != "" {
-			rows = append(rows, pdField{msgs.GuiRole(), role})
+			rows = append(rows, pdview.Field{Label: msgs.GuiRole(), Value: role})
 		}
-		rows = append(rows, pdField{msgs.GuiProtocol(), fmt.Sprintf("PD %s · ID %d · 0x%04X", packet.Revision, packet.MessageID, packet.Header)})
+		rows = append(rows, pdview.Field{Label: msgs.GuiProtocol(), Value: fmt.Sprintf("PD %s · ID %d · 0x%04X", packet.Revision, packet.MessageID, packet.Header)})
 
 		ui.Column(ctx).FillWidth().Padding(2, 12).Radius(kit.RadiusM).Background(p.Inset).Border(1, p.LineSoft).Children(func() {
 			for i, r := range rows {
 				if i > 0 {
 					kit.Divider(ctx, p)
 				}
-				kit.KVRow(ctx, p, r.k, r.v, d.mobile, nil)
+				kit.KVRow(ctx, p, r.Label, r.Value, d.mobile, nil)
 			}
 		})
 
 		d.rawBytes(ctx, p, msgs.RawBytes(), packet.CRC, packet.MessageHex, msgs)
+		if ext := packet.Extension; ext != nil && ext.ReassembledHex != "" {
+			d.rawBytes(ctx, p, msgs.PdChunkReassembled(fmt.Sprint(ext.DataSize)), "", ext.ReassembledHex, msgs)
+		}
 		if packet.ReportHex != "" && packet.ReportHex != packet.MessageHex {
 			d.rawBytes(ctx, p, msgs.RawReport(), "", packet.ReportHex, msgs)
 		}

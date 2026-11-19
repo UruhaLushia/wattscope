@@ -165,6 +165,9 @@ func pdoTable(pdos []pd.PDO, w int, v View) []string {
 			voltage = "—"
 		}
 		rows = append(rows, columns(fmt.Sprint(pdo.Position), pdo.Kind, voltage, current, power, fmt.Sprintf("%08X", pdo.Raw)))
+		if pdo.Kind == "SPR AVS" {
+			rows = append(rows, quietStyle.Render(fit(pdo.Summary(), w)))
+		}
 	}
 	return rows
 }
@@ -172,10 +175,13 @@ func pdoTable(pdos []pd.PDO, w int, v View) []string {
 func packetAnalysisRows(p pd.Packet, w int, v View) []string {
 	m := v.messages()
 	e := pdview.ExplainPacket(m, p)
-	if len(e.Details) == 0 && len(e.Warnings) == 0 {
+	if len(e.Details) == 0 && len(e.Warnings) == 0 && len(e.Fields) == 0 {
 		return nil
 	}
 	rows := []string{strong(m.PdAnalysis(), accent)}
+	for _, field := range e.Fields {
+		rows = append(rows, field.Label+" · "+field.Value)
+	}
 	rows = append(rows, e.Details...)
 	for _, warningText := range e.Warnings {
 		rows = append(rows, color(warningText, warning))

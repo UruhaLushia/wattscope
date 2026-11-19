@@ -12,30 +12,34 @@ import (
 )
 
 type Packet struct {
-	Sequence     uint64        `json:"sequence"`
-	Timestamp    time.Time     `json:"timestamp"`
-	Elapsed      float64       `json:"elapsed_s"`
-	Segment      uint64        `json:"segment"`
-	Simulated    bool          `json:"simulated"`
-	SOP          string        `json:"sop"`
-	Header       uint16        `json:"header"`
-	Revision     string        `json:"revision"`
-	PowerRole    string        `json:"power_role,omitempty"`
-	DataRole     string        `json:"data_role,omitempty"`
-	MessageID    uint8         `json:"message_id"`
-	Type         string        `json:"type"`
-	Extended     bool          `json:"extended"`
-	Objects      []uint32      `json:"objects,omitempty"`
-	PDOs         []PDO         `json:"pdos,omitempty"`
-	Request      *Request      `json:"request,omitempty"`
-	VDM          *VDM          `json:"vdm,omitempty"`
-	Extension    *Extended     `json:"extension,omitempty"`
-	RevisionInfo *RevisionInfo `json:"revision_info,omitempty"`
-	Analysis     *Analysis     `json:"analysis,omitempty"`
-	MessageHex   string        `json:"message_hex"`
-	ReportHex    string        `json:"report_hex,omitempty"`
-	CRC          string        `json:"crc"` // absent, valid, invalid, or unverified
-	Error        string        `json:"error,omitempty"`
+	Sequence     uint64                `json:"sequence"`
+	Timestamp    time.Time             `json:"timestamp"`
+	Elapsed      float64               `json:"elapsed_s"`
+	Segment      uint64                `json:"segment"`
+	Simulated    bool                  `json:"simulated"`
+	SOP          string                `json:"sop"`
+	Header       uint16                `json:"header"`
+	Revision     string                `json:"revision"`
+	PowerRole    string                `json:"power_role,omitempty"`
+	DataRole     string                `json:"data_role,omitempty"`
+	MessageID    uint8                 `json:"message_id"`
+	Type         string                `json:"type"`
+	Extended     bool                  `json:"extended"`
+	Objects      []uint32              `json:"objects,omitempty"`
+	PDOs         []PDO                 `json:"pdos,omitempty"`
+	Request      *Request              `json:"request,omitempty"`
+	RequestedPDO *PDO                  `json:"requested_pdo,omitempty"`
+	EPRMode      *EPRMode              `json:"epr_mode,omitempty"`
+	PPSStatus    *PPSStatus            `json:"pps_status,omitempty"`
+	VDM          *VDM                  `json:"vdm,omitempty"`
+	Extension    *Extended             `json:"extension,omitempty"`
+	Capabilities *CapabilitiesExtended `json:"capabilities_extended,omitempty"`
+	RevisionInfo *RevisionInfo         `json:"revision_info,omitempty"`
+	Analysis     *Analysis             `json:"analysis,omitempty"`
+	MessageHex   string                `json:"message_hex"`
+	ReportHex    string                `json:"report_hex,omitempty"`
+	CRC          string                `json:"crc"` // absent, valid, invalid, or unverified
+	Error        string                `json:"error,omitempty"`
 }
 
 type RevisionInfo struct {
@@ -44,11 +48,13 @@ type RevisionInfo struct {
 }
 
 type Extended struct {
-	DataSize     uint16 `json:"data_size"`
-	Chunked      bool   `json:"chunked"`
-	ChunkNumber  uint8  `json:"chunk_number"`
-	RequestChunk bool   `json:"request_chunk"`
-	DataHex      string `json:"data_hex"`
+	DataSize       uint16 `json:"data_size"`
+	Chunked        bool   `json:"chunked"`
+	ChunkNumber    uint8  `json:"chunk_number"`
+	RequestChunk   bool   `json:"request_chunk"`
+	DataHex        string `json:"data_hex"`
+	ReassembledHex string `json:"reassembled_hex,omitempty"`
+	Control        string `json:"control,omitempty"`
 }
 
 type VDM struct {
@@ -93,7 +99,7 @@ func recognizedSOP(sop string) bool {
 
 // Decode accepts a PD header followed by its payload, with an optional
 // trailing CRC32. It retains malformed packets, recording the reason in Error.
-// Extended chunks are decoded individually; no complete-message claim is made.
+// Analyzer reassembles extended messages that span multiple packets.
 func Decode(sop string, raw []byte) Packet {
 	p := Packet{SOP: sop, MessageHex: hex.EncodeToString(raw), CRC: "absent", Type: "Malformed"}
 	if len(raw) < 2 {
@@ -131,18 +137,26 @@ func Decode(sop string, raw []byte) Packet {
 		eh := binary.LittleEndian.Uint16(raw[2:])
 		extension = Extended{DataSize: eh & 511, Chunked: eh&0x8000 != 0,
 			ChunkNumber: uint8(eh >> 11 & 15), RequestChunk: eh&0x400 != 0}
-		if extension.Chunked {
-			if count == 0 {
-				p.Error = "chunked PD message has no data objects"
-				return p
-			}
-		} else {
-			dataEnd = 4 + int(extension.DataSize)
-			if count == 0 {
+		p.Type = extendedTypes[kind]
+		if p.Type == "" {
+			p.Type = fmt.Sprintf("Reserved_%d", kind)
+		}
+		p.Extension = &extension
+		payloadSize, err := extension.payloadSize()
+		if err != nil {
+			p.Error = err.Error()
+			return p
+		}
+		dataEnd = 4 + payloadSize
+		if extension.Chunked && expected != 2+((payloadSize+2+3)/4)*4 {
+			p.Error = fmt.Sprintf("extended PD chunk size %d does not match %d data objects", payloadSize, count)
+			return p
+		}
+		if !extension.Chunked {
+			padded := expected > dataEnd && expected-dataEnd <= 3 && (len(raw) == expected || len(raw) == expected+4)
+			if !padded {
 				expected = dataEnd
-			} else if padding := expected - dataEnd; padding < 0 || padding > 3 {
-				p.Error = fmt.Sprintf("extended PD payload size %d does not match %d data objects", extension.DataSize, count)
-				return p
+				count = 0
 			}
 		}
 	}
@@ -155,18 +169,17 @@ func Decode(sop string, raw []byte) Packet {
 		p.CRC = "unverified"
 		return p
 	}
-	p.Type = fmt.Sprintf("Reserved_%d", kind)
 	if p.Extended {
-		if name, ok := extendedTypes[kind]; ok {
-			p.Type = name
-		}
 		p.CRC = "absent"
-	} else if count > 0 {
-		if name, ok := dataTypes[kind]; ok {
-			p.Type = name
+	} else {
+		p.Type = fmt.Sprintf("Reserved_%d", kind)
+		if count > 0 {
+			if name, ok := dataTypes[kind]; ok {
+				p.Type = name
+			}
+		} else if int(kind) < len(controlTypes) {
+			p.Type = controlTypes[kind]
 		}
-	} else if int(kind) < len(controlTypes) {
-		p.Type = controlTypes[kind]
 	}
 	if len(raw) == expected+4 {
 		p.CRC = "valid"
@@ -178,19 +191,38 @@ func Decode(sop string, raw []byte) Packet {
 		p.Objects = append(p.Objects, binary.LittleEndian.Uint32(raw[2+i*4:]))
 	}
 	if p.Extended {
-		extension.DataHex = hex.EncodeToString(raw[4:dataEnd])
-		p.Extension = &extension
+		payload := raw[4:dataEnd]
+		extension.DataHex = hex.EncodeToString(payload)
+		if p.Error == "" && !extension.RequestChunk && len(payload) == int(extension.DataSize) {
+			p.decodeExtended(payload)
+		}
 		return p
 	}
 	switch p.Type {
 	case "Source_Capabilities", "Sink_Capabilities":
 		for i, object := range p.Objects {
-			p.PDOs = append(p.PDOs, DecodePDO(i+1, object))
+			p.PDOs = append(p.PDOs, decodePDO(i+1, object, p.Type == "Source_Capabilities"))
 		}
 	case "Request", "EPR_Request":
-		if len(p.Objects) > 0 {
-			r := DecodeRequest(p.Objects[0], nil)
-			p.Request = &r
+		expectedObjects := 1
+		if p.Type == "EPR_Request" {
+			expectedObjects = 2
+		}
+		if len(p.Objects) != expectedObjects {
+			p.Error = fmt.Sprintf("%s requires %d data objects", p.Type, expectedObjects)
+			break
+		}
+		request := DecodeRequest(p.Objects[0], nil)
+		if p.Type == "EPR_Request" && request.Position >= 1 && request.Position <= 11 && p.Objects[1] != 0 {
+			pdo := DecodePDO(request.Position, p.Objects[1])
+			p.RequestedPDO = &pdo
+			request = decodeRequest(p.Objects[0], &pdo)
+			request.Matched = false
+		}
+		p.Request = &request
+	case "EPR_Mode":
+		if len(p.Objects) == 1 {
+			p.EPRMode = &EPRMode{Action: uint8(p.Objects[0] >> 24), Data: uint8(p.Objects[0] >> 16)}
 		}
 	case "Revision":
 		if p.Revision == "3.x" && len(p.Objects) == 1 {
@@ -213,9 +245,8 @@ func Decode(sop string, raw []byte) Packet {
 func (p Packet) GoodCRC() bool { return !p.Extended && p.Header>>12&7 == 0 && p.Header&31 == 1 }
 
 func (p Packet) KeepAlive() bool {
-	// Extended_Control's first byte is DataSize; the next is Extended Control Type.
-	return p.Type == "Extended_Control" && p.Extension != nil &&
-		p.Extension.DataSize == 2 && !p.Extension.Chunked && !p.Extension.RequestChunk && (p.Extension.DataHex == "0300" || p.Extension.DataHex == "0400")
+	return p.Error == "" && p.Extension != nil &&
+		(p.Extension.Control == "EPR_Keep_Alive" || p.Extension.Control == "EPR_Keep_Alive_Ack")
 }
 
 func Clone(p Packet) Packet {
@@ -224,6 +255,31 @@ func Clone(p Packet) Packet {
 	if p.Request != nil {
 		v := *p.Request
 		p.Request = &v
+	}
+	if p.RequestedPDO != nil {
+		value := *p.RequestedPDO
+		p.RequestedPDO = &value
+	}
+	if p.EPRMode != nil {
+		value := *p.EPRMode
+		p.EPRMode = &value
+	}
+	if p.PPSStatus != nil {
+		value := *p.PPSStatus
+		p.PPSStatus = &value
+		if value.VoltageV != nil {
+			p.PPSStatus.VoltageV = new(*value.VoltageV)
+		}
+		if value.CurrentA != nil {
+			p.PPSStatus.CurrentA = new(*value.CurrentA)
+		}
+	}
+	if p.Capabilities != nil {
+		value := *p.Capabilities
+		p.Capabilities = &value
+		if value.EPR != nil {
+			p.Capabilities.EPR = new(*value.EPR)
+		}
 	}
 	if p.VDM != nil {
 		v := *p.VDM
