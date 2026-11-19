@@ -1074,23 +1074,13 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 			xDivs = 2
 		}
 		gridV := p.LineSoft.Alpha(0.65)
-		growingInitialWindow := winEnd > cw.bufEnd+0.05
 		for i := 0; i <= xDivs; i++ {
 			frac := float32(i) / float32(xDivs)
 			gx := left + plotRect.W*frac
 			if i > 0 && i < xDivs {
 				painter.Line(gx, top, gx, bottom, 1, gridV)
 			}
-			var label string
-			switch {
-			case growingInitialWindow:
-				label = formatChartTime(float64(frac) * (winEnd - winStart))
-			case i == xDivs && d.held == nil && !d.hasViewEnd:
-				label = msgs.GuiNow()
-			default:
-				offset := winStart + float64(frac)*(winEnd-winStart) - cw.bufEnd
-				label = formatRelTime(offset)
-			}
+			label := formatChartTime(winStart + float64(frac)*(winEnd-winStart))
 			labelWidth, _ := painter.MeasureText(1<<20, ui.Span{Text: label, Size: 10})
 			lx := clampFloat32(gx-labelWidth/2, left, right-labelWidth)
 			painter.Text(lx, bottom+5, label, 10, p.Muted)
@@ -1292,7 +1282,7 @@ func (d *dashboard) drawCrosshairHUD(painter *ui.Painter, p kit.Palette, msgs lo
 	xf := float32((target.Elapsed - winStart) / max(winEnd-winStart, 1e-6))
 	cx := clampFloat32(chart.X(plotRect, xf), plotRect.X, plotRect.X+plotRect.W)
 
-	header := formatChartTime(clampFloat(target.Elapsed-winStart, 0, winEnd-winStart))
+	header := formatChartTime(target.Elapsed)
 	if t1 != nil && t2 != nil && math.Abs(t2.Elapsed-t1.Elapsed) >= 0.05 {
 		dt := t2.Elapsed - t1.Elapsed
 		if v1, ok1 := ch.read(t1); ok1 {
@@ -1355,7 +1345,10 @@ func (d *dashboard) zoomByFactor(cw chartWindow, fraction, factor float64) {
 	maxWin := d.maxWindowFor(sessionSpan)
 	oldWin := cw.windowSec
 	newWin := clampFloat(oldWin*factor, minWindowSec, maxWin)
-	hitMax := factor > 1 && sessionSpan > defaultWindowSec && newWin >= maxWin-1e-3
+	hitMax := factor > 1 && sessionSpan > 0 && newWin >= sessionSpan-1e-3
+	if hitMax {
+		newWin = max(minWindowSec, sessionSpan)
+	}
 	if math.Abs(newWin-oldWin) < 1e-6 && d.fullSession == hitMax {
 		return
 	}

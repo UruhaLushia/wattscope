@@ -877,6 +877,10 @@ func TestShortChartDrawsFromLeftAndThenScrolls(t *testing.T) {
 	d.windowSec = 5
 	tt.Frame()
 	assertPlacement(122, 127, 2.0/5, 1)
+
+	d.fullSession = true
+	tt.Frame()
+	assertPlacement(0, 127, 120.0/127, 1)
 }
 
 func TestChartPointerAnchoredScrollZoom(t *testing.T) {
@@ -1842,7 +1846,7 @@ func TestSettingsRowAlignmentAndSmoothPeak(t *testing.T) {
 		t.Fatalf("expected IconSettingRow label X to align with OptionRow label X, got lang=%.1f smooth=%.1f", langRect.X, smoothRect.X)
 	}
 
-	// 2. Verify live >60s chart renders relative time ticks ("现在", "−1m", "−30s") and consistent smoothed peak/endpoint.
+	// 2. Verify the full-session chart starts at zero and expands with the session.
 	samples := make([]device.Sample, 0, 1801)
 	for i := 0; i <= 1800; i++ {
 		sec := float64(i) * 0.05
@@ -1862,10 +1866,11 @@ func TestSettingsRowAlignmentAndSmoothPeak(t *testing.T) {
 	ds.language = "zh-Hans"
 	ds.settings.Language = "zh-Hans"
 	ds.settings.SmoothChart = true
+	ds.fullSession = true
 	ts := ui.NewTester(ds.view, 390, 844)
 	ts.Frame()
-	if gotL, gotM := formatRelTime(ds.chartGeometry.key.start-90), formatRelTime((ds.chartGeometry.key.start+ds.chartGeometry.key.end)/2-90); gotL != "−1m" || gotM != "−30s" {
-		t.Fatalf("expected relative live window ticks (−1m, −30s), got (%q, %q)", gotL, gotM)
+	if ds.chartGeometry.key.start != 0 {
+		t.Fatalf("expected full-session chart to start at zero, got %v", ds.chartGeometry.key.start)
 	}
 	if ds.chartGeometry.key.end > 90.05 {
 		t.Fatalf("expected live >60s chart to stay anchored at latest timestamp 90, got end=%v", ds.chartGeometry.key.end)

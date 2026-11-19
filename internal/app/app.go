@@ -106,7 +106,7 @@ func Run(parent context.Context, source session.Source, language, directory stri
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	model := &dashboard{
-		ctx: ctx, source: source, dir: directory, logs: logs, windowSec: defaultWindowSec,
+		ctx: ctx, source: source, dir: directory, logs: logs, windowSec: defaultWindowSec, fullSession: true,
 		mobile: runtime.GOOS == "android" || runtime.GOOS == "ios",
 	}
 	model.source.Demo = false

@@ -88,7 +88,7 @@ func (d *dashboard) effectiveWindow() float64 {
 func (d *dashboard) effectiveWindowFor(sessionSpan float64) float64 {
 	maxWin := d.maxWindowFor(sessionSpan)
 	if d.fullSession {
-		return maxWin
+		return max(minWindowSec, sessionSpan)
 	}
 	if d.windowSec > 0 {
 		return clampFloat(d.windowSec, minWindowSec, maxWin)
@@ -112,7 +112,7 @@ func (d *dashboard) resetChartView() {
 	d.chartHistory = chartHistoryCache{}
 	d.chartStats = chartStatsCache{}
 	d.chartGeometry = chartGeometry{}
-	d.fullSession = false
+	d.fullSession = true
 	d.windowSec = defaultWindowSec
 }
 
@@ -371,6 +371,9 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 		full := d.held.History
 		if len(full) != 0 {
 			bufStart, bufEnd := full[0].Elapsed, full[len(full)-1].Elapsed
+			if d.fullSession {
+				bufStart = 0
+			}
 			sessionSpan := max(0, bufEnd-bufStart)
 			window := d.effectiveWindowFor(sessionSpan)
 			winEnd := bufEnd
@@ -411,6 +414,9 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 		sessionSpan := 0.0
 		if live.HistoryCount > 0 {
 			sessionSpan = max(0, live.HistoryEnd-live.HistoryStart)
+			if d.fullSession {
+				sessionSpan = max(0, live.HistoryEnd)
+			}
 		} else {
 			d.hasViewEnd = false
 			d.hasCursor = false
@@ -452,12 +458,14 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 			if snapshot.HistoryCount > 0 {
 				cw.bufStart = snapshot.HistoryStart
 				cw.bufEnd = snapshot.HistoryEnd
-				window = d.effectiveWindowFor(max(0, cw.bufEnd-cw.bufStart))
 			} else if len(snapshot.History) > 0 {
 				cw.bufStart = snapshot.History[0].Elapsed
 				cw.bufEnd = snapshot.History[len(snapshot.History)-1].Elapsed
-				window = d.effectiveWindowFor(max(0, cw.bufEnd-cw.bufStart))
 			}
+			if d.fullSession {
+				cw.bufStart = 0
+			}
+			window = d.effectiveWindowFor(max(0, cw.bufEnd-cw.bufStart))
 			cw.windowSec = window
 			if snapshot.HistoryCount > 0 || len(snapshot.History) > 0 {
 				cw = chartWindowAt(cw.bufStart, cw.bufEnd, window, cw.bufEnd)
