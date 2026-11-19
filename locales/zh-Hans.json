@@ -67,7 +67,7 @@
   "log_field_endpoint": "端点",
   "log_field_bytes": "字节数",
   "log_field_header_bytes": "帧头字节",
-  "log_field_value": "{label}: {value}",
+  "log_field_value": "{label}\uff1a{value}",
   "log_value_yes": "是",
   "log_value_no": "否",
   "log_stage_discover": "扫描匹配设备",

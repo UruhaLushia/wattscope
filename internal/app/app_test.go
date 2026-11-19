@@ -1696,7 +1696,7 @@ func TestConnectionLogTextAndFormatting(t *testing.T) {
 		t.Fatalf("expected usb formatted as USB, got %q", got)
 	}
 	zh := locales.In("zh-Hans")
-	if got := zh.DiagnosticField("transport", "hid"); got != "传输方式: HID" {
+	if got := zh.DiagnosticField("transport", "hid"); got != "传输方式\uff1aHID" {
 		t.Fatalf("expected hid formatted as HID, got %q", got)
 	}
 
