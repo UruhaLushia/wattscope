@@ -68,9 +68,12 @@ jobs:
 
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
           go tool mygo build -platform android/arm64
-          "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner" verify build/android/*.apk
+          apks=(build/android/*.apk)
+          "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner" verify "${apks[@]}"
           jarsigner -verify -strict -keystore "$keystore" -storetype PKCS12 \
             -storepass:env MYGO_ANDROID_KEYSTORE_PASSWORD build/android/*.aab wattscope
+          apk="${apks[0]}"
+          mv "$apk" "${apk%.apk}-arm64-v8a.apk"
 
       - name: Build Android CLI
         if: matrix.variant == 'cli'
@@ -85,7 +88,7 @@ jobs:
         with:
           name: wattscope-android-arm64-gui
           path: |
-            build/android/*.apk
+            build/android/*-arm64-v8a.apk
             build/android/*.aab
             LICENSE
           if-no-files-found: error
