@@ -200,13 +200,6 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	if d.mobile && split {
 		cardPad = 12
 	}
-	var chartStat channelStat
-	if d.channel < 3 {
-		chartStat = metricStats[d.channel]
-	} else if len(snap.History) > 0 {
-		chartStat = d.visibleChartStat(snap.History, d.channel)
-	}
-
 	wide2K := width >= 1280 && !d.mobile
 	hasBottom := live.State == backend.Streaming || readoutStats.Samples > 0 || live.Recording.Active
 	seriesMask := d.effectiveSeriesMask()
@@ -262,11 +255,6 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 				pHeight = min(pHeight, 250)
 			}
 			d.trend(ctx, p, msgs, snap, live, channel, chartSample, cw, pHeight, empty, touch, seriesMask, !split)
-
-			if chartStat.count > 0 {
-				kit.Divider(ctx, p)
-				rangeStatsBar(ctx, p, msgs, chartStat, channel)
-			}
 		})
 	}
 
@@ -454,21 +442,6 @@ func (d *dashboard) overviewPDCard(ctx *ui.Context, p kit.Palette, msgs locales.
 				ui.Text(ctx, pkt.Type).FontSize(12).FontWeight(600).SingleLine().Grow(1).MinWidth(0)
 				ui.Text(ctx, fmt.Sprintf("%.2fs", pkt.Elapsed)).FontFeatures("tnum").FontSize(11).TextColor(p.Muted).Shrink(0)
 			})
-		}
-	})
-}
-
-func rangeStatsBar(ctx *ui.Context, p kit.Palette, msgs locales.Messages, stat channelStat, channel measurement) {
-	ui.Row(ctx).FillWidth().Wrap().Gap(12).AlignItems(ui.Center).Children(func() {
-		items := []struct {
-			label string
-			value float64
-		}{{msgs.Minimum(), stat.low}, {msgs.Average(), stat.mean}, {msgs.Maximum(), stat.high}}
-		for i, item := range items {
-			if i > 0 {
-				kit.VerticalDivider(ctx, p, 24)
-			}
-			kit.MetricSummaryCell(ctx, p, item.label, fmt.Sprintf("%.*f", channel.decimals, item.value), channel.unit)
 		}
 	})
 }

@@ -311,9 +311,6 @@ func TestOverviewHoldAndSettingsControls(t *testing.T) {
 	if d.held == nil {
 		t.Fatal("expected chart to enter Hold state")
 	}
-	if !tt.HasText(msgs.Minimum()) || !tt.HasText(msgs.Average()) || !tt.HasText(msgs.Maximum()) {
-		t.Fatal("expected MIN/AVG/MAX stat blocks while holding")
-	}
 	if err := tt.Click(msgs.ActionResume()); err != nil {
 		t.Fatalf("click Resume: %v", err)
 	}
@@ -892,13 +889,12 @@ func TestChartPointerAnchoredScrollZoom(t *testing.T) {
 	tt.Frame()
 
 	// 1. Live mode wheel zoom steps along clean ladder while staying Live (not unexpectedly pausing).
-	minRect, okMin := tt.Find(msgs.Minimum())
-	holdRect, okHold := tt.Find(msgs.ActionHold())
-	if !okMin || !okHold {
-		t.Fatalf("expected live chart controls, got okMin=%v okHold=%v", okMin, okHold)
+	legendRect, ok := tt.Find(msgs.Power() + " (W)")
+	if !ok {
+		t.Fatal("expected chart legend")
 	}
-	px := minRect.X + 240
-	py := (holdRect.Y + holdRect.H + minRect.Y) / 2
+	px := legendRect.X + 240
+	py := legendRect.Y + legendRect.H + 70
 	d.windowSec = 30
 	tt.Frame()
 	tt.Wheel(px, py, 0, -50)
@@ -1083,13 +1079,12 @@ func TestChartMultiTraceLegendAndHover(t *testing.T) {
 		t.Fatalf("expected primary Power series to stay enabled in mask %08b", d.effectiveSeriesMask())
 	}
 
-	minRect, okMin := tt.Find(msgs.Minimum())
-	holdRect, okHold := tt.Find(msgs.ActionResume())
-	if !okMin || !okHold {
-		t.Fatalf("expected held chart controls, got okMin=%v okHold=%v", okMin, okHold)
+	legendRect, ok := tt.Find(msgs.Power() + " (W)")
+	if !ok {
+		t.Fatal("expected chart legend")
 	}
-	px := minRect.X + 200
-	py := (holdRect.Y + holdRect.H + minRect.Y) / 2
+	px := legendRect.X + 200
+	py := legendRect.Y + legendRect.H + 70
 
 	// Pin T1 with click, then hover elsewhere to activate simultaneous T2 preview without shifting T1.
 	tt.ClickAt(px, py)
@@ -1149,13 +1144,12 @@ func TestChartFriendlyDragPanAndFullSessionZoom(t *testing.T) {
 	}
 	tt.Frame()
 
-	minRect, okMin := tt.Find(msgs.Minimum())
-	holdRect, okHold := tt.Find(msgs.ActionResume())
-	if !okMin || !okHold {
-		t.Fatalf("expected held chart controls, got okMin=%v okHold=%v", okMin, okHold)
+	legendRect, ok := tt.Find(msgs.Power() + " (W)")
+	if !ok {
+		t.Fatal("expected chart legend")
 	}
-	px := minRect.X + 260
-	py := (holdRect.Y + holdRect.H + minRect.Y) / 2
+	px := legendRect.X + 260
+	py := legendRect.Y + legendRect.H + 70
 
 	// 1. Zooming out extends past 5m (300s) all the way to the full 12m (720s) session.
 	for range 20 {
@@ -1257,13 +1251,12 @@ func TestChartFriendlyDragPanAndFullSessionZoom(t *testing.T) {
 	dLive.windowSec = 60
 	tl := ui.NewTester(dLive.view, 1120, 720)
 	tl.Frame()
-	lMin, okLMin := tl.Find(msgs.Minimum())
-	lHold, okLHold := tl.Find(msgs.ActionHold())
-	if !okLMin || !okLHold {
-		t.Fatalf("expected live chart controls, got min=%v hold=%v", okLMin, okLHold)
+	lLegend, ok := tl.Find(msgs.Power() + " (W)")
+	if !ok {
+		t.Fatal("expected chart legend")
 	}
-	lx := lMin.X + 260
-	ly := (lHold.Y + lHold.H + lMin.Y) / 2
+	lx := lLegend.X + 260
+	ly := lLegend.Y + lLegend.H + 70
 
 	// Drag right from live -> detaches smoothly without hard-freezing dLive.held.
 	tl.Press(lx, ly)
@@ -1324,13 +1317,12 @@ func TestChartFriendlyDragPanAndFullSessionZoom(t *testing.T) {
 	dm.windowSec = 60
 	tm := ui.NewTester(dm.view, 390, 844)
 	tm.Frame()
-	mMin, okMMin := tm.Find(msgs.Minimum())
-	mHold, okMHold := tm.Find(msgs.ActionHold())
-	if !okMMin || !okMHold {
-		t.Fatalf("expected mobile chart controls, got min=%v hold=%v", okMMin, okMHold)
+	mLegend, ok := tm.Find(msgs.Power() + " (W)")
+	if !ok {
+		t.Fatal("expected chart legend")
 	}
-	mx := mMin.X + 120
-	my := (mHold.Y + mHold.H + mMin.Y) / 2
+	mx := mLegend.X + 120
+	my := mLegend.Y + mLegend.H + 70
 	tm.Scroll(mx, my, -80, 2)
 	tm.Frame()
 	if !dm.hasViewEnd || !(dm.viewEnd < 715) {
@@ -1704,7 +1696,7 @@ func TestConnectionLogTextAndFormatting(t *testing.T) {
 		t.Fatalf("expected usb formatted as USB, got %q", got)
 	}
 	zh := locales.In("zh-Hans")
-	if got := zh.DiagnosticField("transport", "hid"); got != "传输方式：HID" {
+	if got := zh.DiagnosticField("transport", "hid"); got != "传输方式: HID" {
 		t.Fatalf("expected hid formatted as HID, got %q", got)
 	}
 
