@@ -52,7 +52,27 @@ func (g glassInteraction) material(base glass.Glass) ui.Material {
 	if g.active() {
 		return interactiveGlass{base: base, glassInteraction: g}
 	}
-	return base
+	return staticGlass{base: base}
+}
+
+type staticGlass struct {
+	base glass.Glass
+}
+
+func (g staticGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
+	if StaticSnapshot || p.Preferences().ReduceTransparency {
+		g.base.PaintMaterial(p, box, radii)
+		return
+	}
+	rad := radii[0]
+	if rad <= 0 {
+		rad = min(box.W, box.H) * 0.5
+	}
+	paintLiquidGlass(p, box, rad, liquidLensSpec{
+		Tint:    g.base.Tint,
+		Clarity: g.base.Clarity,
+		Touch:   ui.Point{X: 0.5, Y: 0.5},
+	})
 }
 
 // GlassIconPop gives SVG icons inside Liquid Glass controls a subtle spring pop
@@ -75,15 +95,23 @@ type dockGlass struct {
 }
 
 func (g dockGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
-	if p.Preferences().ReduceTransparency || !g.active() {
+	if StaticSnapshot || p.Preferences().ReduceTransparency {
 		(glass.Glass{}).PaintMaterial(p, box, radii)
 		return
 	}
-	dx, dy := 1.8*g.elastic, 1.2*g.elastic
+	dx, dy := float32(0), float32(0)
+	if g.active() {
+		dx, dy = 2.0*g.elastic, 1.4*g.elastic
+	}
+	frostTint := ui.RGBA(248, 251, 255, 0.36)
+	if p.Theme().Dark {
+		frostTint = ui.RGBA(20, 25, 36, 0.38)
+	}
 	paintLiquidGlass(p, expandGlass(box, dx, dy), max(1, radii[0]+max(dy, 0)), liquidLensSpec{
-		Glow:     0.28 * g.glow,
+		Tint:     frostTint,
+		Glow:     0.32 * g.glow,
 		Touch:    g.touch,
-		RimBoost: 0.08 * g.glow,
+		RimBoost: 0.14 + 0.10*g.glow,
 	})
 }
 
@@ -93,20 +121,32 @@ type interactiveGlass struct {
 }
 
 func (g interactiveGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
-	if p.Preferences().ReduceTransparency {
+	if StaticSnapshot || p.Preferences().ReduceTransparency {
 		g.base.PaintMaterial(p, box, radii)
 		return
 	}
-	maxExX := clamp32(box.W*0.045, 2.4, 5.5)
-	maxExY := clamp32(box.H*0.085, 1.9, 4.5)
-	dx := maxExX*g.elastic + 0.35*g.hover
-	dy := maxExY*g.elastic + 0.25*g.hover
+	var dx, dy float32
+	if g.active() {
+		maxExX := clamp32(box.W*0.048, 2.4, 5.8)
+		maxExY := clamp32(box.H*0.09, 2.0, 4.8)
+		dx = maxExX*g.elastic + 0.35*g.hover
+		dy = maxExY*g.elastic + 0.25*g.hover
+	}
+	tint := g.base.Tint
+	if tint.A == 0 {
+		if p.Theme().Dark {
+			tint = ui.RGBA(22, 28, 40, 0.24)
+		} else {
+			tint = ui.RGBA(250, 252, 255, 0.22)
+		}
+	}
 	paintLiquidGlass(p, expandGlass(box, dx, dy), max(1, radii[0]+max(dy, 0)), liquidLensSpec{
-		Tint:    g.base.Tint,
-		Clarity: g.base.Clarity,
-		Glow:    g.glow,
-		Hover:   g.hover,
-		Touch:   g.touch,
+		Tint:     tint,
+		Clarity:  g.base.Clarity,
+		Glow:     g.glow,
+		Hover:    g.hover,
+		Touch:    g.touch,
+		RimBoost: 0.10,
 	})
 }
 
@@ -135,16 +175,7 @@ func GlassPillControl(ctx *ui.Context, owner ui.Element, p Palette, radius float
 	}
 	if !interaction.active() {
 		if visibleAtRest && fallbackBg.A > 0 && tint.A == 0 {
-			rimAlpha := float32(0.28)
-			if p.Dark {
-				rimAlpha = 0.12
-			}
-			surface.Draw(func(painter *ui.Painter, r ui.Rect) {
-				if r.W <= 0 || r.H <= 0 || painter.Preferences().ReduceTransparency {
-					return
-				}
-				painter.Stroke(ui.Rect{X: r.X + 0.5, Y: r.Y + 0.5, W: max(0, r.W-1), H: max(0, r.H-1)}, ui.RGBA(255, 255, 255, rimAlpha), max(1, radius-0.5), 1)
-			})
+			drawRestPillSheen(surface, radius, p.Dark)
 		}
 		return
 	}

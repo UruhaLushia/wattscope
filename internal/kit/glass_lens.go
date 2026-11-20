@@ -63,31 +63,61 @@ func applyLiquidRim(el ui.Element, p Palette, width, alpha, glow, tx float32, ti
 	tx = clamp32(tx, 0.06, 0.94)
 
 	hi := ui.RGBA(255, 255, 255, 255)
-	topA := clamp32(a*(0.62+0.26*g), 0, 0.92)
-	sideA := clamp32(a*(0.14+0.08*g), 0, 0.34)
-	botA := clamp32(a*(0.40+0.20*g), 0, 0.72)
+	coolEdge := ui.RGBA(140, 168, 210, 255)
+	topA := clamp32(a*(0.76+0.20*g), 0, 0.95)
+	sideA := clamp32(a*(0.30+0.12*g), 0, 0.48)
+	botA := clamp32(a*(0.50+0.20*g), 0, 0.78)
 	if p.Dark {
-		hi = ui.RGBA(232, 242, 255, 255)
-		topA = clamp32(a*(0.48+0.26*g), 0, 0.85)
-		sideA = clamp32(a*(0.10+0.06*g), 0, 0.24)
-		botA = clamp32(a*(0.28+0.18*g), 0, 0.58)
+		hi = ui.RGBA(236, 244, 255, 255)
+		coolEdge = ui.RGBA(175, 205, 245, 255)
+		topA = clamp32(a*(0.58+0.24*g), 0, 0.88)
+		sideA = clamp32(a*(0.20+0.10*g), 0, 0.36)
+		botA = clamp32(a*(0.36+0.18*g), 0, 0.64)
 	}
-	edgeAccent := hi
+	edgeAccent := coolEdge
 	if tint.A > 0 {
-		edgeAccent = hi.Mix(tint, 0.30)
+		edgeAccent = coolEdge.Mix(tint, 0.36)
 	}
 
 	angle := float32(180) + (tx-0.5)*26
-	return el.Border(clamp32(width, 0.75, 2.5), ui.Color{}).BorderLinearGradient(ui.LinearGradient{
+	return el.Border(clamp32(width, 0.85, 2.5), ui.Color{}).BorderLinearGradient(ui.LinearGradient{
 		Angle: angle,
 		Stops: []ui.GradientStop{
 			{Color: hi.Alpha(topA), At: 0},
 			{Color: edgeAccent.Alpha(sideA), At: 0.26},
-			{Color: edgeAccent.Alpha(sideA * 0.82), At: 0.74},
+			{Color: edgeAccent.Alpha(sideA * 0.88), At: 0.74},
 			{Color: hi.Alpha(botA), At: 1},
 		},
 	})
 }
+
+func drawRestPillSheen(el ui.Element, radius float32, dark bool) {
+	el.Draw(func(p *ui.Painter, box ui.Rect) {
+		if box.W <= 2 || box.H <= 2 || p.Preferences().ReduceTransparency {
+			return
+		}
+		r := min(radius, min(box.W, box.H)*0.5)
+		gradient, rim := restPillLight, ui.RGBA(255, 255, 255, 0.42)
+		if dark {
+			gradient, rim = restPillDark, ui.RGBA(232, 242, 255, 0.16)
+		}
+		p.FillGradient(box, gradient, r)
+		p.Stroke(ui.Rect{X: box.X + 0.5, Y: box.Y + 0.5, W: box.W - 1, H: box.H - 1}, rim, max(1, r-0.5), 1)
+	})
+}
+
+var (
+	restPillLight = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+		{Color: ui.RGBA(255, 255, 255, 255).Alpha(0.18), At: 0},
+		{Color: ui.Transparent, At: 0.45},
+		{Color: ui.RGBA(255, 255, 255, 255).Alpha(0.06), At: 1},
+	}}
+	restPillDark = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+		{Color: ui.RGBA(232, 242, 255, 255).Alpha(0.08), At: 0},
+		{Color: ui.Transparent, At: 0.45},
+		{Color: ui.RGBA(232, 242, 255, 255).Alpha(0.03), At: 1},
+	}}
+)
 
 // paintLiquidGlass renders a curved Liquid Glass lens with touch-reactive
 // specular highlights using MyGo's built-in glass material and vector painters.
@@ -135,12 +165,19 @@ func paintReducedGlass(p *ui.Painter, box ui.Rect, r float32, spec liquidLensSpe
 }
 
 func computePressGlassTint(base ui.Color, glow, hover float32, dark, clearLens bool) ui.Color {
-	lift := clamp32(0.05*hover+0.12*glow, 0, 0.24)
+	if clearLens && dark {
+		darkDepth := ui.RGBA(12, 16, 24, 0.30)
+		if base.A == 0 {
+			return darkDepth
+		}
+		return base.Mix(darkDepth, 0.35)
+	}
+	lift := clamp32(0.05*hover+0.14*glow, 0, 0.26)
 	if dark {
-		lift = clamp32(0.025*hover+0.07*glow, 0, 0.14)
+		lift = clamp32(0.025*hover+0.08*glow, 0, 0.16)
 	}
 	if clearLens {
-		lift *= 0.45
+		lift *= 0.32
 	}
 	if lift <= 0.002 {
 		return base
@@ -156,28 +193,37 @@ func computePressGlassTint(base ui.Color, glow, hover float32, dark, clearLens b
 }
 
 func paintGlassDomeSheen(p *ui.Painter, box ui.Rect, r, glow, hover, tx float32, clearLens, dark bool) {
-	strength := 0.24*glow + 0.12*hover
+	strength := 0.24 + 0.28*glow + 0.14*hover
 	if clearLens {
-		strength = max(strength, 0.16)
-	}
-	if strength <= 0.004 {
-		return
+		strength = max(0.18, 0.22*glow+0.12*hover)
 	}
 	spec := ui.RGBA(255, 255, 255, 255)
-	topK, botK := float32(0.24), float32(0.11)
+	topK, botK := float32(0.22), float32(0.10)
 	if dark {
 		spec = ui.RGBA(232, 242, 255, 255)
-		topK, botK = 0.13, 0.07
+		topK, botK = 0.11, 0.06
+	}
+	if clearLens {
+		if dark {
+			topK, botK = 0.08, 0.04
+		} else {
+			topK *= 0.68
+			botK *= 0.72
+		}
 	}
 	topA := clamp32(topK*strength, 0, 0.34)
 	botA := clamp32(botK*strength, 0, 0.18)
+	topMid, botMid := float32(0.26), float32(0.84)
+	if clearLens {
+		topMid, botMid = 0.18, 0.88
+	}
 	p.FillGradient(box, ui.LinearGradient{
 		Angle: 180 + (tx-0.5)*18,
 		Stops: []ui.GradientStop{
 			{Color: spec.Alpha(topA), At: 0},
-			{Color: spec.Alpha(topA * 0.22), At: 0.26},
+			{Color: spec.Alpha(topA * 0.20), At: topMid},
 			{Color: ui.Transparent, At: 0.56},
-			{Color: spec.Alpha(botA * 0.24), At: 0.84},
+			{Color: spec.Alpha(botA * 0.22), At: botMid},
 			{Color: spec.Alpha(botA), At: 1},
 		},
 	}, r)
@@ -186,7 +232,7 @@ func paintGlassDomeSheen(p *ui.Painter, box ui.Rect, r, glow, hover, tx float32,
 func paintGlassTouchPool(p *ui.Painter, box ui.Rect, r, glow, hover, tx, ty float32, tint ui.Color, clearLens, dark bool) {
 	strength := glow*0.85 + hover*0.20
 	if clearLens {
-		strength = max(strength, 0.32)
+		strength = max(strength, 0.26)
 	}
 	if strength <= 0.005 {
 		return
@@ -197,7 +243,16 @@ func paintGlassTouchPool(p *ui.Painter, box ui.Rect, r, glow, hover, tx, ty floa
 	coreK, midK, tailK := float32(0.26), float32(0.14), float32(0.05)
 	if dark {
 		core = ui.RGBA(230, 242, 255, 255)
-		coreK, midK, tailK = 0.15, 0.075, 0.025
+		coreK, midK, tailK = 0.14, 0.07, 0.025
+	}
+	if clearLens {
+		if dark {
+			radSpan *= 0.78
+			coreK, midK, tailK = 0.08, 0.035, 0.01
+		} else {
+			coreK *= 0.65
+			midK *= 0.65
+		}
 	}
 	tail := core
 	if tint.A > 20 {
@@ -207,8 +262,8 @@ func paintGlassTouchPool(p *ui.Painter, box ui.Rect, r, glow, hover, tx, ty floa
 		Center: ui.Point{X: tx, Y: ty},
 		Radius: radSpan,
 		Stops: []ui.GradientStop{
-			{Color: core.Alpha(clamp32(coreK*strength, 0, 0.38)), At: 0},
-			{Color: core.Alpha(clamp32(midK*strength, 0, 0.24)), At: 0.32},
+			{Color: core.Alpha(clamp32(coreK*strength, 0, 0.36)), At: 0},
+			{Color: core.Alpha(clamp32(midK*strength, 0, 0.22)), At: 0.32},
 			{Color: tail.Alpha(clamp32(tailK*strength, 0, 0.12)), At: 0.68},
 			{Color: ui.Transparent, At: 1},
 		},
@@ -216,7 +271,7 @@ func paintGlassTouchPool(p *ui.Painter, box ui.Rect, r, glow, hover, tx, ty floa
 }
 
 func paintGlassRimStrokes(p *ui.Painter, box ui.Rect, r, glow, hover, rimBoost float32, tint ui.Color, dark, highContrast bool) {
-	rimStrength := clamp32(0.28+0.14*hover+0.34*glow+rimBoost, 0, 0.95)
+	rimStrength := clamp32(0.36+0.16*hover+0.34*glow+rimBoost, 0, 1)
 	if rimStrength <= 0.005 {
 		return
 	}
@@ -226,12 +281,12 @@ func paintGlassRimStrokes(p *ui.Painter, box ui.Rect, r, glow, hover, rimBoost f
 	}
 	rimColor := ui.RGBA(255, 255, 255, 255)
 	innerColor := rimColor
-	outerAlpha := clamp32(rimStrength*0.62, 0, 0.85)
-	innerAlpha := clamp32(rimStrength*0.18, 0, 0.26)
+	outerAlpha := clamp32(rimStrength*0.72, 0, 0.90)
+	innerAlpha := clamp32(rimStrength*0.20, 0, 0.28)
 	if dark {
-		rimColor = ui.RGBA(232, 242, 255, 255)
-		outerAlpha = clamp32(rimStrength*0.46, 0, 0.72)
-		innerAlpha = clamp32(rimStrength*0.12, 0, 0.20)
+		rimColor = ui.RGBA(234, 243, 255, 255)
+		outerAlpha = clamp32(rimStrength*0.42, 0, 0.70)
+		innerAlpha = clamp32(rimStrength*0.12, 0, 0.22)
 	}
 	if tint.A > 0 {
 		innerColor = rimColor.Mix(tint, 0.35)

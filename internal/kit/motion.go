@@ -35,11 +35,10 @@ var (
 	MotionLocale       = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.04}}
 	MotionPage         = ui.Animation{Duration: MotionPageDur, Ease: EaseStandard}
 	MotionRail         = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.14}}
-	MotionGlassPress   = ui.Animation{Spring: ui.SpringOptions{Duration: 220 * time.Millisecond, Bounce: 0.24}}
-	MotionGlassRelease = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0.28}}
-	MotionGlassScrub   = ui.Animation{Spring: ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.24}}
+	MotionGlassPress   = ui.Animation{Spring: ui.SpringOptions{Duration: 145 * time.Millisecond, Bounce: 0.22}}
+	MotionGlassRelease = ui.Animation{Spring: ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.26}}
+	MotionGlassScrub   = ui.Animation{Spring: ui.SpringOptions{Duration: 180 * time.Millisecond, Bounce: 0.22}}
 	MotionNavPanel     = ui.Animation{Spring: ui.SpringOptions{Duration: 340 * time.Millisecond, Bounce: 0.14}}
-	MotionNavToggle    = ui.Animation{Spring: ui.SpringOptions{Duration: 310 * time.Millisecond, Bounce: 0.16}}
 	MotionSpring       = ui.Animation{Spring: ui.SpringOptions{Duration: MotionMoveDur, Bounce: 0.06}}
 	MotionOptionSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 230 * time.Millisecond, Bounce: 0.06}}
 	MotionPopup        = ui.Animation{Duration: MotionPopupOpenDur, Ease: EaseStandard}
@@ -125,7 +124,8 @@ func pillMatchTransition(matchKey any, anim *ui.Animation) ui.ElementTransition 
 	}
 }
 
-func NavPanelTransition(matchKey any) ui.ElementTransition {
+// Desktop navigation shares one spring so its tabs and toggle stay with the panel.
+func navMatchTransition(matchKey any, shadows bool) ui.ElementTransition {
 	if StaticSnapshot {
 		return ui.ElementTransition{}
 	}
@@ -133,44 +133,8 @@ func NavPanelTransition(matchKey any) ui.ElementTransition {
 		Position:  true,
 		Size:      true,
 		Colors:    true,
-		Shadows:   true,
+		Shadows:   shadows,
 		Animation: &MotionNavPanel,
-		Match:     matchKey,
-		Fly:       true,
-	}
-}
-
-func NavToggleTransition(matchKey any) ui.ElementTransition {
-	if StaticSnapshot {
-		return ui.ElementTransition{}
-	}
-	return ui.ElementTransition{
-		Position:  true,
-		Size:      true,
-		Colors:    true,
-		Animation: &MotionNavToggle,
-		Match:     matchKey,
-		Fly:       true,
-	}
-}
-
-// NavTabTransition staggers each row's spring slightly so later tabs follow
-// their leader across top-bar and floating-sidebar morphs.
-func NavTabTransition(index int, matchKey any) ui.ElementTransition {
-	if StaticSnapshot {
-		return ui.ElementTransition{}
-	}
-	anim := ui.Animation{
-		Spring: ui.SpringOptions{
-			Duration: time.Duration(300+index*26) * time.Millisecond,
-			Bounce:   0.18,
-		},
-	}
-	return ui.ElementTransition{
-		Position:  true,
-		Size:      true,
-		Colors:    true,
-		Animation: &anim,
 		Match:     matchKey,
 		Fly:       true,
 	}

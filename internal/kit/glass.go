@@ -39,7 +39,7 @@ func glassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Co
 		if interactive {
 			return el.Material(trackGlassInteraction(el).material(base))
 		}
-		return el.Material(base)
+		return el.Material(staticGlass{base: base})
 	}
 	el.Background(fallbackBg)
 	if fallbackBorder.A > 0 {
@@ -61,7 +61,10 @@ func GlassFloatingButton(el ui.Element, p Palette, radius float32, tint ui.Color
 	if alpha > 0.005 && (!p.Dark || glow > 0.01 || hover > 0.01) {
 		el.Shadow(0, 2+3*glow, 6+9*glow, 0, ui.RGBA(12, 18, 30, clamp32(alpha, 0, 0.45)))
 	}
-	return el.Radius(radius).Material(state.material(glass.Glass{Tint: tint}))
+	return el.Radius(radius).Material(interactiveGlass{
+		base:             glass.Glass{Tint: tint},
+		glassInteraction: state,
+	})
 }
 
 func GlassBarChrome(el ui.Element, p Palette, fallbackBg, fallbackBorder ui.Color) ui.Element {
