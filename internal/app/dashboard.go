@@ -86,12 +86,11 @@ func (d *dashboard) effectiveWindow() float64 {
 }
 
 func (d *dashboard) effectiveWindowFor(sessionSpan float64) float64 {
-	maxWin := d.maxWindowFor(sessionSpan)
 	if d.fullSession {
 		return max(minWindowSec, sessionSpan)
 	}
 	if d.windowSec > 0 {
-		return clampFloat(d.windowSec, minWindowSec, maxWin)
+		return clampFloat(d.windowSec, minWindowSec, d.maxWindowFor(sessionSpan))
 	}
 	return defaultWindowSec
 }

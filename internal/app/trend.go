@@ -840,8 +840,12 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 	const rightMargin = float32(56)
 
 	if cw.winEnd <= cw.winStart {
+		bufStart := history[0].Elapsed
+		if d.fullSession {
+			bufStart = 0
+		}
 		bufEnd := history[len(history)-1].Elapsed
-		cw = chartWindowAt(history[0].Elapsed, bufEnd, cw.windowSec, bufEnd)
+		cw = chartWindowAt(bufStart, bufEnd, cw.windowSec, bufEnd)
 	}
 	winStart, winEnd := cw.winStart, cw.winEnd
 	pointerFractionW := func(localX, boxW float32) float64 {
