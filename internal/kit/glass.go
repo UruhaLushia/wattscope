@@ -22,13 +22,24 @@ func GlassPanel(el ui.Element, p Palette, radius, clarity float32, fallbackBg, f
 }
 
 func GlassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	el.Clip().Radius(radius)
+	return glassFloating(el, p, radius, clarity, tint, interactive, true, fallbackBg, fallbackBorder)
+}
+
+func glassFloatingUnclipped(el ui.Element, p Palette, radius, clarity float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
+	return glassFloating(el, p, radius, clarity, tint, false, false, fallbackBg, fallbackBorder)
+}
+
+func glassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive, clip bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
+	el.Radius(radius)
+	if clip && !(p.LiquidGlass && interactive) {
+		el.Clip()
+	}
 	if p.LiquidGlass {
-		return el.Material(glass.Glass{
-			Tint:        tint,
-			Clarity:     clarity,
-			Interactive: interactive,
-		})
+		base := glass.Glass{Tint: tint, Clarity: clarity}
+		if interactive {
+			return el.Material(trackGlassInteraction(el).material(base))
+		}
+		return el.Material(base)
 	}
 	el.Background(fallbackBg)
 	if fallbackBorder.A > 0 {
@@ -38,7 +49,19 @@ func GlassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Co
 }
 
 func GlassFloatingButton(el ui.Element, p Palette, radius float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	return GlassFloating(el, p, radius, 0, tint, true, fallbackBg, fallbackBorder)
+	if !p.LiquidGlass {
+		return GlassFloating(el, p, radius, 0, tint, false, fallbackBg, fallbackBorder)
+	}
+	state := trackGlassInteraction(el)
+	glow, hover := state.glow, state.hover
+	alpha := 0.08 + 0.07*glow + 0.02*hover
+	if p.Dark {
+		alpha = 0.24*glow + 0.06*hover
+	}
+	if alpha > 0.005 && (!p.Dark || glow > 0.01 || hover > 0.01) {
+		el.Shadow(0, 2+3*glow, 6+9*glow, 0, ui.RGBA(12, 18, 30, clamp32(alpha, 0, 0.45)))
+	}
+	return el.Radius(radius).Material(state.material(glass.Glass{Tint: tint}))
 }
 
 func GlassBarChrome(el ui.Element, p Palette, fallbackBg, fallbackBorder ui.Color) ui.Element {
@@ -70,13 +93,14 @@ func GlassScrollEdge(ctx *ui.Context, p Palette, bottom bool, offset, height flo
 	}
 }
 
-func GlassPillControl(ctx *ui.Context, owner ui.Element, _ Palette, radius float32, _ ui.Color, _ bool, fallbackBg ui.Color, borderW float32, fallbackBorder ui.Color, pressScale float32) {
-	PillSurface(ctx, owner, radius, fallbackBg, borderW, fallbackBorder, pressScale)
-}
-
 func GlassAccentTint(p Palette, lightAlpha, darkAlpha float32) ui.Color {
 	if p.Dark {
 		return p.Accent.Alpha(darkAlpha)
 	}
 	return p.Accent.Alpha(lightAlpha)
+}
+
+func scaleAlpha(c ui.Color, factor float32) ui.Color {
+	c.A = uint8(clamp32(float32(c.A)*factor, 0, 255))
+	return c
 }

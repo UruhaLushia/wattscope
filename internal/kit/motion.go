@@ -35,6 +35,9 @@ var (
 	MotionLocale       = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.04}}
 	MotionPage         = ui.Animation{Duration: MotionPageDur, Ease: EaseStandard}
 	MotionRail         = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.14}}
+	MotionGlassPress   = ui.Animation{Spring: ui.SpringOptions{Duration: 220 * time.Millisecond, Bounce: 0.24}}
+	MotionGlassRelease = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0.28}}
+	MotionGlassScrub   = ui.Animation{Spring: ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.24}}
 	MotionNavPanel     = ui.Animation{Spring: ui.SpringOptions{Duration: 340 * time.Millisecond, Bounce: 0.14}}
 	MotionNavToggle    = ui.Animation{Spring: ui.SpringOptions{Duration: 310 * time.Millisecond, Bounce: 0.16}}
 	MotionSpring       = ui.Animation{Spring: ui.SpringOptions{Duration: MotionMoveDur, Bounce: 0.06}}
@@ -100,13 +103,25 @@ func BeginStaticSnapshot() func() {
 	return func() { StaticSnapshot = prev }
 }
 
+// GlassPressAnimation returns the spring for interactive Liquid Glass press or release.
+func GlassPressAnimation(pressed bool) ui.Animation {
+	if pressed {
+		return MotionGlassPress
+	}
+	return MotionGlassRelease
+}
+
 func PillMatchTransition(matchKey any) ui.ElementTransition {
+	return pillMatchTransition(matchKey, &MotionRail)
+}
+
+func pillMatchTransition(matchKey any, anim *ui.Animation) ui.ElementTransition {
 	if StaticSnapshot {
 		return ui.ElementTransition{}
 	}
 	return ui.ElementTransition{
 		Position: true, Size: true, Colors: true,
-		Animation: &MotionRail, Match: matchKey,
+		Animation: anim, Match: matchKey,
 	}
 }
 

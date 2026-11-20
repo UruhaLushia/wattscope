@@ -345,7 +345,11 @@ func (d *dashboard) mobileTopBar(ctx *ui.Context, p kit.Palette, msgs locales.Me
 					back.Shadow(0, 2, 8, 0, p.CardShadow)
 				}
 				kit.ControlMotion(kit.GlassFloatingButton(back, p, kit.RadiusFull, ui.Color{}, p.Surface, p.LineSoft)).Children(func() {
-					ui.Icon(ctx, kit.IconArrowLeft).FontSize(16).TextColor(p.Text)
+					pop := float32(0)
+					if back.Pressed() {
+						pop = 1
+					}
+					kit.GlassIconPop(ui.Icon(ctx, kit.IconArrowLeft).FontSize(16).TextColor(p.Text), p, pop)
 				})
 			} else {
 				kit.IconActionButton(ctx.Key("more-back"), p, kit.IconArrowLeft, msgs.GuiBack(), 40, false, func() {
@@ -407,7 +411,11 @@ func (d *dashboard) desktopHeader(ctx *ui.Context, p kit.Palette, msgs locales.M
 					themeBtn.Shadow(0, 1, 4, 0, p.CardShadow)
 				}
 				kit.ControlMotion(kit.GlassFloatingButton(themeBtn, p, kit.RadiusFull, ui.Color{}, p.Surface, p.LineSoft)).Children(func() {
-					ui.Icon(ctx, themeIcon).FontSize(15).TextColor(p.Muted)
+					pop := float32(0)
+					if themeBtn.Pressed() {
+						pop = 1
+					}
+					kit.GlassIconPop(ui.Icon(ctx, themeIcon).FontSize(15).TextColor(p.Muted), p, pop)
 				})
 			} else {
 				var themeBtn ui.Element

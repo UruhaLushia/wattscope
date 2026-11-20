@@ -347,7 +347,11 @@ func IconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, si
 	}
 	return ControlMotion(el).Children(func() {
 		GlassPillControl(ctx.Key("bg"), el, p, radius, glassTint, visibleAtRest, bg, 0, ui.Transparent, 0.94)
-		ui.Icon(ctx, icon).FontSize(16).TextColor(el.AnimateColor("icon-fg", fg, MotionFast))
+		pop := float32(0)
+		if !el.IsDisabled() && el.Pressed() {
+			pop = 1
+		}
+		GlassIconPop(ui.Icon(ctx, icon).FontSize(16).TextColor(el.AnimateColor("icon-fg", fg, MotionFast)), p, pop)
 	})
 }
 
@@ -384,29 +388,9 @@ func segmentStyle(ctx *ui.Context, p Palette, seg ui.Element, label string, acti
 	}
 	return seg.Children(func() {
 		if active {
-			pillBg := p.TrackOn
-			pillPose, pillAnim := ui.Pose{}, MotionRail
-			if seg.Pressed() {
-				pillBg = p.TrackOn.Mix(p.Text, 0.10)
-				pillPose.Scale = 0.96
-				pillAnim = MotionFast
-			}
-			pill := ui.Box(ctx.Key("seg-pill")).Absolute().Fill().ZIndex(-1).Radius(segRadius).
-				TransformOrigin(0.5, 0.5).AnimatePose(pillPose, pillAnim).
-				Background(seg.AnimateColor("sp-bg", pillBg, MotionFast)).PassThrough().
-				Transition(PillMatchTransition(matchKey))
-			if p.CardShadow.A > 0 && !seg.Pressed() {
-				pill.Shadow(0, 1, 2, 0, p.CardShadow)
-			}
+			GlassSelectionPill(ctx.Key("seg-pill"), seg, p, segRadius, p.TrackOn, matchKey, true)
 		} else {
-			statePose, stateAnim := ui.Pose{}, MotionRail
-			if seg.Pressed() {
-				statePose.Scale = 0.96
-				stateAnim = MotionFast
-			}
-			ui.Box(ctx.Key("seg-state")).Absolute().Fill().ZIndex(-1).Radius(segRadius).
-				TransformOrigin(0.5, 0.5).AnimatePose(statePose, stateAnim).
-				Background(seg.AnimateColor("seg-bg", bg, MotionFast)).PassThrough()
+			GlassPillControl(ctx.Key("seg-state"), seg, p, segRadius, ui.Color{}, false, bg, 0, ui.Transparent, 0.96)
 		}
 		AnimatedLabel(ctx, label).FontSize(11.5).FontWeight(weight).
 			TextColor(seg.AnimateColor("seg-fg", fg, MotionFast)).SingleLine().Shrink(0)
