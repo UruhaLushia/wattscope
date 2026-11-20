@@ -169,8 +169,8 @@ func (a *macAPI) propertyString(device uintptr, key string) string {
 }
 
 func macCString(buffer []byte) string {
-	if end := bytes.IndexByte(buffer, 0); end >= 0 {
-		return string(buffer[:end])
+	if before, _, ok := bytes.Cut(buffer, []byte{0}); ok {
+		return string(before)
 	}
 	return "" // A missing terminator indicates an invalid native result.
 }

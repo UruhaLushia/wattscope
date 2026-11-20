@@ -74,7 +74,7 @@ const sidebarNavHeight = 2 + int(pageCount)
 func navigation(s backend.Snapshot, width, height int, v View) []string {
 	m := v.messages()
 	var navLines []string
-	for page := Page(0); page < pageCount; page++ {
+	for page := range pageCount {
 		label := apart(pageName(page, m), fmt.Sprintf("F%d", page+1), width-6)
 		style := navigationStyle
 		if page == v.Page {
@@ -165,7 +165,7 @@ func statusPanel(s backend.Snapshot, width, height int, v View) []string {
 
 func tabs(width int, v View) string {
 	var labels []string
-	for page := Page(0); page < pageCount; page++ {
+	for page := range pageCount {
 		style := navigationStyle
 		if page == v.Page {
 			style = activeStyle

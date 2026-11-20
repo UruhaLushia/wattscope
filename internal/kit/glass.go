@@ -31,7 +31,7 @@ func glassFloatingUnclipped(el ui.Element, p Palette, radius, clarity float32, t
 
 func glassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive, clip bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	el.Radius(radius)
-	if clip && !(p.LiquidGlass && interactive) {
+	if clip && (!p.LiquidGlass || !interactive) {
 		el.Clip()
 	}
 	if p.LiquidGlass {

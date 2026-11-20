@@ -266,13 +266,17 @@ func newPDViewCommand(source *sourceOptions) *cobra.Command {
 }
 
 func packetLine(p pd.Packet, summary string) string {
-	line := fmt.Sprintf("%6d  %10.3f  %-10s %-6s %-30s", p.Sequence, p.Elapsed, p.SOP, p.PowerRole, p.Type)
-	line += "  " + summary
+	var line strings.Builder
+	fmt.Fprintf(&line, "%6d  %10.3f  %-10s %-6s %-30s", p.Sequence, p.Elapsed, p.SOP, p.PowerRole, p.Type)
+	line.WriteString("  ")
+	line.WriteString(summary)
 	for _, pdo := range p.PDOs {
-		line += "  " + pdo.Summary()
+		line.WriteString("  ")
+		line.WriteString(pdo.Summary())
 	}
 	if p.Error != "" {
-		line += "  ! " + p.Error
+		line.WriteString("  ! ")
+		line.WriteString(p.Error)
 	}
-	return line
+	return line.String()
 }

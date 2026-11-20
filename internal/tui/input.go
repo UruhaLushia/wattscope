@@ -162,7 +162,7 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	if left && l.sidebar == 0 && msg.Y == 3 && msg.X >= l.mainX && msg.X < l.mainX+l.mainWidth {
 		x := l.mainX
-		for page := Page(0); page < pageCount; page++ {
+		for page := range pageCount {
 			width := ansi.StringWidth(navigationStyle.Render(tabLabel(page, l.mainWidth, m.view)))
 			if msg.X >= x && msg.X < x+width {
 				m.setPage(page)

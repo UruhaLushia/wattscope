@@ -19,19 +19,35 @@ func FilterPackets(m locales.Messages, packets []pd.Packet, search string, hideG
 			continue
 		}
 		if query != "" {
-			text := packet.Type + " " + packet.SOP + " " + packet.PowerRole + " " + packet.DataRole + " " + packet.MessageHex
+			var text strings.Builder
+			text.WriteString(packet.Type)
+			for _, value := range [...]string{packet.SOP, packet.PowerRole, packet.DataRole, packet.MessageHex} {
+				text.WriteByte(' ')
+				text.WriteString(value)
+			}
 			if packet.Request != nil {
-				text += " " + packet.Request.Summary()
+				text.WriteByte(' ')
+				text.WriteString(packet.Request.Summary())
 			}
 			for _, pdo := range packet.PDOs {
-				text += " " + pdo.Summary()
+				text.WriteByte(' ')
+				text.WriteString(pdo.Summary())
 			}
 			explanation := ExplainPacket(m, packet)
-			text += " " + explanation.Summary + " " + strings.Join(explanation.Warnings, " ")
-			for _, field := range explanation.Fields {
-				text += " " + field.Label + " " + field.Value
+			text.WriteByte(' ')
+			text.WriteString(explanation.Summary)
+			for _, warning := range explanation.Warnings {
+				text.WriteByte(' ')
+				text.WriteString(warning)
 			}
-			if !strings.Contains(strings.ToLower(text), query) {
+			text.WriteByte(' ')
+			for _, field := range explanation.Fields {
+				text.WriteByte(' ')
+				text.WriteString(field.Label)
+				text.WriteByte(' ')
+				text.WriteString(field.Value)
+			}
+			if !strings.Contains(strings.ToLower(text.String()), query) {
 				continue
 			}
 		}

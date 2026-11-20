@@ -331,7 +331,8 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 		}
 		stopMonitor := d.watchMeterNotification(ctx, service)
 		defer stopMonitor()
-		service.Run(ctx)
+		// Run reports terminal errors through the session snapshot and diagnostics.
+		_ = service.Run(ctx)
 	})
 	if window := d.window; window != nil {
 		invalidate := func() {

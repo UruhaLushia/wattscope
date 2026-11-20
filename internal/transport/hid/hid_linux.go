@@ -108,10 +108,7 @@ func (r *hidReader) Read(ctx context.Context) ([]byte, error) {
 		}
 		wait := 100
 		if deadline, ok := ctx.Deadline(); ok {
-			remaining := int(time.Until(deadline).Milliseconds())
-			if remaining < 1 {
-				remaining = 1
-			}
+			remaining := max(int(time.Until(deadline).Milliseconds()), 1)
 			if remaining < wait {
 				wait = remaining
 			}

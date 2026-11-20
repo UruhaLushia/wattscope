@@ -79,7 +79,9 @@ func TestServiceReconnectsAfterUSBAddressChange(t *testing.T) {
 	go func() { done <- service.Run(ctx) }()
 	t.Cleanup(func() {
 		cancel()
-		<-done
+		if err := <-done; err != nil {
+			t.Errorf("stop acquisition: %v", err)
+		}
 		if !slices.Equal(meter.opened, []string{initial.Path, reconnected.Path}) {
 			t.Errorf("opened USB paths = %v", meter.opened)
 		}

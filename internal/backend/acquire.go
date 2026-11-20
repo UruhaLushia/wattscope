@@ -222,8 +222,7 @@ func errorKind(err error) string {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	default:
-		var recordingErr *recordingError
-		if errors.As(err, &recordingErr) {
+		if _, ok := errors.AsType[*recordingError](err); ok {
 			return "recording"
 		}
 		return "connection"

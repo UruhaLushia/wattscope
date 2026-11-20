@@ -75,7 +75,7 @@ func plot(samples []device.Sample, width, height int, v View) []string {
 		x, y := point(s, n)
 		if lastX >= 0 && segment == s.Segment {
 			steps := max(abs(x-lastX), abs(y-lastY))
-			for step := 0; step < steps; step++ {
+			for step := range steps {
 				put(lastX+(x-lastX)*step/steps, lastY+(y-lastY)*step/steps)
 			}
 		}

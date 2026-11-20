@@ -232,7 +232,6 @@ func EmptyState(ctx *ui.Context, p Palette, icon *ui.SVG, title, hint string, ac
 }
 
 func buttonColors(p Palette, variant ButtonVariant) (bg, hover, press, ink, border ui.Color, weight int) {
-	weight = 550
 	switch variant {
 	case VariantPrimary:
 		return p.Accent, p.AccentHi, p.Accent, p.AccentInk, ui.Transparent, 650
@@ -459,9 +458,10 @@ func ToastViewport(ctx *ui.Context, p Palette, bottom float32, centered bool) {
 				Shadow(0, 8, 24, 0, p.Shadow)
 			parts.Root.Children(func() {
 				icon, tone := IconCheck, p.Green
-				if notice.Type == "error" {
+				switch notice.Type {
+				case "error":
 					icon, tone = IconClose, p.Red
-				} else if notice.Type == "info" {
+				case "info":
 					icon, tone = IconActivity, p.AccentText
 				}
 				ui.Icon(ctx, icon).FontSize(16).TextColor(tone).Shrink(0)

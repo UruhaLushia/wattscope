@@ -16,7 +16,7 @@ import (
 func sampleFixture() (backend.Snapshot, View) {
 	now := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
 	var hist []device.Sample
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		t := float64(i) * 0.5
 		hist = append(hist, device.Sample{
 			Timestamp:        now.Add(time.Duration(t*1000) * time.Millisecond),

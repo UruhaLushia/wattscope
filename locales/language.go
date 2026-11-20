@@ -37,7 +37,7 @@ func Resolve(requested string) string {
 		tags[i] = language.Make(lang)
 	}
 	matcher := language.NewMatcher(tags)
-	for _, value := range strings.Split(requested, ":") {
+	for value := range strings.SplitSeq(requested, ":") {
 		// Accept POSIX forms such as zh_CN.UTF-8, and language preference lists.
 		value = strings.TrimSpace(value)
 		value, _, _ = strings.Cut(value, ".")

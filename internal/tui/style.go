@@ -19,7 +19,6 @@ var (
 	muted       = lipgloss.AdaptiveColor{Light: "#64748B", Dark: "#94A3B8"}
 	border      = lipgloss.AdaptiveColor{Light: "#CBD5E1", Dark: "#344D60"}
 	primary     = lipgloss.AdaptiveColor{Light: "#0F172A", Dark: "#E2E8F0"}
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(primary)
 	quietStyle  = lipgloss.NewStyle().Foreground(muted)
 	borderStyle = lipgloss.NewStyle().Foreground(border)
 )
