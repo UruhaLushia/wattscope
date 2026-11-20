@@ -19,11 +19,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
-import android.view.View
-import android.widget.RemoteViews
 import com.xzakota.hyper.notification.focus.FocusNotification
-import com.xzakota.hyper.notification.focus.template.CustomFocusTemplate
-import com.xzakota.hyper.notification.focus.template.CustomFocusTemplateV3
+import com.xzakota.hyper.notification.focus.model.ActionInfo
 import com.xzakota.hyper.notification.island.template.IslandTemplate
 import org.json.JSONObject
 import java.util.Locale
@@ -38,7 +35,6 @@ internal data class MeterTelemetry(
     val energyWh: Double = 0.0,
     val chargeMAh: Double = 0.0,
     val measuredSec: Double = 0.0,
-    val deviceLabel: String = "",
     val language: String = "",
     val islandLeft: String = "",
     val streaming: Boolean = false,
@@ -49,7 +45,6 @@ internal data class MeterTelemetry(
 private data class PowerTier(
     val index: Int,
     val accentHex: String,
-    val accentLightTextHex: String,
 )
 
 class MeterForegroundService : Service() {
@@ -63,6 +58,12 @@ class MeterForegroundService : Service() {
             PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
     }
+    private val recordingIntent by lazy {
+        PendingIntent.getService(
+            this, 1, Intent(this, MeterForegroundService::class.java).setAction(TOGGLE_RECORDING),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -70,6 +71,16 @@ class MeterForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == TOGGLE_RECORDING) {
+            synchronized(MeterForegroundService::class.java) {
+                if (instance == null) {
+                    stopSelf(startId)
+                } else if (pendingTelemetry.streaming) {
+                    MeterRecordingToggles.request()
+                }
+            }
+            return START_NOT_STICKY
+        }
         try {
             synchronized(MeterForegroundService::class.java) {
                 val data = pendingTelemetry
@@ -141,14 +152,15 @@ class MeterForegroundService : Service() {
                 .build()
         }
 
-        val powerDigits = formatPowerDigits(data.power)
-        val title = "$powerDigits W"
-        val voltageCurrent = String.format(Locale.US, "%.2f V · %.2f A", data.voltage, abs(data.current))
-        val energy = String.format(Locale.US, "%.3f Wh", data.energyWh)
+        val title = "${formatPowerDigits(data.power)} W"
+        val voltage = "${formatFixedDigits(data.voltage, 2)} V"
+        val current = "${formatFixedDigits(abs(data.current), 2)} A"
+        val voltageCurrent = "$voltage · $current"
+        val energy = "${formatFixedDigits(data.energyWh, 3)} Wh"
         val charge = if (data.chargeMAh >= 1000.0) {
-            String.format(Locale.US, "%.3f Ah", data.chargeMAh / 1000.0)
+            "${formatFixedDigits(data.chargeMAh / 1000.0, 3)} Ah"
         } else {
-            String.format(Locale.US, "%.1f mAh", data.chargeMAh)
+            "${formatFixedDigits(data.chargeMAh, 2)} mAh"
         }
         val whAh = "$energy · $charge"
         val content = "$voltageCurrent · $whAh"
@@ -157,129 +169,130 @@ class MeterForegroundService : Service() {
             .setContentTitle(title)
             .setContentText(content)
             .apply {
-                if (island) {
-                    val tier = tierForPower(data.power)
-                    val deviceTitle = data.deviceLabel.trim().ifEmpty { appTitle }
-                    val duration = formatElapsed(data.measuredSec)
-                    val recLabel = localizedContext.getString(R.string.meter_notification_recording)
-                    val compactLeft = when (data.islandLeft) {
-                        "off" -> null
-                        "current" -> "${formatFixedDigits(abs(data.current), 2)} A"
-                        "energy" -> "${formatFixedDigits(data.energyWh, 3)} Wh"
-                        "charge" -> if (data.chargeMAh >= 1000.0) {
-                            "${formatFixedDigits(data.chargeMAh / 1000.0, 3)} Ah"
-                        } else {
-                            "${formatFixedDigits(data.chargeMAh, 2)} mAh"
-                        }
-                        else -> "${formatFixedDigits(data.voltage, 2)} V"
-                    }
-                    fun bindCardViews(layoutRes: Int): RemoteViews = RemoteViews(packageName, layoutRes).apply {
-                        setTextViewText(R.id.island_power_value, powerDigits)
-                        setTextViewText(R.id.island_va, voltageCurrent)
-                        setTextViewText(R.id.island_whah, whAh)
-                        setTextViewText(R.id.island_device, deviceTitle)
-                        setTextViewText(R.id.island_time, duration)
-                        setTextViewText(R.id.island_rec_badge, "● $recLabel")
-                        setViewVisibility(R.id.island_rec_badge, if (data.recording) View.VISIBLE else View.GONE)
-                    }
+                val recButtonTitle = localizedContext.getString(
+                    if (data.recording) R.string.meter_notification_record_stop
+                    else R.string.meter_notification_record_start,
+                )
+                val recAction = Notification.Action.Builder(null, recButtonTitle, recordingIntent).build()
+                if (!island) {
+                    addAction(recAction)
+                    return@apply
+                }
 
-                    val iconKey = "cap_${tier.index}"
-                    val iconDrawable = capsuleBadgeIcon(tier)
-                    val tickerText = "$title · $voltageCurrent"
-                    val capsuleRight = "${formatFixedDigits(data.power, 2)} W"
-                    fun IslandTemplate.configureCapsule(picName: String?) {
-                        islandProperty = 1
-                        highlightColor = tier.accentHex
-                        bigIslandArea {
-                            imageTextInfoLeft {
-                                type = 1
-                                picInfo {
-                                    type = 1
-                                    pic = picName
-                                }
-                                if (compactLeft != null) {
-                                    textInfo {
-                                        this.title = compactLeft
-                                        isTitleDigit = false
-                                        narrowFont = false
-                                    }
-                                }
-                            }
-                            imageTextInfoRight {
-                                type = 2
-                                textInfo {
-                                    this.title = capsuleRight
-                                    isTitleDigit = false
-                                    showHighlightColor = false
-                                    turnAnim = false
-                                }
-                            }
-                        }
-                        smallIslandArea {
+                val tier = tierForPower(data.power)
+                val duration = formatElapsed(data.measuredSec)
+                val durationLabel = if (data.recording) "• $duration" else duration
+                val durationColorLight = if (data.recording) "#DC2626" else "#6B7280"
+                val durationColorDark = if (data.recording) "#F87171" else "#9CA3AF"
+                val compactLeft = when (data.islandLeft) {
+                    "off" -> null
+                    "current" -> current
+                    "energy" -> energy
+                    "charge" -> charge
+                    else -> voltage
+                }
+
+                val iconKey = "cap_${tier.index}"
+                val iconDrawable = capsuleBadgeIcon(tier)
+                val tickerText = "$title · $voltageCurrent"
+                val capsuleRight = "${formatFixedDigits(data.power, 2)} W"
+                fun IslandTemplate.configureCapsule(picName: String?) {
+                    islandProperty = 1
+                    highlightColor = tier.accentHex
+                    bigIslandArea {
+                        imageTextInfoLeft {
+                            type = 1
                             picInfo {
                                 type = 1
                                 pic = picName
                             }
+                            if (compactLeft != null) {
+                                textInfo {
+                                    this.title = compactLeft
+                                    isTitleDigit = false
+                                    narrowFont = false
+                                }
+                            }
                         }
-                    }
-
-                    val customBundle = FocusNotification.buildCustomV2 {
-                        val capsuleIcon = createPicture(iconKey, iconDrawable)
-                        val darkRv = bindCardViews(R.layout.meter_island_expanded)
-                        val lightRv = bindCardViews(R.layout.meter_island_card_light)
-                        updatable = true
-                        enableFloat = false
-                        ticker = tickerText
-                        tickerPic = capsuleIcon
-                        createRemoteViews(CustomFocusTemplateV3.LAYOUT_ISLAND_EXPAND, darkRv)
-                        createRemoteViews(CustomFocusTemplate.LAYOUT_NIGHT, darkRv)
-                        createRemoteViews(CustomFocusTemplate.LAYOUT, lightRv)
-                    }
-                    // focus-api 1.3's buildBundle() casts custom templates to CustomV2 and drops
-                    // CustomFocusTemplateV3.island, while CustomV3 omits @SerialName("param_v2").
-                    val customV3 = FocusNotification.createCustomV3 {
-                        val capsuleIcon = createPicture(iconKey, iconDrawable)
-                        updatable = true
-                        enableFloat = false
-                        islandFirstFloat = false
-                        ticker = tickerText
-                        tickerPic = capsuleIcon
-                        island { configureCapsule(capsuleIcon) }
-                    }
-                    val customV3Root = JSONObject(customV3.getParamJSON())
-                    val customV3Json = (customV3Root.optJSONObject("param_v2") ?: customV3Root.getJSONObject("param")).toString()
-
-                    val v3Extras = FocusNotification.buildV3 {
-                        val capsuleIcon = createPicture(iconKey, iconDrawable)
-                        updatable = true
-                        enableFloat = false
-                        islandFirstFloat = false
-                        ticker = tickerText
-                        tickerPic = capsuleIcon
-                        island { configureCapsule(capsuleIcon) }
-                        baseInfo {
+                        imageTextInfoRight {
                             type = 2
-                            this.title = title
-                            colorTitle = "#111827"
-                            colorTitleDark = "#FFFFFF"
-                            this.content = content
-                            colorContent = "#374151"
-                            colorContentDark = "#E5E7EB"
-                        }
-                        hintInfo {
-                            type = 1
-                            this.title = deviceTitle
-                            colorTitle = "#6B7280"
-                            colorTitleDark = "#9CA3AF"
-                            this.content = duration
-                            colorContent = tier.accentLightTextHex
-                            colorContentDark = tier.accentHex
+                            textInfo {
+                                this.title = capsuleRight
+                                isTitleDigit = false
+                                showHighlightColor = false
+                                turnAnim = false
+                            }
                         }
                     }
-                    v3Extras.putAll(customBundle)
-                    v3Extras.putString("miui.focus.param.custom", customV3Json)
-                    addExtras(v3Extras)
+                    smallIslandArea {
+                        picInfo {
+                            type = 1
+                            pic = picName
+                        }
+                    }
                 }
+
+                val v3Extras = FocusNotification.buildV3 {
+                    val capsuleIcon = createPicture(iconKey, iconDrawable)
+                    val recActionKey = createAction("rec_toggle", recAction)
+                    updatable = true
+                    enableFloat = false
+                    islandFirstFloat = false
+                    ticker = tickerText
+                    tickerPic = capsuleIcon
+                    island { configureCapsule(capsuleIcon) }
+                    highlightInfo {
+                        this.title = title
+                        colorTitle = "#111827"
+                        colorTitleDark = "#FFFFFF"
+                        this.content = durationLabel
+                        colorContent = durationColorLight
+                        colorContentDark = durationColorDark
+                    }
+                    actions {
+                        add(
+                            ActionInfo().apply {
+                                action = recActionKey
+                                actionTitle = recButtonTitle
+                                actionTitleColor = if (data.recording) "#FFFFFF" else "#111827"
+                                actionTitleColorDark = "#FFFFFF"
+                                actionBgColor = if (data.recording) "#DC2626" else "#E5E7EB"
+                                actionBgColorDark = if (data.recording) "#EF4444" else "#3A3A3C"
+                            },
+                        )
+                    }
+                    highlightInfoV3 {
+                        primaryText = voltageCurrent
+                        primaryColor = "#111827"
+                        primaryColorDark = "#FFFFFF"
+                        secondaryText = "· $whAh"
+                        secondaryColor = "#4B5563"
+                        secondaryColorDark = "#D1D5DB"
+                        highLightText = "\u200B"
+                        highLightTextColor = "#00000000"
+                        highLightTextColorDark = "#00000000"
+                        highLightbgColor = "#00000000"
+                        highLightbgColorDark = "#00000000"
+                        actionInfo {
+                            action = "miui.focus.action_noop"
+                            actionTitle = ""
+                            actionTitleColor = "#00000000"
+                            actionTitleColorDark = "#00000000"
+                            actionBgColor = "#00000000"
+                            actionBgColorDark = "#00000000"
+                        }
+                    }
+                }
+                // focus-api 1.3 omits ActionInfo.type and clickWithCollapse; set them so V3 renders a non-collapsing text pill button.
+                v3Extras.getString("miui.focus.param")?.let { rawParam ->
+                    val root = JSONObject(rawParam)
+                    root.optJSONObject("param_v2")?.optJSONArray("actions")?.optJSONObject(0)?.apply {
+                        put("type", 2)
+                        put("clickWithCollapse", false)
+                    }
+                    v3Extras.putString("miui.focus.param", root.toString())
+                }
+                addExtras(v3Extras)
             }
             .build()
     }
@@ -287,18 +300,20 @@ class MeterForegroundService : Service() {
     companion object {
         const val CHANNEL = "meter_acquisition"
         const val NOTIFICATION = 1001
+        private const val TOGGLE_RECORDING = "toggle_recording"
+
         private var instance: MeterForegroundService? = null
         private var pendingTelemetry = MeterTelemetry()
 
         private val tiers = arrayOf(
             // 0: Idle / trickle (< 1 W) — Muted slate & soft frost
-            PowerTier(0, "#CBD5E1", "#475569"),
+            PowerTier(0, "#CBD5E1"),
             // 1: Normal charge (1 .. 17.9 W) — Subtle sage tint on matte dark
-            PowerTier(1, "#A7F3D0", "#047857"),
+            PowerTier(1, "#A7F3D0"),
             // 2: Fast PD charge (18 .. 44.9 W) — Restrained cool steel-blue on matte dark
-            PowerTier(2, "#BFDBFE", "#1D4ED8"),
+            PowerTier(2, "#BFDBFE"),
             // 3: Super-fast high power (>= 45 W) — Muted warm sand-amber on matte dark
-            PowerTier(3, "#FDE68A", "#B45309"),
+            PowerTier(3, "#FDE68A"),
         )
         private val capsuleIconCache = arrayOfNulls<Icon>(tiers.size)
 
@@ -309,9 +324,12 @@ class MeterForegroundService : Service() {
             else -> tiers[0]
         }
 
-        private fun formatPowerDigits(power: Double): String = when {
-            power >= 100.0 -> String.format(Locale.US, "%.1f", power)
-            else -> String.format(Locale.US, "%.2f", power)
+        private fun formatPowerDigits(power: Double): String {
+            val p = abs(power)
+            return when {
+                p + 0.005 >= 100.0 -> String.format(Locale.US, "%.1f", power)
+                else -> String.format(Locale.US, "%.2f", power)
+            }
         }
 
         private fun formatFixedDigits(value: Double, maxDecimals: Int): String {
@@ -374,6 +392,7 @@ class MeterForegroundService : Service() {
 
         internal fun clearTelemetry() = synchronized(MeterForegroundService::class.java) {
             pendingTelemetry = MeterTelemetry()
+            MeterRecordingToggles.clear()
         }
 
         internal fun updateNotification(data: MeterTelemetry) = synchronized(MeterForegroundService::class.java) {

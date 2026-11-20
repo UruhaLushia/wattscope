@@ -8,6 +8,7 @@ import (
 	"github.com/UruhaLushia/wattscope/internal/android/monitor"
 	"github.com/UruhaLushia/wattscope/internal/backend"
 	"github.com/UruhaLushia/wattscope/internal/kit"
+	"github.com/UruhaLushia/wattscope/internal/recording"
 	"github.com/UruhaLushia/wattscope/locales"
 	"github.com/egoist/mygo/ui"
 )
@@ -85,6 +86,24 @@ func (d *dashboard) watchMeterNotification(ctx context.Context, service *backend
 		}
 		defer instance.Stop()
 
+		actionCtx, actionCancel := context.WithCancel(ctx)
+		toggles := make(chan struct{})
+		actionsDone := make(chan struct{})
+		go func() {
+			defer close(actionsDone)
+			for instance.AwaitRecordingToggle(actionCtx) == nil {
+				select {
+				case toggles <- struct{}{}:
+				case <-actionCtx.Done():
+					return
+				}
+			}
+		}()
+		defer func() {
+			actionCancel()
+			<-actionsDone
+		}()
+
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for ctx.Err() == nil {
@@ -97,6 +116,18 @@ func (d *dashboard) watchMeterNotification(ctx context.Context, service *backend
 			select {
 			case <-ctx.Done():
 				return
+			case <-toggles:
+				if ctx.Err() != nil {
+					return
+				}
+				current := service.Snapshot(0)
+				if current.Recording.Active {
+					_ = service.StopRecording()
+				} else if current.State == backend.Streaming {
+					if dir, err := d.recordDir(); err == nil {
+						_ = service.StartRecording(recording.NextPath(dir))
+					}
+				}
 			case <-ticker.C:
 			}
 		}
@@ -124,7 +155,6 @@ func updateMeterNotification(instance monitor.Monitor, snapshot backend.Snapshot
 		snapshot.Statistics.WattHours,
 		snapshot.Statistics.AmpHours*1000,
 		snapshot.Statistics.MeasuredSeconds,
-		snapshot.Device.Name,
 		language,
 		display.left,
 		streaming,

@@ -197,15 +197,18 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	}
 
 	cardPad := float32(16)
+	cardBottomPad := cardPad
+	cardGap := float32(10)
 	if d.mobile && split {
-		cardPad = 12
+		cardBottomPad = 13
+		cardGap = 8
 	}
 	wide2K := width >= 1280 && !d.mobile
 	hasBottom := live.State == backend.Streaming || readoutStats.Samples > 0 || live.Recording.Active
 	seriesMask := d.effectiveSeriesMask()
 
 	buildChartCard := func(grow bool, pHeight float32) {
-		c := kit.Card(ctx, p).Padding(cardPad).Gap(10)
+		c := kit.Card(ctx, p).Padding(cardPad, cardPad, cardBottomPad, cardPad).Gap(cardGap)
 		if grow {
 			c.Grow(1).Basis(680).MinWidth(560)
 		}
@@ -832,12 +835,36 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		return
 	}
 
+	compactMobile := d.mobile && !wideLeftAxis
 	secIdx, hasLeftAxis := d.secondaryAxisChannel(history, seriesMask, wideLeftAxis)
-	leftMargin := float32(6)
+	leftMargin := float32(0)
 	if hasLeftAxis {
 		leftMargin = 46
 	}
-	const rightMargin = float32(56)
+	axis := chartAxis(snap.ChartRanges[primary], stat)
+	ticks := axis.Ticks(4)
+	const tickLabelGap = float32(6)
+	minRight, maxRight := float32(34), float32(64)
+	if compactMobile {
+		minRight, maxRight = 28, 54
+	}
+	if sample != nil {
+		if compactMobile {
+			minRight = max(minRight, 40)
+		} else {
+			minRight = max(minRight, 46)
+		}
+	}
+	rightMargin := minRight
+	for idx, tick := range ticks {
+		lbl := tick.Label
+		if idx == len(ticks)-1 {
+			lbl = tick.Label + " " + channel.unit
+		}
+		tw, _ := ctx.MeasureText(1<<20, ui.Span{Text: lbl, Size: 10})
+		rightMargin = max(rightMargin, float32(math.Ceil(float64(tw)))+tickLabelGap)
+	}
+	rightMargin = min(rightMargin, maxRight)
 
 	if cw.winEnd <= cw.winStart {
 		bufStart := history[0].Elapsed
@@ -1060,8 +1087,14 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 	}
 
 	plot.Draw(func(painter *ui.Painter, rect ui.Rect) {
+		plotTop, plotBottom := float32(8), float32(20)
+		xLabelOffset := float32(5)
+		if compactMobile {
+			plotTop, plotBottom = 4, 18
+			xLabelOffset = 4
+		}
 		left, right := rect.X+leftMargin, rect.X+rect.W-rightMargin
-		top, bottom := rect.Y+10, rect.Y+rect.H-20
+		top, bottom := rect.Y+plotTop, rect.Y+rect.H-plotBottom
 		if right <= left+4 || bottom <= top+4 {
 			return
 		}
@@ -1087,13 +1120,11 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 			label := formatChartTime(winStart + float64(frac)*(winEnd-winStart))
 			labelWidth, _ := painter.MeasureText(1<<20, ui.Span{Text: label, Size: 10})
 			lx := clampFloat32(gx-labelWidth/2, left, right-labelWidth)
-			painter.Text(lx, bottom+5, label, 10, p.Muted)
+			painter.Text(lx, bottom+xLabelOffset, label, 10, p.Muted)
 		}
 
 		// Horizontal grid + Primary Right Y-axis (compute live pill band first to avoid tick overlap).
 		tone := channel.color(p)
-		axis := chartAxis(snap.ChartRanges[primary], stat)
-		ticks := axis.Ticks(4)
 		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, winStart, winEnd, primary, seriesMask)
 		hasLivePill := false
 		var livePos ui.Point
@@ -1145,7 +1176,8 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 			if idx == len(ticks)-1 {
 				lbl = tick.Label + " " + channel.unit
 			}
-			painter.Text(right+6, labelY, lbl, 10, p.Muted)
+			tw, _ := painter.MeasureText(1<<20, ui.Span{Text: lbl, Size: 10})
+			painter.Text(rect.X+rect.W-tw, labelY, lbl, 10, p.Muted)
 		}
 
 		if hasLeftAxis {
@@ -1208,14 +1240,15 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 				pillStr := liveStr
 				if topTickSkipped {
 					withUnit := liveStr + " " + channel.unit
-					if uw, _ := painter.MeasureText(1<<20, ui.Span{Text: withUnit, Size: 10, Weight: 650}); uw+10 <= rightMargin-4 {
+					if uw, _ := painter.MeasureText(1<<20, ui.Span{Text: withUnit, Size: 10}); uw+8 <= rightMargin-3 {
 						pillStr = withUnit
 					}
 				}
-				lw, _ := painter.MeasureText(1<<20, ui.Span{Text: pillStr, Size: 10, Weight: 650})
-				pillW := min(rightMargin-4, lw+10)
-				painter.Fill(ui.Rect{X: right + 3, Y: livePillY, W: pillW, H: 18}, tone, 4)
-				painter.Text(right+8, livePillY+3, pillStr, 10, kit.AccentInk(tone))
+				lw, _ := painter.MeasureText(1<<20, ui.Span{Text: pillStr, Size: 10})
+				pillW := min(rightMargin-3, lw+8)
+				pillX := rect.X + rect.W - pillW
+				painter.Fill(ui.Rect{X: pillX, Y: livePillY, W: pillW, H: 18}, tone, 4)
+				painter.Text(pillX+(pillW-lw)/2, livePillY+3, pillStr, 10, kit.AccentInk(tone))
 			}
 		}
 

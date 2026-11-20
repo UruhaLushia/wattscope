@@ -10,8 +10,25 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import dev.mygo.Native
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 
 fun makeMonitor(): Monitor = AndroidMonitor()
+
+internal object MeterRecordingToggles {
+    private val channel = Channel<Unit>(capacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    fun request() {
+        channel.trySend(Unit)
+    }
+
+    suspend fun awaitNext() = channel.receive()
+
+    fun clear() {
+        while (channel.tryReceive().isSuccess) {
+        }
+    }
+}
 
 internal fun supportsMeterIsland(context: Context): Boolean =
     Build.VERSION.SDK_INT >= 33 &&
@@ -29,7 +46,6 @@ private class AndroidMonitor : Monitor {
         energyWh: Double,
         chargeMAh: Double,
         measuredSec: Double,
-        deviceLabel: String,
         language: String,
         islandLeft: String,
         streaming: Boolean,
@@ -44,7 +60,6 @@ private class AndroidMonitor : Monitor {
                 energyWh = energyWh,
                 chargeMAh = chargeMAh,
                 measuredSec = measuredSec,
-                deviceLabel = deviceLabel,
                 language = language,
                 islandLeft = islandLeft,
                 streaming = streaming,
@@ -60,6 +75,8 @@ private class AndroidMonitor : Monitor {
     }
 
     override fun supportsIsland(): Boolean = supportsMeterIsland(Native.context)
+
+    override suspend fun awaitRecordingToggle() = MeterRecordingToggles.awaitNext()
 
     @Synchronized
     override fun ensure() {
