@@ -1,24 +1,30 @@
 package com.github.uruhalushia.wattscope.internal.transport.usbhost
 
 import android.app.PendingIntent
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.util.Log
 import dev.mygo.Native
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 
 fun makeHost(): Host = AndroidHost()
 
@@ -35,6 +41,7 @@ private class AndroidHost : Host {
     private val manager get() = checkNotNull(context.getSystemService(UsbManager::class.java))
     private val handles = ConcurrentHashMap<Long, Connection>()
     private val nextHandle = AtomicLong()
+    private val notificationRequested = AtomicBoolean()
 
     override fun devices(vendor: Long, product: Long): List<String> =
         manager.deviceList.values
@@ -43,6 +50,21 @@ private class AndroidHost : Host {
             .sorted()
 
     override fun shizukuStatus(): ShizukuAccess = rootShizukuAccess()
+
+    override fun updateNotification(text: String, language: String) { MeterForegroundService.updateNotification(text, language) }
+
+    override fun ensureForeground() {
+        if (handles.isEmpty() || MeterForegroundService.isRunning()) return
+        try {
+            context.startForegroundService(Intent(context, MeterForegroundService::class.java))
+        } catch (failure: RuntimeException) {
+            Log.w("WattScopeUsb", "Could not start the meter foreground service", failure)
+        }
+    }
+
+    override fun stopForeground() {
+        context.stopService(Intent(context, MeterForegroundService::class.java))
+    }
 
     override suspend fun authorizeShizuku(): ShizukuAccess = requestShizukuAccess()
 
@@ -82,8 +104,21 @@ private class AndroidHost : Host {
         try {
             check(connection.claimInterface(iface, true)) { "Could not claim USB interface $interfaceNumber" }
             currentCoroutineContext().ensureActive()
+            if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                withContext(Dispatchers.Main) {
+                    val activity = Native.activity
+                    if (activity != null && notificationRequested.compareAndSet(false, true)) {
+                        try {
+                            activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0x5741)
+                        } catch (failure: RuntimeException) {
+                            Log.w("WattScopeUsb", "Could not request notification permission", failure)
+                        }
+                    }
+                }
+            }
             val handle = nextHandle.incrementAndGet()
             handles[handle] = Connection(path, connection, iface, inputEndpoint, outputEndpoint)
+            ensureForeground()
             return handle
         } catch (failure: Throwable) {
             connection.close()
@@ -147,7 +182,10 @@ private class AndroidHost : Host {
 
     override fun close(handle: Long) {
         val connection = handles.remove(handle) ?: return
-        connection.usb.releaseInterface(connection.iface)
-        connection.usb.close()
+        try {
+            connection.usb.releaseInterface(connection.iface)
+        } finally {
+            connection.usb.close()
+        }
     }
 }

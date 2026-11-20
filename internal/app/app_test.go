@@ -296,6 +296,19 @@ func TestDesktopLayoutAndNavigation(t *testing.T) {
 	tt.Frame()
 }
 
+func TestMobileNotificationLanguageFollowsSettings(t *testing.T) {
+	d, cleanup := newTestDashboard(t, true)
+	defer cleanup()
+	tt := ui.NewTester(d.view, 390, 844)
+	for _, language := range []string{"en", "ja", "zh-Hans", "zh-Hant"} {
+		d.language = language
+		tt.Frame()
+		if got := d.notifyLanguage.Load(); got != language {
+			t.Fatalf("notification language = %v, want %s", got, language)
+		}
+	}
+}
+
 func TestOverviewHoldAndSettingsControls(t *testing.T) {
 	d, cleanup := newTestDashboard(t, false)
 	defer cleanup()

@@ -14,6 +14,30 @@ import (
 
 var usbManager = sync.OnceValues(NewHost)
 
+func UpdateNotification(text, language string) error {
+	host, err := usbManager()
+	if err != nil {
+		return err
+	}
+	return host.UpdateNotification(text, language)
+}
+
+func EnsureForeground() error {
+	host, err := usbManager()
+	if err != nil {
+		return err
+	}
+	return host.EnsureForeground()
+}
+
+func StopForeground() error {
+	host, err := usbManager()
+	if err != nil {
+		return err
+	}
+	return host.StopForeground()
+}
+
 type noPermissionPrompt struct{}
 
 func WithoutPermissionPrompt(ctx context.Context) context.Context {

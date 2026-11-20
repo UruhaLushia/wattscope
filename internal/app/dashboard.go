@@ -152,6 +152,9 @@ func (d *dashboard) themeIsDark(ctx *ui.Context) bool {
 }
 
 func (d *dashboard) frameTheme(ctx *ui.Context) (*ui.Theme, kit.Palette, locales.Messages) {
+	if d.mobile {
+		d.notifyLanguage.Store(d.locale())
+	}
 	dark := d.themeIsDark(ctx)
 	d.dark = dark
 	if d.mobile && d.window != nil {
