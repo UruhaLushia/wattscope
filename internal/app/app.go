@@ -58,6 +58,7 @@ type dashboard struct {
 	windowSec        float64
 	fullSession      bool
 	held             *backend.Snapshot
+	chartPaused      atomic.Bool
 	hasViewEnd       bool
 	viewEnd          float64
 	hasCursor        bool
@@ -342,15 +343,23 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 			updates, unsubscribe := service.Subscribe()
 			defer unsubscribe()
 			var last dashboardUpdate
+			var pausedRefresh <-chan time.Time
 			for ctx.Err() == nil {
 				select {
 				case <-updates:
 					page := int(d.activePage.Load())
 					update, live := readDashboardUpdate(service, page)
-					if live || update != last {
+					paused := runtime.GOOS == "android" && page == pageOverview && d.chartPaused.Load()
+					if update != last || live && !paused {
 						invalidate()
+					} else if live && pausedRefresh == nil && !d.androidHidden.Load() {
+						// While paused, only the surrounding status and counters need updating.
+						pausedRefresh = time.After(readoutInterval)
 					}
 					last = update
+				case <-pausedRefresh:
+					pausedRefresh = nil
+					invalidate()
 				case <-done:
 					if ctx.Err() == nil {
 						invalidate()
@@ -374,7 +383,10 @@ type dashboardUpdate struct {
 func readDashboardUpdate(service *backend.Service, page int) (dashboardUpdate, bool) {
 	update := dashboardUpdate{page: page}
 	switch page {
-	case pageOverview, pageRecords, pageDevice:
+	case pageOverview:
+		update.connection = service.ConnectionStatus()
+		return update, true
+	case pageRecords, pageDevice:
 		return update, true
 	case pagePD:
 		packets := service.PacketSnapshot(0, 0)

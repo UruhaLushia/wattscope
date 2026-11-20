@@ -22,7 +22,6 @@ import android.util.Log
 import com.xzakota.hyper.notification.focus.FocusNotification
 import com.xzakota.hyper.notification.focus.model.ActionInfo
 import com.xzakota.hyper.notification.island.template.IslandTemplate
-import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.pow
@@ -253,6 +252,8 @@ class MeterForegroundService : Service() {
                         add(
                             ActionInfo().apply {
                                 action = recActionKey
+                                type = 2
+                                clickWithCollapse = false
                                 actionTitle = recButtonTitle
                                 actionTitleColor = if (data.recording) "#FFFFFF" else "#111827"
                                 actionTitleColorDark = "#FFFFFF"
@@ -282,15 +283,6 @@ class MeterForegroundService : Service() {
                             actionBgColorDark = "#00000000"
                         }
                     }
-                }
-                // focus-api 1.3 omits ActionInfo.type and clickWithCollapse; set them so V3 renders a non-collapsing text pill button.
-                v3Extras.getString("miui.focus.param")?.let { rawParam ->
-                    val root = JSONObject(rawParam)
-                    root.optJSONObject("param_v2")?.optJSONArray("actions")?.optJSONObject(0)?.apply {
-                        put("type", 2)
-                        put("clickWithCollapse", false)
-                    }
-                    v3Extras.putString("miui.focus.param", root.toString())
                 }
                 addExtras(v3Extras)
             }

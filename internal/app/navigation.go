@@ -95,9 +95,9 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 
 	horizontalAnim := position == navigationTop || position == navigationBottom
 
-	root := kit.CanvasBackdrop(ui.Column(ctx).Fill(), p)
+	root := ui.Column(ctx).Fill()
 	if !d.mobile {
-		root.Padding(topInset, rightInset, 0, leftInset)
+		kit.CanvasBackdrop(root, p).Padding(topInset, rightInset, 0, leftInset)
 	}
 	navStyle := d.bottomBarStyle()
 	navReserve := kit.BottomNavReserveFor(bottomInset, hasBottomBar, navStyle)
@@ -193,7 +193,7 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 					d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, bottomInset, leftInset, rightInset)
 				}
 			}
-			canvas := kit.CanvasBackdrop(ui.Column(ctx.Key("mobile-body")).FillWidth().Grow(1).MinHeight(0).Clip(), p).
+			canvas := ui.Column(ctx.Key("mobile-body")).FillWidth().Grow(1).MinHeight(0).Clip().
 				Margin(topCanvasMargin, -rightInset, bottomCanvasMargin, -leftInset)
 			canvas.Children(func() {
 				pageContent()

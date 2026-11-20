@@ -15,6 +15,6 @@ android {
 }
 
 dependencies {
-    implementation("com.xzakota.hyper.notification:focus-api:1.3")
+    implementation("com.xzakota.hyper.notification:focus-api:1.4")
     implementation("dev.rikka.shizuku:api:13.1.5")
 }

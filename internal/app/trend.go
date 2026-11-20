@@ -222,7 +222,7 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 					}
 				})
 
-				kit.Badge(ctx, p, formatWindowLabel(cw.windowSec), kit.TonePlain).Height(24)
+				kit.ValueBadge(ctx, p, formatWindowLabel(cw.windowSec), kit.TonePlain).Height(24)
 
 				detached := d.held != nil || d.hasViewEnd
 				holdLabel, holdIcon, holdVariant := msgs.ActionHold(), kit.IconPause, kit.VariantSecondary
@@ -329,7 +329,7 @@ func (d *dashboard) overviewSessionCard(ctx *ui.Context, p kit.Palette, msgs loc
 func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, sample *device.Sample, compactGrid bool) ui.Element {
 	var pdSnap backend.PacketSnapshot
 	if d.service != nil {
-		pdSnap = d.service.PacketSnapshot(0, 1)
+		pdSnap = d.service.PacketSnapshot(0, 0)
 	}
 	dirLabel := ""
 	switch displayedCurrentDirection(sample) {
@@ -346,7 +346,7 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 			}
 			ui.Spacer(ctx)
 			if pdSnap.Total > 0 {
-				kit.ActionButton(ctx.Key("goto-pd"), p, kit.VariantGhost, kit.IconUSB, fmt.Sprintf("PD · %d", pdSnap.Total), false, func() {
+				kit.ValueButton(ctx.Key("goto-pd"), p, kit.VariantGhost, kit.IconUSB, fmt.Sprintf("PD · %d", pdSnap.Total), false, func() {
 					d.goPage(pagePD)
 				}).Height(28).Padding(0, 8)
 			}
@@ -457,6 +457,7 @@ func (d *dashboard) hold(snapshot backend.Snapshot) {
 		snapshot = d.service.SnapshotWindowSampled(0, 0)
 	}
 	d.held = &snapshot
+	d.chartPaused.Store(true)
 }
 
 func (d *dashboard) historyBounds(cw chartWindow) (bufStart, bufEnd float64, ok bool) {
@@ -750,9 +751,14 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 		}
 	}
 	cache := &d.chartGeometry
+	// Scroll only moves the plot. Reuse its paths and their masks at the new origin.
+	if key.rect.W == cache.key.rect.W && key.rect.H == cache.key.rect.H {
+		key.rect.X, key.rect.Y = cache.key.rect.X, cache.key.rect.Y
+	}
 	if cache.key == key {
 		return cache
 	}
+	key.rect = rect
 	*cache = chartGeometry{key: key}
 	for index, channel := range channels {
 		if index != primary && series&uint8(1<<index) == 0 {
@@ -1215,21 +1221,24 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		}
 
 		painter.Clip(plotRect, 0, func() {
-			for index, points := range geometry.lines {
-				if index != primary && len(points) >= 2 {
-					painter.StrokePolyline(points, 1.5, channels[index].color(p).Alpha(0.86))
+			origin := geometry.key.rect
+			painter.Transform(ui.Translation(plotRect.X-origin.X, plotRect.Y-origin.Y), 0, 0, func() {
+				for index, points := range geometry.lines {
+					if index != primary && len(points) >= 2 {
+						painter.StrokePolyline(points, 1.5, channels[index].color(p).Alpha(0.86))
+					}
 				}
-			}
-			if geometry.area != nil {
-				painter.FillPathGradient(geometry.area, ui.LinearGradient{
-					Angle: 180,
-					From:  tone.Alpha(0.24),
-					To:    tone.Alpha(0.01),
-				})
-			}
-			if points := geometry.lines[primary]; len(points) >= 2 {
-				painter.StrokePolyline(points, 2.2, tone)
-			}
+				if geometry.area != nil {
+					painter.FillPathGradient(geometry.area, ui.LinearGradient{
+						Angle: 180,
+						From:  tone.Alpha(0.24),
+						To:    tone.Alpha(0.01),
+					})
+				}
+				if points := geometry.lines[primary]; len(points) >= 2 {
+					painter.StrokePolyline(points, 2.2, tone)
+				}
+			})
 		})
 
 		if hasLivePill {

@@ -97,6 +97,7 @@ func (d *dashboard) effectiveWindowFor(sessionSpan float64) float64 {
 
 func (d *dashboard) resumeLive() {
 	d.held = nil
+	d.chartPaused.Store(false)
 	d.hasViewEnd = false
 	d.hasCursor = false
 	d.hasHover = false
@@ -214,6 +215,9 @@ func (d *dashboard) view(ctx *ui.Context) {
 		}
 		host := ui.Box(ctx.Key("workspace-host")).Fill().ZIndex(1)
 		if reveal != nil {
+			if d.mobile {
+				host.Background(p.Canvas)
+			}
 			host.Cache().Effect(reveal)
 		}
 		host.Children(func() {

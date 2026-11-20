@@ -155,13 +155,25 @@ func BadgeColors(p Palette, tone BadgeTone) (bg, fg ui.Color) {
 }
 
 func Badge(ctx *ui.Context, p Palette, text string, tone BadgeTone) ui.Element {
+	return badge(ctx, p, text, tone, true)
+}
+
+// ValueBadge shows a live value without animating it as it changes.
+func ValueBadge(ctx *ui.Context, p Palette, text string, tone BadgeTone) ui.Element {
+	return badge(ctx, p, text, tone, false)
+}
+
+func badge(ctx *ui.Context, p Palette, text string, tone BadgeTone, animate bool) ui.Element {
 	bg, fg := BadgeColors(p, tone)
 	radius := RadiusS
 	if p.LiquidGlass {
 		radius = RadiusFull
 	}
 	box := ui.Box(ctx).Height(22).Shrink(0).Padding(0, 8).AlignItems(ui.Center).Justify(ui.Center).
-		Radius(radius).Background(bg).Transition(LocaleSizeTransition)
+		Radius(radius).Background(bg)
+	if animate {
+		box.Transition(LocaleSizeTransition)
+	}
 	if p.LiquidGlass && tone == TonePlain {
 		if p.Dark {
 			box.Background(ui.RGBA(255, 255, 255, 0.08)).Border(1, ui.RGBA(255, 255, 255, 0.12))
@@ -170,7 +182,10 @@ func Badge(ctx *ui.Context, p Palette, text string, tone BadgeTone) ui.Element {
 		}
 	}
 	return box.Children(func() {
-		AnimatedLabel(ctx, text).FontSize(11).FontWeight(650).TextColor(fg).SingleLine().Shrink(0)
+		label := ui.Text(ctx, text).FontSize(11).FontWeight(650).TextColor(fg).SingleLine().Shrink(0)
+		if animate {
+			label.ContentTransition(LocaleTextTransition)
+		}
 	})
 }
 
@@ -266,6 +281,15 @@ func buttonGlassStyle(p Palette, variant ButtonVariant) (tint ui.Color, visibleA
 }
 
 func ActionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SVG, label string, touch bool, onClick func()) ui.Element {
+	return actionButton(ctx, p, variant, icon, label, touch, onClick, true)
+}
+
+// ValueButton shows a live value while retaining the button's interaction feedback.
+func ValueButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SVG, label string, touch bool, onClick func()) ui.Element {
+	return actionButton(ctx, p, variant, icon, label, touch, onClick, false)
+}
+
+func actionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SVG, label string, touch bool, onClick func(), animateLabel bool) ui.Element {
 	radius := RadiusM
 	if p.LiquidGlass {
 		radius = RadiusFull
@@ -292,7 +316,10 @@ func ActionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SV
 			ui.Icon(ctx, icon).FontSize(15).TextColor(ink).Shrink(0)
 		}
 		if label != "" {
-			AnimatedLabel(ctx, label).FontSize(13).FontWeight(weight).TextColor(ink).SingleLine().Shrink(0)
+			text := ui.Text(ctx, label).FontSize(13).FontWeight(weight).TextColor(ink).SingleLine().Shrink(0)
+			if animateLabel {
+				text.ContentTransition(LocaleTextTransition)
+			}
 		}
 	})
 }
