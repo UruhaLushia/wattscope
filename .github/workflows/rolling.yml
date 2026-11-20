@@ -38,18 +38,20 @@ jobs:
         shell: bash
         run: |
           shopt -s globstar nullglob
-          packages=(artifacts/wattscope-*/**/wattscope[-_]*)
-          ((${#packages[@]} > 0))
+          packages=()
           declare -A published
-          for package in "${packages[@]}"; do
+          for package in artifacts/wattscope-*/**/wattscope[-_]*; do
+            [[ "$package" != *.aab ]] || continue
             [[ -f "$package" && -s "$package" ]]
             name=${package##*/}
             if [[ ${published[$name]+present} ]]; then
               echo "::error::Duplicate release asset $name"
               exit 1
             fi
+            packages+=("$package")
             published[$name]=1
           done
+          ((${#packages[@]} > 0))
 
           notes="$RUNNER_TEMP/rolling-notes.md"
           git log -1 --format='%s%n%n%b' > "$notes"
