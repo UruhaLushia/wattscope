@@ -1743,24 +1743,14 @@ func (msgs Messages) GuiShizukuAuthorize() string {
 	return Catalog.Format(msgs.locale, "gui_shizuku_authorize", nil)
 }
 
-// GuiShizukuAuthorized says "Authorized · root mode"
+// GuiShizukuAuthorized says "Authorized"
 // in the language the app shows.
 func GuiShizukuAuthorized() string { return In(i18n.Locale()).GuiShizukuAuthorized() }
 
-// GuiShizukuAuthorized says "Authorized · root mode"
+// GuiShizukuAuthorized says "Authorized"
 // in the language of msgs.
 func (msgs Messages) GuiShizukuAuthorized() string {
 	return Catalog.Format(msgs.locale, "gui_shizuku_authorized", nil)
-}
-
-// GuiShizukuAuthorizedBadge says "Authorized"
-// in the language the app shows.
-func GuiShizukuAuthorizedBadge() string { return In(i18n.Locale()).GuiShizukuAuthorizedBadge() }
-
-// GuiShizukuAuthorizedBadge says "Authorized"
-// in the language of msgs.
-func (msgs Messages) GuiShizukuAuthorizedBadge() string {
-	return Catalog.Format(msgs.locale, "gui_shizuku_authorized_badge", nil)
 }
 
 // GuiShizukuNotAuthorized says "Not authorized"
@@ -1773,34 +1763,54 @@ func (msgs Messages) GuiShizukuNotAuthorized() string {
 	return Catalog.Format(msgs.locale, "gui_shizuku_not_authorized", nil)
 }
 
-// GuiShizukuRequiresRoot says "Requires Shizuku in root mode"
+// GuiShizukuRequiresRoot says "Root mode required (for automatic USB access)"
 // in the language the app shows.
 func GuiShizukuRequiresRoot() string { return In(i18n.Locale()).GuiShizukuRequiresRoot() }
 
-// GuiShizukuRequiresRoot says "Requires Shizuku in root mode"
+// GuiShizukuRequiresRoot says "Root mode required (for automatic USB access)"
 // in the language of msgs.
 func (msgs Messages) GuiShizukuRequiresRoot() string {
 	return Catalog.Format(msgs.locale, "gui_shizuku_requires_root", nil)
 }
 
-// GuiShizukuUnavailable says "Shizuku service unavailable"
+// GuiShizukuUnavailable says "Not running · requires Shizuku 13+"
 // in the language the app shows.
 func GuiShizukuUnavailable() string { return In(i18n.Locale()).GuiShizukuUnavailable() }
 
-// GuiShizukuUnavailable says "Shizuku service unavailable"
+// GuiShizukuUnavailable says "Not running · requires Shizuku 13+"
 // in the language of msgs.
 func (msgs Messages) GuiShizukuUnavailable() string {
 	return Catalog.Format(msgs.locale, "gui_shizuku_unavailable", nil)
 }
 
-// GuiShizukuAllowInManager says "Allow WattScope in Shizuku"
+// GuiShizukuAllowInManager says "Open Shizuku and allow WattScope in Authorized apps"
 // in the language the app shows.
 func GuiShizukuAllowInManager() string { return In(i18n.Locale()).GuiShizukuAllowInManager() }
 
-// GuiShizukuAllowInManager says "Allow WattScope in Shizuku"
+// GuiShizukuAllowInManager says "Open Shizuku and allow WattScope in Authorized apps"
 // in the language of msgs.
 func (msgs Messages) GuiShizukuAllowInManager() string {
 	return Catalog.Format(msgs.locale, "gui_shizuku_allow_in_manager", nil)
+}
+
+// GuiShizukuIslandHint says "Wireless debugging enables Super Island. Root mode grants USB access automatically, or you can allow it when connecti…"
+// in the language the app shows.
+func GuiShizukuIslandHint() string { return In(i18n.Locale()).GuiShizukuIslandHint() }
+
+// GuiShizukuIslandHint says "Wireless debugging enables Super Island. Root mode grants USB access automatically, or you can allow it when connecti…"
+// in the language of msgs.
+func (msgs Messages) GuiShizukuIslandHint() string {
+	return Catalog.Format(msgs.locale, "gui_shizuku_island_hint", nil)
+}
+
+// GuiShizukuUsbHint says "Root mode grants USB access automatically, or you can allow it when connecting a meter."
+// in the language the app shows.
+func GuiShizukuUsbHint() string { return In(i18n.Locale()).GuiShizukuUsbHint() }
+
+// GuiShizukuUsbHint says "Root mode grants USB access automatically, or you can allow it when connecting a meter."
+// in the language of msgs.
+func (msgs Messages) GuiShizukuUsbHint() string {
+	return Catalog.Format(msgs.locale, "gui_shizuku_usb_hint", nil)
 }
 
 // GuiShowHidden says "Show hidden"
@@ -1821,6 +1831,26 @@ func GuiSmoothChart() string { return In(i18n.Locale()).GuiSmoothChart() }
 // in the language of msgs.
 func (msgs Messages) GuiSmoothChart() string {
 	return Catalog.Format(msgs.locale, "gui_smooth_chart", nil)
+}
+
+// GuiSuperIsland says "Super Island"
+// in the language the app shows.
+func GuiSuperIsland() string { return In(i18n.Locale()).GuiSuperIsland() }
+
+// GuiSuperIsland says "Super Island"
+// in the language of msgs.
+func (msgs Messages) GuiSuperIsland() string {
+	return Catalog.Format(msgs.locale, "gui_super_island", nil)
+}
+
+// GuiIslandLeft says "Capsule left"
+// in the language the app shows.
+func GuiIslandLeft() string { return In(i18n.Locale()).GuiIslandLeft() }
+
+// GuiIslandLeft says "Capsule left"
+// in the language of msgs.
+func (msgs Messages) GuiIslandLeft() string {
+	return Catalog.Format(msgs.locale, "gui_island_left", nil)
 }
 
 // GuiSideNavigation says "Sidebar"

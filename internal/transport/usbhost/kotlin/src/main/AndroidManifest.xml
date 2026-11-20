@@ -1,15 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application>
-        <service
-            android:name="com.github.uruhalushia.wattscope.internal.transport.usbhost.MeterForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
         <meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true" />
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

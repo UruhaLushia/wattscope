@@ -28,23 +28,28 @@ private const val LOG_TAG = "WattScopeUsb"
 private val grantLock = Mutex()
 private val permissionRequests = AtomicInteger()
 
-internal fun rootShizukuAccess(): ShizukuAccess = try {
-    when {
-        !Shizuku.pingBinder() || Shizuku.isPreV11() || Shizuku.getVersion() < 13 -> ShizukuAccess.SHIZUKU_UNAVAILABLE
-        Shizuku.getUid() != 0 -> ShizukuAccess.SHIZUKU_REQUIRES_ROOT
-        Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> ShizukuAccess.SHIZUKU_AUTHORIZED
-        else -> ShizukuAccess.SHIZUKU_NOT_AUTHORIZED
+internal fun shizukuAccess(allowShell: Boolean = false): ShizukuAccess = try {
+    if (!Shizuku.pingBinder() || Shizuku.isPreV11() || Shizuku.getVersion() < 13) {
+        ShizukuAccess.SHIZUKU_UNAVAILABLE
+    } else {
+        val uid = Shizuku.getUid()
+        when {
+            uid != 0 && !(allowShell && uid == 2000) -> ShizukuAccess.SHIZUKU_REQUIRES_ROOT
+            Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED -> ShizukuAccess.SHIZUKU_NOT_AUTHORIZED
+            uid == 0 -> ShizukuAccess.SHIZUKU_AUTHORIZED
+            else -> ShizukuAccess.SHIZUKU_SHELL_AUTHORIZED
+        }
     }
 } catch (failure: RuntimeException) {
     Log.d(LOG_TAG, "Could not check Shizuku availability", failure)
     ShizukuAccess.SHIZUKU_UNAVAILABLE
 }
 
-internal suspend fun requestShizukuAccess(): ShizukuAccess = withContext(Dispatchers.Main) {
-    val access = rootShizukuAccess()
+internal suspend fun requestShizukuAccess(allowShell: Boolean): ShizukuAccess = withContext(Dispatchers.Main) {
+    val access = shizukuAccess(allowShell)
     if (access == ShizukuAccess.SHIZUKU_NOT_AUTHORIZED && !Shizuku.shouldShowRequestPermissionRationale()) {
         requestShizukuPermission()
-        return@withContext rootShizukuAccess()
+        return@withContext shizukuAccess(allowShell)
     }
     access
 }
@@ -53,7 +58,7 @@ internal suspend fun grantUsbPermission(context: Context, device: UsbDevice): Bo
     withContext(Dispatchers.IO) {
         grantLock.withLock {
             try {
-                if (rootShizukuAccess() != ShizukuAccess.SHIZUKU_AUTHORIZED) return@withLock false
+                if (shizukuAccess() != ShizukuAccess.SHIZUKU_AUTHORIZED) return@withLock false
                 val granted = requestGrant(context, device)
                 if (granted) Log.i(LOG_TAG, "Granted USB access through Shizuku (root, UID 0)")
                 granted
@@ -74,7 +79,7 @@ private suspend fun requestShizukuPermission() {
     }
     Shizuku.addRequestPermissionResultListener(listener)
     try {
-        Log.i(LOG_TAG, "Requesting Shizuku authorization (root, UID 0)")
+        Log.i(LOG_TAG, "Requesting Shizuku authorization")
         Shizuku.requestPermission(requestCode)
         withTimeoutOrNull(45_000) { result.await() }
     } finally {

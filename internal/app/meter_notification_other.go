@@ -2,8 +2,19 @@
 
 package app
 
-import "github.com/UruhaLushia/wattscope/internal/backend"
+import (
+	"context"
 
-func updateMeterNotification(backend.Snapshot, string) {}
-func ensureMeterForeground()                           {}
-func stopMeterForeground()                             {}
+	"github.com/UruhaLushia/wattscope/internal/backend"
+	"github.com/UruhaLushia/wattscope/internal/kit"
+	"github.com/UruhaLushia/wattscope/locales"
+	"github.com/egoist/mygo/ui"
+)
+
+func (*dashboard) watchMeterNotification(context.Context, *backend.Service) func() {
+	return func() {}
+}
+
+func ensureMeterForeground() {}
+
+func (*dashboard) islandSettings(*ui.Context, kit.Palette, locales.Messages, bool) {}

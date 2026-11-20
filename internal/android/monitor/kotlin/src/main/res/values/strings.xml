@@ -1,6 +1,6 @@
 <resources>
     <string name="meter_notification_channel">Live monitoring</string>
     <string name="meter_notification_title">Monitoring power meter</string>
-    <string name="meter_notification_text">Receiving data</string>
-    <string name="meter_notification_waiting">Reconnecting to the meter…</string>
+    <string name="meter_notification_waiting">Waiting for power meter…</string>
+    <string name="meter_notification_recording">REC</string>
 </resources>

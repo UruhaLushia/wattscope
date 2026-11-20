@@ -36,6 +36,7 @@ type dashboard struct {
 	lastBarStyle     mygo.BarStyle
 	androidHidden    atomic.Bool
 	notifyLanguage   atomic.Value
+	islandDisplay    atomic.Pointer[islandDisplay]
 	window           *mygo.Window
 	service          *backend.Service
 	sessionCtx       context.Context
@@ -141,9 +142,6 @@ func Run(parent context.Context, source session.Source, language, directory stri
 			return
 		}
 		model.loadSettings(language)
-		if runtime.GOOS == "android" {
-			model.notifyLanguage.Store(model.locale())
-		}
 		mygo.Theme.SetSource(model.settings.Theme)
 		windowOptions := mygo.WindowOptions{
 			Title: "WattScope", Width: 1120, Height: 720,
@@ -330,7 +328,8 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 		if previous != nil {
 			<-previous
 		}
-		defer stopMeterForeground()
+		stopMonitor := d.watchMeterNotification(ctx, service)
+		defer stopMonitor()
 		service.Run(ctx)
 	})
 	if window := d.window; window != nil {
@@ -343,15 +342,9 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 			updates, unsubscribe := service.Subscribe()
 			defer unsubscribe()
 			var last dashboardUpdate
-			var lastNotification time.Time
 			for ctx.Err() == nil {
 				select {
 				case <-updates:
-					if runtime.GOOS == "android" && time.Since(lastNotification) >= time.Second {
-						language, _ := d.notifyLanguage.Load().(string)
-						updateMeterNotification(service.Snapshot(0), language)
-						lastNotification = time.Now()
-					}
 					page := int(d.activePage.Load())
 					update, live := readDashboardUpdate(service, page)
 					if live || update != last {

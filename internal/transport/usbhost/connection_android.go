@@ -14,50 +14,26 @@ import (
 
 var usbManager = sync.OnceValues(NewHost)
 
-func UpdateNotification(text, language string) error {
-	host, err := usbManager()
-	if err != nil {
-		return err
-	}
-	return host.UpdateNotification(text, language)
-}
-
-func EnsureForeground() error {
-	host, err := usbManager()
-	if err != nil {
-		return err
-	}
-	return host.EnsureForeground()
-}
-
-func StopForeground() error {
-	host, err := usbManager()
-	if err != nil {
-		return err
-	}
-	return host.StopForeground()
-}
-
 type noPermissionPrompt struct{}
 
 func WithoutPermissionPrompt(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noPermissionPrompt{}, true)
 }
 
-func GetShizukuAccess() (ShizukuAccess, error) {
+func GetShizukuAccess(allowShell bool) (ShizukuAccess, error) {
 	host, err := usbManager()
 	if err != nil {
 		return ShizukuUnavailable, err
 	}
-	return host.ShizukuStatus()
+	return host.ShizukuStatus(allowShell)
 }
 
-func RequestShizukuAccess(ctx context.Context) (ShizukuAccess, error) {
+func RequestShizukuAccess(ctx context.Context, allowShell bool) (ShizukuAccess, error) {
 	host, err := usbManager()
 	if err != nil {
 		return ShizukuUnavailable, err
 	}
-	return host.AuthorizeShizuku(ctx)
+	return host.AuthorizeShizuku(ctx, allowShell)
 }
 
 func Enumerate(ctx context.Context, vendor, product int) ([]string, error) {

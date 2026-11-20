@@ -1,6 +1,6 @@
 <resources>
     <string name="meter_notification_channel">实时监测</string>
     <string name="meter_notification_title">正在监测功率表</string>
-    <string name="meter_notification_text">正在接收数据</string>
-    <string name="meter_notification_waiting">正在重新连接功率表…</string>
+    <string name="meter_notification_waiting">正在等待功率表…</string>
+    <string name="meter_notification_recording">录制中</string>
 </resources>

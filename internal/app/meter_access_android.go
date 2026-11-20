@@ -19,12 +19,12 @@ func (d *dashboard) automaticMeterContext() context.Context {
 }
 
 func (d *dashboard) refreshMeterAccess() {
-	d.shizukuAccess, _ = usbhost.GetShizukuAccess()
+	d.shizukuAccess, _ = usbhost.GetShizukuAccess(supportsMeterIsland())
 }
 
 func shizukuStatusLabel(msgs locales.Messages, status usbhost.ShizukuAccess) string {
 	switch status {
-	case usbhost.ShizukuAuthorized:
+	case usbhost.ShizukuAuthorized, usbhost.ShizukuShellAuthorized:
 		return msgs.GuiShizukuAuthorized()
 	case usbhost.ShizukuNotAuthorized:
 		return msgs.GuiShizukuNotAuthorized()
@@ -36,20 +36,28 @@ func shizukuStatusLabel(msgs locales.Messages, status usbhost.ShizukuAccess) str
 }
 
 func (d *dashboard) meterAccessSettings(ctx *ui.Context, p kit.Palette, msgs locales.Messages, touch bool) {
+	canUseIsland := supportsMeterIsland()
+	hint := msgs.GuiShizukuUsbHint()
+	if canUseIsland {
+		hint = msgs.GuiShizukuIslandHint()
+	}
+	access := d.shizukuAccess
 	kit.FormGroup(ctx, p, msgs.GuiMeterAccess(), nil, func() {
-		kit.IconSettingRow(ctx, p, kit.IconShield, "Shizuku", shizukuStatusLabel(msgs, d.shizukuAccess), func() {
-			if d.shizukuAccess == usbhost.ShizukuAuthorized {
-				kit.Badge(ctx, p, msgs.GuiShizukuAuthorizedBadge(), kit.ToneSuccess)
+		kit.IconSettingRow(ctx, p, kit.IconShield, "Shizuku", shizukuStatusLabel(msgs, access), func() {
+			if access != usbhost.ShizukuNotAuthorized {
 				return
 			}
 			kit.ActionButton(ctx.Key("authorize-shizuku"), p, kit.VariantSecondary, nil, msgs.GuiShizukuAuthorize(), touch, func() {
 				d.runJob(func(ctx context.Context) (func(), string, error) {
-					access, err := usbhost.RequestShizukuAccess(ctx)
+					access, err := usbhost.RequestShizukuAccess(ctx, canUseIsland)
 					if err != nil {
 						diagnostics.Logger(ctx).WarnContext(ctx, "Shizuku authorization failed", "error", err)
 					}
 					return func() {
 						d.shizukuAccess = access
+						if access == usbhost.ShizukuShellAuthorized {
+							return
+						}
 						if access != usbhost.ShizukuAuthorized {
 							message := shizukuStatusLabel(msgs, access)
 							if access == usbhost.ShizukuNotAuthorized {
@@ -70,5 +78,6 @@ func (d *dashboard) meterAccessSettings(ctx *ui.Context, p kit.Palette, msgs loc
 				})
 			}).Disabled(d.busy)
 		})
+		ui.Text(ctx, hint).Wrap().FillWidth().Padding(0, 0, 12, 0).FontSize(11).TextColor(p.Muted)
 	})
 }

@@ -151,8 +151,9 @@ func (d *dashboard) themeIsDark(ctx *ui.Context) bool {
 }
 
 func (d *dashboard) frameTheme(ctx *ui.Context) (*ui.Theme, kit.Palette, locales.Messages) {
-	if d.mobile {
-		d.notifyLanguage.Store(d.locale())
+	locale := d.locale()
+	if d.mobile && d.notifyLanguage.Load() != locale {
+		d.notifyLanguage.Store(locale)
 	}
 	dark := d.themeIsDark(ctx)
 	d.dark = dark
@@ -172,7 +173,7 @@ func (d *dashboard) frameTheme(ctx *ui.Context) (*ui.Theme, kit.Palette, locales
 		p.LiquidGlass = p.LiquidGlass && !ctx.Preferences().ReduceTransparency
 		ctx.SetTheme(theme)
 	}
-	return theme, p, locales.In(d.locale())
+	return theme, p, locales.In(locale)
 }
 
 func (d *dashboard) view(ctx *ui.Context) {

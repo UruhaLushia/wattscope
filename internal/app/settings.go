@@ -18,6 +18,11 @@ const (
 	navigationSidebar    = "sidebar"
 	bottomBarCapsule     = "capsule"
 	bottomBarStandard    = "standard"
+	islandLeftVoltage    = "voltage"
+	islandLeftCurrent    = "current"
+	islandLeftEnergy     = "energy"
+	islandLeftCharge     = "charge"
+	islandLeftOff        = "off"
 )
 
 type guiSettings struct {
@@ -28,6 +33,17 @@ type guiSettings struct {
 	BottomBarStyle string           `json:"bottom_bar_style"`
 	SmoothChart    bool             `json:"smooth_chart"`
 	LiquidGlass    bool             `json:"liquid_glass"`
+	IslandEnabled  bool             `json:"island_enabled"`
+	IslandLeft     string           `json:"island_left,omitempty"`
+}
+
+type islandDisplay struct {
+	enabled bool
+	left    string
+}
+
+func (d *dashboard) syncIslandDisplay() {
+	d.islandDisplay.Store(&islandDisplay{enabled: d.settings.IslandEnabled, left: d.settings.IslandLeft})
 }
 
 type themeChange struct {
@@ -38,6 +54,7 @@ type themeChange struct {
 
 func (d *dashboard) loadSettings(language string) {
 	d.settings.SmoothChart = true
+	d.settings.IslandEnabled = true
 	preferences.Get(settingsKey, &d.settings)
 	switch d.settings.Theme {
 	case mygo.ThemeLight, mygo.ThemeDark:
@@ -63,9 +80,18 @@ func (d *dashboard) loadSettings(language string) {
 	default:
 		d.settings.BottomBarStyle = bottomBarCapsule
 	}
+	switch d.settings.IslandLeft {
+	case islandLeftVoltage, islandLeftCurrent, islandLeftEnergy, islandLeftCharge, islandLeftOff:
+	default:
+		d.settings.IslandLeft = islandLeftVoltage
+	}
+	d.syncIslandDisplay()
 	d.language = d.settings.Language
 	if language = strings.TrimSpace(language); language != "" && !strings.EqualFold(language, settingsAuto) {
 		d.language = locales.Resolve(language)
+	}
+	if d.mobile {
+		d.notifyLanguage.Store(d.locale())
 	}
 }
 
@@ -273,6 +299,7 @@ func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Me
 					Label(msgs.GuiSmoothChart()).OnChange(d.saveSettings)
 			})
 		})
+		d.islandSettings(ctx, p, msgs, touch)
 		d.meterAccessSettings(ctx, p, msgs, touch)
 	})
 }
