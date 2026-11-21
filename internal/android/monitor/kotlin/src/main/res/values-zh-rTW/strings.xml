@@ -1,7 +1,7 @@
 <resources>
     <string name="meter_notification_channel">即時監測</string>
-    <string name="meter_notification_title">正在監測功率表</string>
-    <string name="meter_notification_waiting">正在等待功率表…</string>
+    <string name="meter_notification_title">正在監測電流表</string>
+    <string name="meter_notification_waiting">正在等待電流表…</string>
     <string name="meter_notification_record_start">錄製</string>
     <string name="meter_notification_record_stop">停止</string>
 </resources>

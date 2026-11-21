@@ -1,6 +1,6 @@
 # WattScope
 
-跨平台 USB 功率表上位机，支持 **WITRN K2** 与 **POWER-Z KM003C**，提供原生 GUI、终端界面（TUI）和命令行工具，覆盖 Linux、macOS、Windows 与 Android。
+跨平台 USB 电流表上位机，支持 **WITRN K2** 与 **POWER-Z KM003C**，提供原生 GUI、终端界面（TUI）和命令行工具，覆盖 Linux、macOS、Windows 与 Android。
 
 ## 功能
 
