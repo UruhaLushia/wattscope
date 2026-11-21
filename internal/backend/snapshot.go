@@ -112,8 +112,8 @@ func (s *Service) SnapshotWindow(window time.Duration) Snapshot {
 
 // SnapshotWindowSampled returns the latest state and the visible time range
 // (or the entire session when window <= 0) as read-only samples that may share
-// the append-only history. It uses maxPoints to size buckets and keeps
-// endpoints, bucket extrema, and the first transition within each bucket.
+// the append-only history. It uses maxPoints to size buckets and keeps endpoints,
+// bucket extrema, and the samples around the first segment change in each bucket.
 func (s *Service) SnapshotWindowSampled(window time.Duration, maxPoints int) Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -195,48 +195,79 @@ func (s *Service) snapshotSliceLocked(startIdx, endIdx, maxPoints int) Snapshot 
 	}
 	buckets := max(1, (maxPoints-2)/2)
 	out := make([]device.Sample, 0, maxPoints+2)
-	out = append(out, *s.sampleAtLocked(startIdx))
+	first := s.sampleAtLocked(startIdx)
+	out = append(out, *first)
+	previous, prevSegment := startIdx, first.Segment
 	innerStart := startIdx + 1
 	innerCount := n - 2
-	if innerCount > 0 {
-		for b := range buckets {
-			lo := innerStart + (b*innerCount)/buckets
-			hi := innerStart + ((b+1)*innerCount)/buckets
-			if lo >= hi {
-				continue
+	for b := range buckets {
+		lo := innerStart + (b*innerCount)/buckets
+		hi := innerStart + ((b+1)*innerCount)/buckets
+		if lo >= hi {
+			continue
+		}
+		minIdx, maxIdx := lo, lo
+		minP := s.sampleAtLocked(lo).Power
+		maxP := minP
+		segChange := -1
+		for idx := lo; idx < hi; idx++ {
+			sample := s.sampleAtLocked(idx)
+			if sample.Power < minP {
+				minP, minIdx = sample.Power, idx
 			}
-			minIdx, maxIdx := lo, lo
-			firstSample := s.sampleAtLocked(lo)
-			minP := firstSample.Power
-			maxP := minP
-			segChange := -1
-			prevSeg := firstSample.Segment
-			for idx := lo + 1; idx < hi; idx++ {
-				sample := s.sampleAtLocked(idx)
-				if sample.Power < minP {
-					minP, minIdx = sample.Power, idx
-				}
-				if sample.Power > maxP {
-					maxP, maxIdx = sample.Power, idx
-				}
-				if segChange < 0 && sample.Segment != prevSeg {
-					segChange = idx
-				}
+			if sample.Power > maxP {
+				maxP, maxIdx = sample.Power, idx
 			}
-			selected := [3]int{minIdx, maxIdx, segChange}
-			slices.Sort(selected[:])
-			previous := -1
-			for _, index := range selected {
-				if index > previous {
-					out = append(out, *s.sampleAtLocked(index))
-					previous = index
-				}
+			if segChange < 0 && sample.Segment != prevSegment {
+				segChange = idx
+			}
+		}
+		prevSegment = s.sampleAtLocked(hi - 1).Segment
+		if minIdx == maxIdx {
+			minIdx, maxIdx = s.flatPowerExtremaLocked(lo, hi)
+		}
+		selected := [4]int{minIdx, maxIdx, segChange - 1, segChange}
+		slices.Sort(selected[:])
+		for _, index := range selected {
+			if index > previous {
+				out = append(out, *s.sampleAtLocked(index))
+				previous = index
 			}
 		}
 	}
-	out = append(out, *s.sampleAtLocked(endIdx - 1))
+	last := s.sampleAtLocked(endIdx - 1)
+	if last.Segment != prevSegment && endIdx-2 > previous {
+		out = append(out, *s.sampleAtLocked(endIdx - 2))
+	}
+	out = append(out, *last)
 	v.History = out
 	return v
+}
+
+// Keep voltage and current transients visible when power alone is flat.
+func (s *Service) flatPowerExtremaLocked(lo, hi int) (int, int) {
+	first := s.sampleAtLocked(lo)
+	minV, maxV, minI, maxI := first.Voltage, first.Voltage, first.Current, first.Current
+	minVIdx, maxVIdx, minIIdx, maxIIdx := lo, lo, lo, lo
+	for idx := lo + 1; idx < hi; idx++ {
+		sample := s.sampleAtLocked(idx)
+		if sample.Voltage < minV {
+			minV, minVIdx = sample.Voltage, idx
+		}
+		if sample.Voltage > maxV {
+			maxV, maxVIdx = sample.Voltage, idx
+		}
+		if sample.Current < minI {
+			minI, minIIdx = sample.Current, idx
+		}
+		if sample.Current > maxI {
+			maxI, maxIIdx = sample.Current, idx
+		}
+	}
+	if minVIdx != maxVIdx {
+		return minVIdx, maxVIdx
+	}
+	return minIIdx, maxIIdx
 }
 
 func (s *Service) ringIndexLocked(index int) int {

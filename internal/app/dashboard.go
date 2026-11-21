@@ -18,7 +18,7 @@ const (
 	readoutInterval  = 250 * time.Millisecond
 	minWindowSec     = 1.0
 	defaultWindowSec = 60.0
-	chartMaxLivePts  = 2400
+	chartMaxLivePts  = 4000
 )
 
 type chartWindow struct {

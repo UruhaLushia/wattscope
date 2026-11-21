@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"math"
+	"slices"
+	"sort"
 	"time"
 
 	"github.com/UruhaLushia/wattscope/internal/backend"
@@ -516,15 +518,22 @@ func chartAxis(bounds backend.ChartRange, stat channelStat) chart.Linear {
 }
 
 type chartSamplesKey struct {
-	first *device.Sample
-	count int
+	first        *device.Sample
+	count        int
+	firstElapsed float64
+	lastElapsed  float64
 }
 
 func chartSamplesIdentity(history []device.Sample) chartSamplesKey {
 	if len(history) == 0 {
 		return chartSamplesKey{}
 	}
-	return chartSamplesKey{first: &history[0], count: len(history)}
+	return chartSamplesKey{
+		first:        &history[0],
+		count:        len(history),
+		firstElapsed: history[0].Elapsed,
+		lastElapsed:  history[len(history)-1].Elapsed,
+	}
 }
 
 type chartStatsCache struct {
@@ -627,74 +636,199 @@ func formatCompactMetric(value float64, decimals int) string {
 	return fmt.Sprintf("%.*f", decimals, value)
 }
 
-func sampleNormalizedSeries(history []device.Sample, ch measurement, axis chart.Linear, winStart, winEnd float64, pixelWidth int, smooth bool) (xs, ysUp []float32, lastValue float64) {
-	const (
-		smoothingSigma  = 0.08
-		smoothingRadius = 0.24
-		smoothingGap    = 0.5
-	)
+type seriesSample struct {
+	elapsed float64
+	value   float64
+}
+
+func chartSmoothingKernel(span float64, dpWidth float32) (sigma, radius float64) {
+	const baseSigma = 0.08
+	sPerDp := span / max(float64(dpWidth), 1)
+	sigma = max(baseSigma, sPerDp*0.85)
+	return sigma, sigma * 3.0
+}
+
+// A sampled history can have wider spacing than the meter's native cadence.
+func seriesGapThreshold(history []device.Sample) float64 {
+	const baseGap = 0.5
 	n := len(history)
-	rawVals := make([]float64, n)
-	validVals := make([]bool, n)
-	for i := range history {
-		rawVals[i], validVals[i] = ch.read(&history[i])
+	if n < 4 {
+		return baseGap
+	}
+	const maxSamples = 8192
+	// An odd stride samples both spacings when a bucket contributes two extrema.
+	stride := 1 + (n-2)/maxSamples
+	if stride%2 == 0 {
+		stride++
+	}
+	deltas := make([]float64, 0, 1+(n-2)/stride)
+	for i := 1; i < n; i += stride {
+		if history[i].Segment != history[i-1].Segment {
+			continue
+		}
+		if dt := history[i].Elapsed - history[i-1].Elapsed; dt > 0 {
+			deltas = append(deltas, dt)
+		}
+	}
+	if len(deltas) < 3 {
+		return baseGap
+	}
+	slices.Sort(deltas)
+	cadence := deltas[(len(deltas)-1)*3/4]
+	if len(deltas) < 8 {
+		cadence = deltas[(len(deltas)-1)/2]
+	}
+	return max(baseGap, cadence*4)
+}
+
+func visibleHistory(history []device.Sample, start, end float64) []device.Sample {
+	n := len(history)
+	lo := sort.Search(n, func(i int) bool { return history[i].Elapsed >= start })
+	hi := sort.Search(n, func(i int) bool { return history[i].Elapsed > end })
+	if lo > 0 {
+		lo--
+	}
+	if hi < n {
+		hi++
+	}
+	return history[lo:hi]
+}
+
+func downsampleSeriesRun(run []seriesSample, target int) []seriesSample {
+	if len(run) <= target {
+		return run
+	}
+	first, last := run[0], run[len(run)-1]
+	span := last.elapsed - first.elapsed
+	if span <= 0 {
+		return run[len(run)-1:]
+	}
+	buckets := target - 2
+	pointsPerSecond := float64(buckets) / span
+	out := make([]seriesSample, 1, target)
+	out[0] = first
+	var elapsedSum, valueSum float64
+	bucket, count := 0, 0
+	flush := func() {
+		if count > 0 {
+			out = append(out, seriesSample{
+				elapsed: first.elapsed + elapsedSum/float64(count),
+				value:   valueSum / float64(count),
+			})
+			elapsedSum, valueSum, count = 0, 0, 0
+		}
+	}
+	for _, sample := range run[1 : len(run)-1] {
+		offset := sample.elapsed - first.elapsed
+		next := min(int(offset*pointsPerSecond), buckets-1)
+		if next != bucket {
+			flush()
+			bucket = next
+		}
+		elapsedSum += offset
+		valueSum += sample.value
+		count++
+	}
+	flush()
+	return append(out, last)
+}
+
+func smoothSeriesRun(run []seriesSample, sigma, radius float64) []seriesSample {
+	if len(run) < 3 {
+		return run
+	}
+	out := make([]seriesSample, len(run))
+	leftIdx, rightIdx := 0, 0
+	for i := range run {
+		t0 := run[i].elapsed
+		for leftIdx < i && t0-run[leftIdx].elapsed > radius {
+			leftIdx++
+		}
+		if rightIdx < i {
+			rightIdx = i
+		}
+		for rightIdx+1 < len(run) && run[rightIdx+1].elapsed-t0 <= radius {
+			rightIdx++
+		}
+		var wSum, vSum float64
+		for j := leftIdx; j <= rightIdx; j++ {
+			dt := (run[j].elapsed - t0) / sigma
+			w := math.Exp(-0.5 * dt * dt)
+			wSum += w
+			vSum += w * run[j].value
+		}
+		out[i] = seriesSample{elapsed: t0, value: vSum / wSum}
+	}
+	return out
+}
+
+func trimRunToWindow(run []seriesSample, winStart, winEnd float64) []seriesSample {
+	n := len(run)
+	lo := sort.Search(n, func(i int) bool { return run[i].elapsed >= winStart })
+	if lo == n {
+		return nil
+	}
+	hi := sort.Search(n, func(i int) bool { return run[i].elapsed > winEnd })
+	if lo == 0 && hi == 0 {
+		return nil
+	}
+	if lo > 0 {
+		lo--
+	}
+	if hi < n {
+		hi++
+	}
+	return run[lo:hi]
+}
+
+func sampleNormalizedSeries(view []device.Sample, ch measurement, axis chart.Linear, winStart, winEnd, maxGap, sigma, radius float64, pixelWidth int) (xs, ysUp []float32, lastValue float64) {
+	span := max(winEnd-winStart, 1e-6)
+	n := len(view)
+	samples := make([]seriesSample, n)
+	for i := range view {
+		value, ok := ch.read(&view[i])
+		if !ok || math.IsInf(value, 0) {
+			value = math.NaN()
+		}
+		samples[i] = seriesSample{elapsed: view[i].Elapsed, value: value}
 	}
 
-	span := max(winEnd-winStart, 1e-6)
-	xs = make([]float32, 0, n)
-	ysUp = make([]float32, 0, n)
+	xs = make([]float32, 0, min(n, max(256, pixelWidth*2)))
+	ysUp = make([]float32, 0, cap(xs))
 	gap := float32(math.NaN())
+	maxSmoothPts := max(4000, pixelWidth*2)
+	lastValue = math.NaN()
 
-	runStart, runEnd := 0, 0
-	for runStart < n {
-		if !validVals[runStart] {
+	for runStart := 0; runStart < n; {
+		if math.IsNaN(samples[runStart].value) {
 			runStart++
 			continue
 		}
-		seg := history[runStart].Segment
-		runEnd = runStart + 1
-		for runEnd < n && validVals[runEnd] && history[runEnd].Segment == seg &&
-			history[runEnd].Elapsed-history[runEnd-1].Elapsed < smoothingGap {
+		seg := view[runStart].Segment
+		runEnd := runStart + 1
+		for runEnd < n && !math.IsNaN(samples[runEnd].value) && view[runEnd].Segment == seg &&
+			samples[runEnd].elapsed-samples[runEnd-1].elapsed < maxGap {
 			runEnd++
 		}
-		if len(xs) > 0 {
-			xs, ysUp = append(xs, gap), append(ysUp, gap)
-		}
 
-		// Zero-phase symmetric Gaussian smoothing over continuous segments prevents phase lag
-		// and keeps peaks/endpoints aligned with the curve without sudden edge jumps.
-		leftIdx, rightIdx := runStart, runStart
-		for i := runStart; i < runEnd; i++ {
-			rec := &history[i]
-			val := rawVals[i]
-			plotted := val
-			if smooth && runEnd-runStart >= 3 {
-				t0 := rec.Elapsed
-				for leftIdx < i && t0-history[leftIdx].Elapsed > smoothingRadius {
-					leftIdx++
-				}
-				if rightIdx < i {
-					rightIdx = i
-				}
-				for rightIdx+1 < runEnd && history[rightIdx+1].Elapsed-t0 <= smoothingRadius {
-					rightIdx++
-				}
-				var wSum, vSum float64
-				for j := leftIdx; j <= rightIdx; j++ {
-					dt := (history[j].Elapsed - t0) / smoothingSigma
-					w := math.Exp(-0.5 * dt * dt)
-					wSum += w
-					vSum += w * rawVals[j]
-				}
-				if wSum > 0 {
-					plotted = vSum / wSum
+		run := samples[runStart:runEnd]
+		if sigma > 0 {
+			run = smoothSeriesRun(downsampleSeriesRun(run, maxSmoothPts), sigma, radius)
+		}
+		visible := trimRunToWindow(run, winStart, winEnd)
+		if len(visible) > 0 {
+			if len(xs) > 0 {
+				xs, ysUp = append(xs, gap), append(ysUp, gap)
+			}
+			for _, pt := range visible {
+				xf := float32((pt.elapsed - winStart) / span)
+				yf := clampFloat32(axis.At(pt.value), 0, 1)
+				xs = append(xs, xf)
+				ysUp = append(ysUp, yf)
+				if pt.elapsed >= winStart && pt.elapsed <= winEnd+1e-9 {
+					lastValue = pt.value
 				}
 			}
-			lastValue = plotted
-			xf := float32((rec.Elapsed - winStart) / span)
-			yf := clampFloat32(axis.At(plotted), 0, 1)
-			xs = append(xs, xf)
-			ysUp = append(ysUp, yf)
 		}
 		runStart = runEnd
 	}
@@ -717,7 +851,7 @@ func seriesPointsFromNormalized(plotRect ui.Rect, xs, ysUp []float32) [][2]float
 			connected = false
 			continue
 		}
-		px := max(plotRect.X, min(plotRect.X+plotRect.W, chart.X(plotRect, x)))
+		px := chart.X(plotRect, x)
 		py := max(plotRect.Y, min(plotRect.Y+plotRect.H, chart.Y(plotRect, ysUp[i])))
 		points = append(points, [2]float32{px, py})
 		connected = true
@@ -725,9 +859,38 @@ func seriesPointsFromNormalized(plotRect ui.Rect, xs, ysUp []float32) [][2]float
 	return points
 }
 
+func buildSeriesArea(rect ui.Rect, axis chart.Linear, points [][2]float32) *ui.Path {
+	baseline := rect.Y + rect.H
+	if axis.Lo < 0 {
+		baseline = chart.Y(rect, clampFloat32(axis.At(0), 0, 1))
+	}
+	var path *ui.Path
+	start := 0
+	for end := 0; end <= len(points); end++ {
+		if end < len(points) && !math.IsNaN(float64(points[end][0])) {
+			continue
+		}
+		if end-start >= 2 {
+			if path == nil {
+				path = &ui.Path{}
+			}
+			path.MoveTo(points[start][0], points[start][1])
+			for _, point := range points[start+1 : end] {
+				path.LineTo(point[0], point[1])
+			}
+			path.LineTo(points[end-1][0], baseline)
+			path.LineTo(points[start][0], baseline)
+			path.Close()
+		}
+		start = end + 1
+	}
+	return path
+}
+
 type chartGeometryKey struct {
 	samples    chartSamplesKey
 	rect       ui.Rect
+	scale      float32
 	start, end float64
 	primary    int
 	series     uint8
@@ -742,8 +905,16 @@ type chartGeometry struct {
 	lastValue float64
 }
 
-func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]backend.ChartRange, rect ui.Rect, start, end float64, primary int, series uint8) *chartGeometry {
-	key := chartGeometryKey{samples: chartSamplesIdentity(history), rect: rect, start: start, end: end, primary: primary, series: series, smooth: d.settings.SmoothChart}
+func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]backend.ChartRange, rect ui.Rect, scale float32, start, end float64, primary int, series uint8) *chartGeometry {
+	if scale <= 0 {
+		scale = 1
+	}
+	source := history
+	if d.held != nil {
+		// The paused readout uses visible samples, but the curve needs neighbors past the edges.
+		source = d.held.History
+	}
+	key := chartGeometryKey{samples: chartSamplesIdentity(source), rect: rect, scale: scale, start: start, end: end, primary: primary, series: series, smooth: d.settings.SmoothChart}
 	for index := range channels {
 		if index == primary || series&uint8(1<<index) != 0 {
 			axis := chartAxis(ranges[index], d.visibleChartStat(history, index))
@@ -759,7 +930,14 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 		return cache
 	}
 	key.rect = rect
-	*cache = chartGeometry{key: key}
+	*cache = chartGeometry{key: key, lastValue: math.NaN()}
+	var sigma, radius float64
+	if key.smooth {
+		sigma, radius = chartSmoothingKernel(end-start, rect.W)
+	}
+	view := visibleHistory(source, start-radius, end+radius)
+	maxGap := seriesGapThreshold(view)
+	pixelWidth := max(1, int(math.Ceil(float64(rect.W*scale))))
 	for index, channel := range channels {
 		if index != primary && series&uint8(1<<index) == 0 {
 			continue
@@ -769,25 +947,11 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 			continue
 		}
 		axis := chart.NewLinear(key.axes[index][0], key.axes[index][1])
-		xs, ys, lastValue := sampleNormalizedSeries(history, channel, axis, start, end, int(rect.W), key.smooth)
+		xs, ys, lastValue := sampleNormalizedSeries(view, channel, axis, start, end, maxGap, sigma, radius, pixelWidth)
 		cache.lines[index] = seriesPointsFromNormalized(rect, xs, ys)
 		if index == primary {
 			cache.lastValue = lastValue
-			if len(xs) >= 2 {
-				var zeroRef []float32
-				if axis.Lo < 0 {
-					zeroAt := clampFloat32(axis.At(0), 0, 1)
-					zeroRef = make([]float32, len(xs))
-					for index := range zeroRef {
-						if math.IsNaN(float64(xs[index])) || math.IsNaN(float64(ys[index])) {
-							zeroRef[index] = float32(math.NaN())
-						} else {
-							zeroRef[index] = zeroAt
-						}
-					}
-				}
-				cache.area = chart.Area(rect, xs, zeroRef, ys, chart.CurveLinear)
-			}
+			cache.area = buildSeriesArea(rect, axis, cache.lines[index])
 		}
 	}
 	return cache
@@ -1131,7 +1295,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 
 		// Horizontal grid + Primary Right Y-axis (compute live pill band first to avoid tick overlap).
 		tone := channel.color(p)
-		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, winStart, winEnd, primary, seriesMask)
+		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, painter.Scale(), winStart, winEnd, primary, seriesMask)
 		hasLivePill := false
 		var livePos ui.Point
 		var liveStr string
@@ -1141,9 +1305,9 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 				hasLivePill = true
 				markerX := sample.Elapsed
 				markerValue := value
-				if geometry.key.smooth && !d.hasCursor && len(history) > 0 {
+				if geometry.key.smooth && !d.hasCursor && !math.IsNaN(geometry.lastValue) && len(history) > 0 {
 					last := &history[len(history)-1]
-					if sample.Segment == last.Segment && math.Abs(sample.Elapsed-last.Elapsed) < 0.25 {
+					if sample.Segment == last.Segment && last.Elapsed <= winEnd+1e-9 && math.Abs(sample.Elapsed-last.Elapsed) < 0.25 {
 						if _, valid := channel.read(last); valid {
 							markerX = last.Elapsed
 							markerValue = geometry.lastValue

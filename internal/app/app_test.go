@@ -420,10 +420,10 @@ func TestChartSmoothing(t *testing.T) {
 	}
 	rect := ui.Rect{W: 320, H: 160}
 	var d dashboard
-	raw := d.prepareChartGeometry(history, [7]backend.ChartRange{}, rect, 0, 1, 0, 1)
+	raw := d.prepareChartGeometry(history, [7]backend.ChartRange{}, rect, 1, 0, 1, 0, 1)
 	rawPeakY, rawNewSegmentY := raw.lines[0][1][1], raw.lines[0][4][1]
 	d.settings.SmoothChart = true
-	smoothed := d.prepareChartGeometry(history, [7]backend.ChartRange{}, rect, 0, 1, 0, 1)
+	smoothed := d.prepareChartGeometry(history, [7]backend.ChartRange{}, rect, 1, 0, 1, 0, 1)
 	points := smoothed.lines[0]
 	rawSpike := points[0][1] - rawPeakY
 	smoothedSpike := points[0][1] - points[1][1]
@@ -432,6 +432,11 @@ func TestChartSmoothing(t *testing.T) {
 	}
 	if !math.IsNaN(float64(points[3][0])) || points[4][1] != rawNewSegmentY || smoothed.lastValue != 5 {
 		t.Fatal("expected smoothing to restart on a new segment or after a gap")
+	}
+
+	sparse := d.prepareChartGeometry(history[3:], [7]backend.ChartRange{}, rect, 1, 0, 1, 0, 1)
+	if points := sparse.lines[0]; len(points) != 3 || !math.IsNaN(float64(points[1][0])) || sparse.area != nil {
+		t.Fatalf("expected isolated samples on either side of the gap, got %v", points)
 	}
 }
 
@@ -2258,5 +2263,137 @@ func TestThemeCircularRevealAndLocaleAnimations(t *testing.T) {
 		!(navChipMid.W > navChipBefore.W && navChipMid.W < navChipAfter.W) &&
 		math.Abs(float64(navChipMid.W-navChipAfter.W)) < 0.5 && math.Abs(float64(navChipMid.X-navChipAfter.X)) < 0.5 {
 		t.Fatalf("expected intermediate animated layout/size during language switch, got before=%+v mid=%+v after=%+v", navChipBefore, navChipMid, navChipAfter)
+	}
+}
+
+func buildLongChartSamples(totalSec float64) []device.Sample {
+	const hz = 20
+	count := int(totalSec*hz) + 1
+	samples := make([]device.Sample, 0, count)
+	for i := range count {
+		sec := float64(i) / hz
+		var voltage, current float64
+		switch {
+		case sec < 15:
+			voltage = 5.0
+			current = 0.4 + 0.3*math.Sin(sec*1.7)
+		case sec < 180:
+			frac := (sec - 15) / 165
+			voltage = 18.0 + 0.8*math.Sin(frac*math.Pi/2)
+			current = 1.6 + 2.0*frac + 0.08*math.Sin(sec*2.4)
+		case sec < 300:
+			frac := (sec - 180) / 120
+			voltage = 8.5
+			current = 0.65 + 0.75*frac + 0.12*math.Sin(sec*1.5)
+		case sec < 960:
+			voltage = 8.5 + 0.04*math.Sin(sec*0.2)
+			ripple := 0.08*math.Sin(sec*7.5) + 0.05*math.Cos(sec*19.0)
+			pulse := 0.0
+			if math.Mod(sec, 11.0) < 1.2 {
+				pulse = 0.28
+			}
+			current = 1.75 + ripple + pulse
+		default:
+			voltage = 0
+			current = 0
+		}
+		samples = append(samples, device.Sample{
+			Elapsed: sec,
+			Voltage: voltage,
+			Current: current,
+			Power:   voltage * current,
+		})
+	}
+	return samples
+}
+
+func countPolylineRuns(points [][2]float32) int {
+	runs, runLen := 0, 0
+	for _, pt := range points {
+		finite := !math.IsNaN(float64(pt[0])) && !math.IsNaN(float64(pt[1]))
+		if !finite {
+			if runLen >= 2 {
+				runs++
+			}
+			runLen = 0
+			continue
+		}
+		runLen++
+	}
+	if runLen >= 2 {
+		runs++
+	}
+	return runs
+}
+
+func polylineVerticalVariation(points [][2]float32) float64 {
+	total := 0.0
+	for i := 1; i < len(points); i++ {
+		if math.IsNaN(float64(points[i-1][1])) || math.IsNaN(float64(points[i][1])) {
+			continue
+		}
+		total += math.Abs(float64(points[i][1] - points[i-1][1]))
+	}
+	return total
+}
+
+func TestLongDurationChartContinuityAndSmoothing(t *testing.T) {
+	// A 37m28s recording exercises both sampled live history and exact paused history.
+	samples := buildLongChartSamples(2248)
+	d, cleanup := newTestDashboardWithSamples(t, samples)
+	defer cleanup()
+	d.settings.SmoothChart = true
+	d.chartSeries = 0b00000111
+	d.fullSession = true
+
+	tt := ui.NewTester(d.view, 1120, 620)
+	tt.Frame()
+
+	for ch := range 3 {
+		runs := countPolylineRuns(d.chartGeometry.lines[ch])
+		if runs != 1 {
+			t.Fatalf("37m28s smooth chart channel %d fragmented into %d runs, want 1 continuous run (len=%d)", ch, runs, len(d.chartGeometry.lines[ch]))
+		}
+	}
+	if d.chartGeometry.area == nil {
+		t.Fatal("expected continuous gradient fill area path for 37m28s session")
+	}
+
+	smoothTravel := polylineVerticalVariation(d.chartGeometry.lines[0])
+	d.settings.SmoothChart = false
+	tt.Frame()
+	if runs := countPolylineRuns(d.chartGeometry.lines[0]); runs != 1 {
+		t.Fatalf("37m28s raw chart fragmented into %d runs, want 1 continuous run", runs)
+	}
+	rawTravel := polylineVerticalVariation(d.chartGeometry.lines[0])
+	if smoothTravel >= rawTravel*0.75 {
+		t.Fatalf("expected screen-space smoothing to calm 37m high-frequency ripple: smoothTravel=%.1f rawTravel=%.1f", smoothTravel, rawTravel)
+	}
+
+	d.settings.SmoothChart = true
+	held := d.service.SnapshotWindowSampled(0, 0)
+	d.hold(held)
+	tt.Frame()
+	full := d.chartGeometry.lines[0]
+	rect := d.chartGeometry.key.rect
+	if len(full) < 2 || full[0][0] != rect.X || full[len(full)-1][0] != rect.X+rect.W {
+		t.Fatal("expected smoothing to preserve the endpoints of paused history")
+	}
+
+	d.fullSession = false
+	d.windowSec = 60
+	d.hasViewEnd = true
+	d.viewEnd = 200
+	tt.Frame()
+	pts := d.chartGeometry.lines[0]
+	if len(pts) < 10 {
+		t.Fatalf("expected dense points in zoomed paused sub-window, got %d", len(pts))
+	}
+	if countPolylineRuns(pts) != 1 {
+		t.Fatalf("expected 1 continuous run in paused zoomed sub-window, got %d", countPolylineRuns(pts))
+	}
+	rect = d.chartGeometry.key.rect
+	if pts[0][0] >= rect.X || pts[len(pts)-1][0] <= rect.X+rect.W {
+		t.Fatal("expected the line to extend past both edges for clipping")
 	}
 }

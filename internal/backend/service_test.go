@@ -330,6 +330,49 @@ func TestChartRangesCoverSessionAndReset(t *testing.T) {
 	}
 }
 
+func TestSampledHistoryPreservesVoltageOnFlatPowerAndSegmentEnd(t *testing.T) {
+	service := historyService(t, -1)
+	const total = 10000
+	const maxPoints = 1000
+	const transition = 1 + 300*(total-2)/((maxPoints-2)/2) // Start of a bucket.
+	groups := [...]uint16{0, 1}
+	for index := range total {
+		voltage := 5.0
+		switch index {
+		case 4321:
+			voltage = 20.0
+		case 4322:
+			voltage = 3.3
+		}
+		group := &groups[0]
+		if index >= transition {
+			group = &groups[1]
+		}
+		if err := service.accept(device.Sample{
+			Elapsed: float64(index) / 20,
+			Voltage: voltage,
+			Group:   group,
+		}); err != nil {
+			t.Fatalf("accept(%d): %v", index, err)
+		}
+	}
+
+	sampled := service.SnapshotWindowSampled(0, maxPoints)
+	var sawHighV, sawLowV, sawSeg0End, sawSeg1Start bool
+	for _, sample := range sampled.History {
+		sawHighV = sawHighV || sample.Voltage == 20.0
+		sawLowV = sawLowV || sample.Voltage == 3.3
+		sawSeg0End = sawSeg0End || (sample.Segment == 0 && sample.Elapsed == float64(transition-1)/20)
+		sawSeg1Start = sawSeg1Start || (sample.Segment == 1 && sample.Elapsed == float64(transition)/20)
+	}
+	if !sawHighV || !sawLowV {
+		t.Fatalf("expected flat-power voltage extrema to survive downsampling: high=%v low=%v", sawHighV, sawLowV)
+	}
+	if !sawSeg0End || !sawSeg1Start {
+		t.Fatalf("expected segment boundary pair to survive downsampling: seg0End=%v seg1Start=%v", sawSeg0End, sawSeg1Start)
+	}
+}
+
 func BenchmarkServiceAccept(b *testing.B) {
 	service := historyService(b, 1024)
 	b.ReportAllocs()
