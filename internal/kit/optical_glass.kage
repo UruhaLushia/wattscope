@@ -1,0 +1,200 @@
+package main
+
+var Radius float
+var HalfSize vec2
+var ShapeInset vec2
+var NormalInset vec2
+var Bezel float
+var Refraction float
+var Magnification vec2
+var Dispersion float
+var ToneLow float
+var ToneRange float
+var ToneChroma float
+var ToneCurve float
+var Frost float
+var BevelShade float
+var Hairline float
+var Alpha float
+var Glow float
+var Dark float
+var Tint vec4
+var Touch vec3
+
+func roundNormal(p vec2, q vec2) vec2 {
+	if q.x > 0.0 && q.y > 0.0 {
+		l := length(q)
+		if l > 0.0001 {
+			return sign(p) * (q / l)
+		}
+	}
+	if q.x > q.y {
+		return vec2(sign(p.x), 0.0)
+	}
+	return vec2(0.0, sign(p.y))
+}
+
+func glassTone(c vec3) vec3 {
+	l := dot(c, vec3(0.2126, 0.7152, 0.0722))
+	t := ToneLow + ToneRange*(1.0-pow(max(1.0-l, 0.0001), ToneCurve))
+	return clamp(t+(c-l)*ToneChroma, 0.0, 1.0)
+}
+
+func Fragment(dst vec4, pos vec2) vec4 {
+	cpos := pos - HalfSize
+	absPos := abs(cpos)
+	q := absPos - ShapeInset
+	dist := max(q.x, q.y)
+	if min(q.x, q.y) > 0.0 {
+		dist = length(q)
+	}
+	d := dist - Radius
+	edgeA := clamp(0.5-d*pixelScale(), 0.0, 1.0)
+	if edgeA <= 0.0 {
+		return vec4(0.0, 0.0, 0.0, 0.0)
+	}
+	t := max(-d, 0.0)
+	n := vec2(0.0, 1.0)
+	uv := pos
+	refracts := t < Bezel
+	if Magnification.x != 0.0 || Magnification.y != 0.0 {
+		zoomBlend := vec2(1.0)
+		if refracts {
+			softX := Magnification.x > 0.0 || (Magnification.x < 0.0 && Hairline == 0.0)
+			softY := Magnification.y > 0.0 || (Magnification.y < 0.0 && Hairline == 0.0)
+			if softX || softY {
+				blend := smoothstep(0.0, Bezel*0.85, t)
+				if softX {
+					zoomBlend.x = blend
+				}
+				if softY {
+					zoomBlend.y = blend
+				}
+			}
+		}
+		zoomK := max(1.0+Magnification*zoomBlend, 0.5)
+		uv = HalfSize + cpos/zoomK
+	}
+	uvZoom := uv
+	bend := 0.0
+	u := 0.0
+	if refracts && (Refraction != 0.0 || Dispersion > 0.0 || BevelShade > 0.001) {
+		n = roundNormal(cpos, absPos-NormalInset)
+		u = 1.0 - t/Bezel
+		bend = u * u * (1.8 - 0.8*u)
+		uv -= n * (Refraction * bend)
+	}
+
+	backdrop := backdropSample(uv).rgb
+	col := backdrop
+	if bend > 0.001 && Dispersion > 0.0 {
+		tang := vec2(-n.y, n.x)
+		d := Dispersion * bend * (0.28 + 0.72*u)
+		spread := d * 0.68
+		sIn1 := backdropSample(uv - n*(d*1.15) - tang*spread)
+		sIn2 := backdropSample(uv - n*(d*0.55) + tang*(spread*0.8))
+		sMid1 := backdropSample(uv + tang*(spread*0.85)).g
+		sMid2 := backdropSample(uv - tang*(spread*0.85)).g
+		sOut1 := backdropSample(uv + n*(d*0.55) - tang*(spread*0.8))
+		sOut2 := backdropSample(uv + n*(d*1.15) + tang*spread)
+		col.b = (sIn1.b*0.6 + sIn2.b*0.4)
+		col.g = (backdrop.g + sMid1 + sMid2 + sIn1.g + sIn2.g + sOut1.g + sOut2.g) / 7.0
+		col.r = (sOut1.r*0.4 + sOut2.r*0.6)
+	}
+
+	if ToneCurve > 0.0 {
+		mapped := glassTone(col)
+		if Alpha < 1.0 {
+			mapped = mix(col, mapped, Alpha)
+		}
+		col = mapped
+	}
+
+	if Frost > 0.0 {
+		veil := vec3(1.0, 1.0, 1.0)
+		if Dark >= 0.5 {
+			veil = vec3(0.11, 0.13, 0.17)
+		}
+		col = mix(col, veil, Frost)
+	}
+
+	shaded := BevelShade > 0.001
+	if shaded {
+		// Directional Fresnel bevel depth sits on shaded quadrants only, opposite the light catchlight.
+		if t < 6.5 {
+			w := (t - 2.3) / 1.45
+			cross := abs(n.x*0.7071 - n.y*0.7071)
+			band := exp(-w*w) * BevelShade * (0.28 + 0.72*cross) * (1.0 + 0.12*Glow) * Alpha
+			if Dark < 0.5 {
+				col = mix(col, vec3(0.68, 0.73, 0.80), clamp(band, 0.0, 0.14))
+			} else {
+				col = mix(col, vec3(0.03, 0.05, 0.09), clamp(band, 0.0, 0.34))
+			}
+		}
+		if Glow > 0.01 {
+			dist := length(pos - Touch.xy)
+			if dist < Touch.z {
+				w := 1.0 - dist/Touch.z
+				tg := w * w * 0.06 * min(Glow, 1.2) * Alpha
+				if Dark >= 0.5 {
+					tg *= 0.65
+				}
+				col = mix(col, vec3(1.0, 1.0, 1.0), tg)
+			}
+		}
+	}
+	if Tint.a > 0.0 {
+		col = mix(col, Tint.rgb, Tint.a)
+	}
+	if shaded {
+		if t < 2.2 {
+			rw := (t - 0.80) / 0.55
+			rim := exp(-rw * rw)
+			diag := abs(n.x*(-0.7071) + n.y*(-0.7071))
+			catchlight := 0.32 + 0.68*pow(diag, 1.35)
+			specA := rim * catchlight * (0.58 + 0.22*Glow) * Alpha
+			specCol := vec3(1.0, 1.0, 1.0)
+			if Dark >= 0.5 {
+				specA = rim * catchlight * (0.36 + 0.20*Glow) * Alpha
+				specCol = vec3(0.88, 0.94, 1.0)
+			}
+			col = mix(col, specCol, clamp(specA, 0.0, 0.90))
+		}
+		if Hairline > 0.0 && t < 0.85 {
+			hr := exp(-(t / 0.34) * (t / 0.34)) * Hairline * Alpha
+			if Dark < 0.5 {
+				col = mix(col, vec3(0.18, 0.22, 0.28), hr)
+			} else {
+				col = mix(col, vec3(0.06, 0.09, 0.14), hr)
+			}
+		}
+	} else if Hairline > 0.0 {
+		if t < 1.8 {
+			rw := (t - 0.65) / 0.48
+			rim := exp(-rw * rw)
+			vert := 0.20 + 0.80*abs(n.y)
+			if Dark < 0.5 {
+				col = mix(col, vec3(1.0, 1.0, 1.0), clamp(rim*vert*0.46*Alpha, 0.0, 0.65))
+			} else {
+				col = mix(col, vec3(0.92, 0.96, 1.0), clamp(rim*vert*0.26*Alpha, 0.0, 0.45))
+			}
+		}
+		if t < 1.0 {
+			hr := exp(-(t / 0.40) * (t / 0.40)) * Hairline * Alpha
+			if Dark < 0.5 {
+				col = mix(col, vec3(0.10, 0.14, 0.22), hr)
+			} else {
+				col = mix(col, vec3(1.0, 1.0, 1.0), hr*0.55)
+			}
+		}
+	}
+
+	if Alpha < 0.999 {
+		// Only the refracted rim needs a second sample of the zoomed backdrop.
+		if bend > 0.0 && Refraction != 0.0 {
+			backdrop = backdropSample(uvZoom).rgb
+		}
+		col = mix(backdrop, col, Alpha)
+	}
+	return vec4(col*edgeA, edgeA)
+}

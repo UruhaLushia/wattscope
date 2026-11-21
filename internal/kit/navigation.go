@@ -16,8 +16,8 @@ const (
 
 const (
 	BottomNavHeight         float32 = 56
-	BottomNavStandardHeight float32 = 62
-	BottomNavDockMargin     float32 = 12
+	BottomNavStandardHeight float32 = 58
+	BottomNavDockMargin     float32 = 16
 	DesktopTopNavHeight     float32 = 32
 	desktopTopNavControl    float32 = 26
 	DesktopSidebarWidth     float32 = 196
@@ -42,7 +42,11 @@ func BottomNavReserveFor(bottomInset float32, visible bool, style BottomNavStyle
 	if !visible {
 		return 0
 	}
-	return bottomInset + max(float32(6), BottomNavDockMargin-bottomInset) + BottomNavHeightFor(style)
+	return bottomInset + bottomNavDockGap(bottomInset) + BottomNavHeightFor(style)
+}
+
+func bottomNavDockGap(bottomInset float32) float32 {
+	return max(10, BottomNavDockMargin-bottomInset)
 }
 
 type navPanelMatchKey struct{}
@@ -387,8 +391,9 @@ func SectionTabs(ctx *ui.Context, p Palette, label string, selected int, items [
 const (
 	bottomNavPad             float32 = 7
 	bottomNavGap             float32 = 2
-	bottomNavStdPad          float32 = 5
+	bottomNavStdPad          float32 = 4
 	bottomNavStdGap          float32 = 2
+	bottomNavStdSlot         float32 = 63
 	bottomNavInactiveW       float32 = 44
 	bottomNavIconSize        float32 = 20
 	bottomNavLabelGap        float32 = 6
@@ -461,11 +466,12 @@ func layoutStandardBottomNav(ctx *ui.Context, slots []bottomNavSlot, leftInset, 
 	if availW <= 0 {
 		availW = 390
 	}
-	sidePad := max(float32(14), max(leftInset, rightInset)+8)
-	barW := min(float32(420), max(float32(220), availW-sidePad*2))
-	innerW := max(float32(120), barW-bottomNavStdPad*2)
 	count := len(slots)
-	width := (innerW - bottomNavStdGap*float32(count-1)) / float32(count)
+	fixedW := bottomNavStdGap*float32(count-1) + bottomNavStdPad*2
+	maxBarW := min(344, float32(count)*bottomNavStdSlot+fixedW)
+	sidePad := max(22, max(leftInset, rightInset)+14)
+	barW := min(maxBarW, max(220, availW-sidePad*2))
+	width := (barW - fixedW) / float32(count)
 	layoutBottomNav(slots, bottomNavStdPad, bottomNavStdGap, width, -1, 0)
 	return barW
 }
@@ -509,31 +515,28 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		selected = &scratch
 	}
 	standard := style == BottomNavStandard
+	standardGlass := standard && p.LiquidGlass
+	capsuleGlass := !standard && p.LiquidGlass
 	barHeight := BottomNavHeightFor(style)
 	barPad, barGap := bottomNavPad, bottomNavGap
 	if standard {
 		barPad, barGap = bottomNavStdPad, bottomNavStdGap
+	} else if p.LiquidGlass {
+		barPad = 5
 	}
 	tabHeight := barHeight - barPad*2
 
-	gapAboveSafeArea := max(float32(6), BottomNavDockMargin-bottomInset)
 	dock := ui.Row(ctx.Key(key+"-dock")).Absolute().Left(0).Right(0).Bottom(0).ZIndex(10).
 		Justify(ui.Center).AlignItems(ui.End).PassThrough().
-		Padding(0, 12, gapAboveSafeArea, 12)
+		Padding(0, 12, bottomNavDockGap(bottomInset), 12)
 
 	barSolid := ui.Hex("#f7fafc").Mix(p.Accent, 0.07)
 	barBg := barSolid.Alpha(0.90)
 	barBorder := ui.RGBA(17, 24, 39, 0.08)
 	accentPill := p.Accent.Alpha(0.92).Over(barSolid)
 	stdPillBg := ui.RGBA(15, 23, 42, 0.065)
-	stdPillBorder := ui.Transparent
-	var stdPillShadow ui.Color
 	if standard {
 		barBg = ui.Hex("#ffffff").Alpha(0.96)
-		if p.LiquidGlass {
-			stdPillBorder = ui.RGBA(15, 23, 42, 0.045)
-			stdPillShadow = ui.RGBA(15, 23, 42, 0.08)
-		}
 	}
 	if p.Dark {
 		barSolid = p.SurfaceHi.Mix(p.Accent, 0.09)
@@ -543,12 +546,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		}
 		barBorder = ui.RGBA(255, 255, 255, 0.10)
 		accentPill = p.Accent.Alpha(0.76).Over(barSolid)
-		stdPillBg = ui.RGBA(255, 255, 255, 0.13)
-		if standard && p.LiquidGlass {
-			stdPillBg = ui.RGBA(255, 255, 255, 0.16)
-			stdPillBorder = ui.RGBA(255, 255, 255, 0.16)
-			stdPillShadow = ui.RGBA(0, 0, 0, 0.28)
-		}
+		stdPillBg = ui.RGBA(255, 255, 255, 0.14)
 	}
 	pillInk := AccentInk(accentPill)
 
@@ -564,8 +562,8 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 			})
 		if !p.LiquidGlass {
 			navBarChrome(bar, p, RadiusFull, 0, barBg, barBorder, true)
-		} else {
-			bar.Shadow(0, 4, 16, 0, navShadowColor(p, true))
+		} else if !standard && !p.Dark {
+			bar.Shadow(0, 2, 12, 0, ui.RGBA(12, 18, 30, 0.065))
 		}
 
 		st := ui.Local(bar, "mnb-drag", func() mnbDragState { return mnbDragState{} })
@@ -612,14 +610,18 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		px, py, _ := bar.PointerPosition()
 
 		bar.Children(func() {
-			tabEls := make([]ui.Element, len(items))
+			var inlineTabs [4]ui.Element
+			tabEls := inlineTabs[:]
+			if len(items) > len(tabEls) {
+				tabEls = make([]ui.Element, len(items))
+			}
 			tabPressed := false
 			tabCanceled := false
 			tabDragEnded := false
 			for index, item := range items {
 				tab := tabs.Tab(index).Label(item.Label).Radius(RadiusFull).
 					AlignItems(ui.Center).Justify(ui.Center).Shrink(0).
-					ZIndex(1).Background(ui.Transparent)
+					Background(ui.Transparent)
 				if !p.LiquidGlass {
 					tab.Clip()
 				}
@@ -656,7 +658,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 			}
 
 			curIdx := clamp32Index(*selected, len(items))
-			if st.active {
+			if st.active && !p.LiquidGlass {
 				curIdx = clamp32Index(st.dragIndex, len(items))
 			}
 			var barW float32
@@ -711,12 +713,12 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 			if st.active {
 				displayIndex = clamp32Index(st.dragIndex, len(items))
 			}
-			if !standard && displayIndex != curIdx {
+			if !standard && !p.LiquidGlass && displayIndex != curIdx {
 				barW = layoutBottomNav(slots, barPad, barGap, bottomNavInactiveW, displayIndex, st.widths[displayIndex])
 			}
 
 			capsulePose, capsuleAnim := ui.Pose{}, MotionNav
-			if st.active && barW > 0 {
+			if !p.LiquidGlass && st.active && barW > 0 {
 				var overscroll float32
 				switch {
 				case st.lastX < 0:
@@ -732,59 +734,39 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 
 			pillLeft, pillW := slots[displayIndex].left, slots[displayIndex].width
 			pillBg := accentPill
-			if standard {
+			if standard || p.LiquidGlass {
 				pillBg = stdPillBg
 			}
 			if st.active {
 				innerMin := barPad
 				innerMax := max(innerMin, barW-barPad-pillW)
-				pillLeft = clamp32(st.lastX-pillW/2, innerMin, innerMax)
+				if standard {
+					targetLeft := clamp32(st.lastX-pillW/2, innerMin, innerMax)
+					if standardGlass {
+						pillLeft = targetLeft
+					} else {
+						pillLeft += (targetLeft - pillLeft) * 0.82
+					}
+				} else {
+					delta := clamp32((st.lastX-(pillLeft+pillW/2))*0.18, -5, 5)
+					pillLeft = clamp32(pillLeft+delta, innerMin, innerMax)
+				}
 			}
 
 			pillCheckLeft, pillCheckW := pillLeft, pillW
 			var lens bottomNavLens
 			if p.LiquidGlass {
-				st.applyDockGlass(bar, p, barW, barHeight, anyPressed || st.active)
+				st.applyDockGlass(bar, p, barW, barHeight, anyPressed || st.active, standard)
 				lens = st.animateLens(ctx, bar, ui.Rect{X: pillLeft, Y: barPad, W: pillW, H: tabHeight}, standard, len(items), tabEls[displayIndex].Pressed())
 				pillCheckLeft, pillCheckW = lens.left, lens.width
 
-				fade := 1 - 0.58*lens.alpha
-				if standard {
-					fade = 1 - 0.88*lens.alpha
+				if !ctx.Preferences().ReduceTransparency {
+					pillBg = scaleAlpha(pillBg, 1-lens.alpha)
 				}
-				pillBg = scaleAlpha(pillBg, fade)
 				pill := lens.box(ctx.Key(selKey), 0).
 					Background(bar.AnimateColor("mnb-pill-bg", pillBg, MotionFast))
-				if lens.optics {
-					var tint ui.Color
-					if !standard {
-						tint = GlassAccentTint(p, 0.52, 0.48)
-					}
-					pill.Children(func() {
-						attachLiquidLens(ctx, "mnb-lens", 0, lens.alpha, nil, liquidLensSpec{
-							Tint:      tint,
-							Glow:      lens.glow,
-							Touch:     lens.touch,
-							ClearLens: true,
-							RimBoost:  0.22 * lens.alpha,
-						})
-					})
-				} else {
-					drawRestPillSheen(pill, RadiusFull, p.Dark)
-				}
-				if stdPillBorder.A > 0 {
-					pill.Border(1, scaleAlpha(stdPillBorder, 1-0.75*lens.alpha))
-				}
 				if lens.alpha > 0.01 {
-					shAlpha := float32(0.14) * lens.alpha
-					if p.Dark {
-						shAlpha = 0.34 * lens.alpha
-					}
-					pill.Shadow(0, 3+3*lens.alpha, 10+6*lens.alpha, 0, ui.RGBA(12, 18, 30, shAlpha))
-				} else if stdPillShadow.A > 0 {
-					pill.Shadow(0, 2, 6, 0, stdPillShadow)
-				} else if !standard && p.CardShadow.A > 0 {
-					pill.Shadow(0, 1, 3, 0, p.CardShadow)
+					bottomNavLensShadow(pill, p.Dark, lens.alpha, standard)
 				}
 			} else {
 				st.hasPrev = false
@@ -809,17 +791,24 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					Transition(ui.ElementTransition{
 						Position: true, Size: true, Animation: &pillAnim,
 					}).PassThrough()
-				if stdPillBorder.A > 0 {
-					pill.Border(1, stdPillBorder)
-				}
-				if stdPillShadow.A > 0 {
-					pill.Shadow(0, 2, 8, 0, stdPillShadow)
-				} else if !standard && p.CardShadow.A > 0 && !tabEls[displayIndex].Pressed() {
+				if !standard && p.CardShadow.A > 0 && !tabEls[displayIndex].Pressed() {
 					pill.Shadow(0, 1, 3, 0, p.CardShadow)
 				}
 			}
 
 			hoverBg, pressBg := navInactiveOverlayColors(p, standard)
+			idleFg, activeFg := p.Text.Alpha(0.84), pillInk
+			if standard {
+				idleFg = p.Text.Alpha(0.76)
+			}
+			if standard || p.LiquidGlass {
+				activeFg = p.AccentText
+			}
+
+			lensMoving := st.active || lens.inFlight
+			followLens := standardGlass && lens.optics && lensMoving
+			lensMid := lens.bounds.X + lens.bounds.W*0.5
+			lensHalf := max(lens.bounds.W*0.5, 1)
 
 			for index, item := range items {
 				entry := item
@@ -841,47 +830,87 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					})
 
 				cx := slot.left + slot.width/2
-				coveredByPill := (st.active || lens.inFlight) && cx >= pillCheckLeft+6 && cx <= pillCheckLeft+pillCheckW-6
+				coveredByPill := lensMoving && cx >= pillCheckLeft+6 && cx <= pillCheckLeft+pillCheckW-6
+				pressed := tab.Pressed()
+				tapPressed := !active && !st.active && pressed
+				iconPop := float32(0)
+				if standardGlass {
+					tab.ZIndex(2)
+				} else {
+					if active || coveredByPill {
+						tab.ZIndex(3)
+						iconPop = lens.alpha
+					} else if tapPressed && p.LiquidGlass {
+						tab.ZIndex(3)
+						iconPop = 1.0
+					} else {
+						tab.ZIndex(1)
+					}
+					if capsuleGlass && !StaticSnapshot {
+						tabScale := float32(1)
+						tabScaleAnim := MotionGlassRelease
+						if iconPop > 0.005 {
+							tabScale = 1 + 0.30*clamp32(iconPop, 0, 1.25)
+							tabScaleAnim = MotionGlassPress
+						}
+						tab.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: tabScale}, tabScaleAnim)
+					}
+				}
 
 				var stateBg ui.Color
-				fg := p.Text.Alpha(0.84)
-				if standard {
-					fg = p.Text.Alpha(0.76)
-				}
-				activeFg := pillInk
-				if standard {
-					activeFg = p.AccentText
-				}
+				fg := idleFg
 				colorAnim := MotionNav
-				switch {
-				case active && !st.active && tab.Pressed():
-					if p.LiquidGlass {
+				var lensDistance float32
+				if standardGlass {
+					switch {
+					case followLens:
+						lensDistance = abs32(cx - lensMid)
+						u := clamp32(1-lensDistance/(lensHalf*0.80), 0, 1)
+						cover := u * u * (3 - 2*u)
+						fg = idleFg.Mix(activeFg, clamp32(cover*lens.alpha, 0, 1))
+						colorAnim = MotionFast
+					case active:
 						fg = activeFg
-					} else {
-						fg = activeFg.Alpha(0.90)
+					case tapPressed:
+						stateBg, fg = pressBg, p.Text
+					case !st.active && (tab.Hovered() || tab.FocusVisible()):
+						stateBg, fg = hoverBg, p.Text
 					}
-				case active || coveredByPill:
-					fg = activeFg
-					if st.active || lens.inFlight {
-						colorAnim = MotionFast
-					}
-				case !st.active && tab.Pressed():
-					stateBg, fg = pressBg, p.Text
-				case !st.active && (tab.Hovered() || tab.FocusVisible()):
-					stateBg, fg = hoverBg, p.Text
-				default:
-					if st.active {
-						colorAnim = MotionFast
+				} else {
+					switch {
+					case active && !st.active && pressed:
+						if p.LiquidGlass {
+							fg = activeFg
+						} else {
+							fg = activeFg.Alpha(0.90)
+						}
+					case active || coveredByPill:
+						fg = activeFg
+						if lensMoving {
+							colorAnim = MotionFast
+						}
+					case tapPressed:
+						stateBg, fg = pressBg, p.Text
+					case !st.active && (tab.Hovered() || tab.FocusVisible()):
+						stateBg, fg = hoverBg, p.Text
+					default:
+						if st.active {
+							colorAnim = MotionFast
+						}
 					}
 				}
 
 				tab.Children(func() {
 					if !active && !st.active {
 						if p.LiquidGlass {
-							GlassPillControl(ctx.Key("mnb-state"), tab, p, RadiusFull, ui.Color{}, false, stateBg, 0, ui.Transparent, 0.95)
+							if standard {
+								GlassPillControl(ctx.Key("mnb-state"), tab, p, RadiusFull, ui.Color{}, false, stateBg, 0, ui.Transparent, 0.985)
+							} else if !tapPressed {
+								GlassPillControl(ctx.Key("mnb-state"), tab, p, RadiusFull, ui.Color{}, false, stateBg, 0, ui.Transparent, 0.95)
+							}
 						} else {
 							statePose, stateAnim := ui.Pose{}, MotionNav
-							if tab.Pressed() {
+							if pressed {
 								statePose.Scale = 0.95
 								stateAnim = MotionFast
 							}
@@ -891,20 +920,16 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 						}
 					}
 					if entry.Icon != nil {
-						iconPop := float32(0)
-						if p.LiquidGlass {
-							if active || coveredByPill {
-								iconPop = lens.alpha
-							} else if !st.active && tab.Pressed() {
-								iconPop = 0.85
-							}
-						}
 						GlassIconPop(ui.Icon(ctx, entry.Icon).FontSize(bottomNavIconSize).Shrink(0).
-							TextColor(tab.AnimateColor("mnb-fg", fg, colorAnim)), p, iconPop)
+							TextColor(tab.AnimateColor("mnb-fg", fg, colorAnim)), p, iconPop*0.18)
 					}
 					if standard {
 						weight := 500
-						if active || coveredByPill {
+						emphasized := active || (!standardGlass && coveredByPill)
+						if followLens {
+							emphasized = lensDistance < lensHalf*0.48
+						}
+						if emphasized {
 							weight = 650
 						}
 						AnimatedLabel(ctx, entry.Label).FontSize(11).FontWeight(weight).
@@ -923,27 +948,100 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 							})
 					}
 				})
+				if capsuleGlass && tapPressed {
+					interaction := trackGlassInteraction(tab)
+					dx, dy := bottomNavLensExpand(slot.width, tabHeight, interaction.elastic, 0, false)
+					tapBox := expandGlass(ui.Rect{X: slot.left, Y: barPad, W: slot.width, H: tabHeight}, dx, dy)
+					tap := ui.Box(ctx.Key(mnbTapKey(index))).Absolute().Left(tapBox.X).Top(tapBox.Y).
+						Width(tapBox.W).Height(tapBox.H).ZIndex(2).Radius(RadiusFull).PassThrough()
+					bottomNavLensShadow(tap, p.Dark, interaction.glow, false)
+					drawBottomNavGlass(tap, liquidLensSpec{
+						Alpha: interaction.glow, Glow: interaction.glow, ZoomY: 0.86, Touch: interaction.touch, ClearLens: true,
+					})
+				}
 			}
 
 			if lens.optics {
-				var rimTint ui.Color
-				if !standard {
-					rimTint = p.Accent.Alpha(0.18)
+				spec := liquidLensSpec{
+					Alpha: lens.alpha, Glow: lens.glow, Touch: lens.touch, ClearLens: true,
 				}
-				applyLiquidRim(lens.box(ctx.Key(selKey+"-lens"), 2), p, 1.15+0.3*lens.glow, lens.alpha, lens.glow, lens.touch.X, rimTint)
+				z := 2
+				if standard {
+					const standardZoom = 1.32
+					lensZoom := 1 + 0.32*lens.alpha
+					barScaleY := 1 - 0.05*lens.alpha
+					veil := ui.RGBA(255, 255, 255, 0.52*lens.alpha)
+					if p.Dark {
+						veil = ui.RGBA(34, 40, 54, 0.24*lens.alpha)
+					}
+					drawBottomNavGlass(lens.box(ctx.Key(selKey+"-warp"), 1), liquidLensSpec{
+						Alpha: 1, Tint: veil, Zoom: 1 / lensZoom, ZoomY: barScaleY / lensZoom, WarpOnly: true,
+					})
+					spec.Zoom = standardZoom
+					z = 3
+				} else {
+					spec.ZoomY = 0.86
+				}
+				drawBottomNavGlass(lens.box(ctx.Key(selKey+"-lens"), z), spec)
 			}
 		})
 	})
 }
 
-func (s *mnbDragState) applyDockGlass(bar ui.Element, p Palette, width, height float32, pressed bool) {
+type mnbTapKey int
+
+func bottomNavLensShadow(el ui.Element, dark bool, amount float32, standard bool) {
+	if standard {
+		alpha := float32(0.068)
+		if dark {
+			alpha = 0.26
+		}
+		el.Shadow(0, 2.0*amount, 9.5*amount, 0, ui.RGBA(12, 18, 30, alpha*min(amount, 1)))
+		return
+	}
+	alpha := float32(0.075)
+	if dark {
+		alpha = 0.24
+	}
+	el.Shadow(0, 1.5*amount, 8*amount, 0, ui.RGBA(12, 18, 30, alpha*min(amount, 1)))
+}
+
+func drawBottomNavGlass(el ui.Element, spec liquidLensSpec) {
+	if StaticSnapshot || spec.Alpha <= 0.005 {
+		return
+	}
+	el.Draw(func(p *ui.Painter, box ui.Rect) {
+		paintLiquidGlass(p, box, box.H*0.5, spec)
+	})
+}
+
+func bottomNavLensExpand(width, height, elastic, stretch float32, standard bool) (dx, dy float32) {
+	if standard {
+		dx = clamp32(width*0.26, 15.5, 18.5)*elastic + width*stretch*0.25
+		dy = clamp32(height*0.24, 11.0, 13.0)*elastic - height*stretch*0.05
+		return dx, dy
+	}
+	dx = clamp32(width*0.18, 12.0, 17.0)*elastic + width*stretch*0.38
+	dy = clamp32(height*0.22, 10.0, 12.0)*elastic - height*stretch*0.06
+	return dx, dy
+}
+
+func (s *mnbDragState) applyDockGlass(bar ui.Element, p Palette, width, height float32, pressed, standard bool) {
 	var progress float32
 	if !StaticSnapshot {
 		var target float32
 		if pressed {
 			target = 1
 		}
-		progress = bar.Spring("mnb-bar-press", target, GlassPressAnimation(pressed).Spring)
+		sp := GlassPressAnimation(pressed).Spring
+		if standard {
+			if pressed {
+				sp = ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.14}
+			} else {
+				sp = ui.SpringOptions{Duration: 280 * time.Millisecond, Bounce: 0.16}
+			}
+		}
+		progress = bar.Spring("mnb-bar-press", target, sp)
 	}
 	glow := clamp32(progress, 0, 1.25)
 	touch := ui.Point{X: 0.5, Y: 0.5}
@@ -956,8 +1054,13 @@ func (s *mnbDragState) applyDockGlass(bar ui.Element, p Palette, width, height f
 		glow:    glow,
 		touch:   touch,
 	}})
-	if glow > 0.01 {
-		bar.Shadow(0, 4+2*glow, 16+6*glow, 0, navShadowColor(p, true))
+	if !p.Dark {
+		if standard {
+			g := clamp32(glow, 0, 1)
+			bar.Shadow(0, 2+1.0*g, 11+2*g, 0, ui.RGBA(12, 18, 30, 0.052-0.014*g))
+		} else if glow > 0.01 {
+			bar.Shadow(0, 3+2*glow, 12+4*glow, 0, ui.RGBA(12, 18, 30, 0.06+0.04*glow))
+		}
 	}
 }
 
@@ -988,15 +1091,25 @@ func (s *mnbDragState) animateLens(ctx *ui.Context, bar ui.Element, target ui.Re
 		s.hasPrev, s.lastStandard, s.lastCount = true, standard, count
 	} else {
 		posSpring := MotionGlassScrub.Spring
-		if s.active {
-			posSpring = ui.SpringOptions{Duration: 95 * time.Millisecond, Bounce: 0.14}
+		if standard {
+			if s.active {
+				posSpring = ui.SpringOptions{Duration: 40 * time.Millisecond, Bounce: 0}
+			} else {
+				posSpring = ui.SpringOptions{Duration: 190 * time.Millisecond, Bounce: 0.14}
+			}
+		} else if s.active {
+			posSpring = ui.SpringOptions{Duration: 155 * time.Millisecond, Bounce: 0.16}
 		}
 		left = bar.Spring("mnb-px", left, posSpring)
 		width = bar.Spring("mnb-pw", width, MotionGlassScrub.Spring)
 		var stretchTarget float32
 		if dt := now.Sub(s.lastTime).Seconds(); dt > 0.0005 && dt < 0.25 {
 			speed := abs32(left-s.prevLeft) / float32(dt)
-			stretchTarget = clamp32(speed/750, 0, 0.20)
+			if standard {
+				stretchTarget = clamp32(speed/1400, 0, 0.10)
+			} else {
+				stretchTarget = clamp32(speed/750, 0, 0.20)
+			}
 		}
 		stretch = clamp32(bar.Spring("mnb-stretch", stretchTarget, MotionGlassScrub.Spring), 0, 0.24)
 		inFlight = abs32(left-target.X) > 3 || abs32(width-target.W) > 3
@@ -1005,15 +1118,22 @@ func (s *mnbDragState) animateLens(ctx *ui.Context, bar ui.Element, target ui.Re
 		case s.active || tabPressed:
 			liftTarget = 1
 		case inFlight:
-			liftTarget = 0.72
+			liftTarget = 0.76
 		}
-		lift = bar.Spring("mnb-lift", liftTarget, GlassPressAnimation(liftTarget > 0.5).Spring)
+		liftSpring := GlassPressAnimation(liftTarget > 0.5).Spring
+		if standard {
+			if liftTarget > 0.5 {
+				liftSpring = ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.16}
+			} else {
+				liftSpring = ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.18}
+			}
+		}
+		lift = bar.Spring("mnb-lift", liftTarget, liftSpring)
 	}
 	s.prevLeft, s.lastTime = left, now
 	alpha := clamp32(lift, 0, 1)
 	elastic := clamp32(lift, -0.18, 1.28)
-	dx := clamp32(width*0.075, 5, 10)*elastic + width*stretch*0.48
-	dy := clamp32(target.H*0.14, 5.5, 8.0)*elastic - target.H*stretch*0.10
+	dx, dy := bottomNavLensExpand(width, target.H, elastic, stretch, standard)
 	r := expandGlass(ui.Rect{X: left, Y: target.Y, W: width, H: target.H}, dx, dy)
 	touch := ui.Point{X: 0.5, Y: 0.5}
 	optics := alpha > 0.005 && !ctx.Preferences().ReduceTransparency

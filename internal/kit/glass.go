@@ -53,13 +53,13 @@ func GlassFloatingButton(el ui.Element, p Palette, radius float32, tint ui.Color
 		return GlassFloating(el, p, radius, 0, tint, false, fallbackBg, fallbackBorder)
 	}
 	state := trackGlassInteraction(el)
-	glow, hover := state.glow, state.hover
-	alpha := 0.08 + 0.07*glow + 0.02*hover
-	if p.Dark {
-		alpha = 0.24*glow + 0.06*hover
-	}
-	if alpha > 0.005 && (!p.Dark || glow > 0.01 || hover > 0.01) {
-		el.Shadow(0, 2+3*glow, 6+9*glow, 0, ui.RGBA(12, 18, 30, clamp32(alpha, 0, 0.45)))
+	if !StaticSnapshot {
+		anim := MotionGlassRelease
+		if el.Pressed() && !el.IsDisabled() {
+			anim = MotionGlassPress
+		}
+		scale := 1 + 0.18*clamp32(state.elastic, -0.15, 1.25)
+		el.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: scale}, anim)
 	}
 	return el.Radius(radius).Material(interactiveGlass{
 		base:             glass.Glass{Tint: tint},
@@ -78,22 +78,25 @@ func GlassBarChrome(el ui.Element, p Palette, fallbackBg, fallbackBorder ui.Colo
 	return el
 }
 
-func GlassScrollEdge(ctx *ui.Context, p Palette, bottom bool, offset, height float32, zIndex int) {
+var glassScrollBlur = glass.Blur{
+	Radius: 6,
+	Mask:   &ui.LinearGradient{From: ui.RGB(0, 0, 0), To: ui.Transparent, Angle: 180},
+}
+
+func GlassScrollEdge(ctx *ui.Context, p Palette, offset, height float32, zIndex int) {
 	if !p.LiquidGlass || height <= 0 {
 		return
 	}
-	key := "scroll-edge-top"
-	if bottom {
-		key = "scroll-edge-bottom"
-	}
-	edge := ui.Box(ctx.Key(key)).Absolute().Left(0).Right(0).Height(height).
+	ui.Box(ctx.Key("scroll-edge-top")).Absolute().Left(0).Right(0).Top(offset).Height(height).
 		ZIndex(zIndex).PassThrough().
-		Material(glass.ScrollEdge{Bottom: bottom, Background: p.Canvas})
-	if bottom {
-		edge.Bottom(offset)
-	} else {
-		edge.Top(offset)
-	}
+		Material(glassScrollBlur).
+		Draw(func(painter *ui.Painter, box ui.Rect) {
+			painter.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+				{Color: p.Canvas.Alpha(0.38), At: 0},
+				{Color: p.Canvas.Alpha(0.08), At: 0.45},
+				{Color: ui.Transparent, At: 1},
+			}}, 0)
+		})
 }
 
 func GlassAccentTint(p Palette, lightAlpha, darkAlpha float32) ui.Color {

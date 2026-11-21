@@ -211,10 +211,7 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 				}
 			})
 			if p.LiquidGlass {
-				kit.GlassScrollEdge(ctx, p, false, -topInset, mobileHeaderHeight+topInset+10, 8)
-				if hasBottomBar {
-					kit.GlassScrollEdge(ctx, p, true, -bottomInset, navReserve+10, 8)
-				}
+				kit.GlassScrollEdge(ctx, p, -topInset, mobileHeaderHeight+topInset+10, 8)
 				d.mobileTopBar(ctx, p, msgs, mobileTitle, name, status, tone, topInset, rightInset, leftInset)
 				if hasBottomBar {
 					d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, bottomInset, leftInset, rightInset)
@@ -241,7 +238,7 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 				desktopContent.Children(pageContent)
 			})
 			if p.LiquidGlass {
-				kit.GlassScrollEdge(ctx, p, false, 0, headerHeight+10, 8)
+				kit.GlassScrollEdge(ctx, p, 0, headerHeight+10, 8)
 				d.desktopHeader(ctx, p, msgs, name, status, tone, topPages)
 			}
 		}
@@ -298,9 +295,6 @@ func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locale
 	}
 	kit.ControlMotion(pill)
 	if p.LiquidGlass {
-		if !p.Dark && p.CardShadow.A > 0 {
-			pill.Shadow(0, 2, 8, 0, p.CardShadow)
-		}
 		kit.GlassFloatingButton(pill, p, kit.RadiusFull, ui.Color{}, pillBg, p.LineSoft)
 	} else {
 		pill.Background(pill.AnimateColor("pill-bg", pillBg, kit.MotionFast)).Border(1, p.LineSoft)
@@ -341,9 +335,6 @@ func (d *dashboard) mobileTopBar(ctx *ui.Context, p kit.Palette, msgs locales.Me
 					Label(msgs.GuiBack()).Tooltip(msgs.GuiBack()).OnClick(func() {
 					d.goPage(pageMore)
 				})
-				if !p.Dark && p.CardShadow.A > 0 {
-					back.Shadow(0, 2, 8, 0, p.CardShadow)
-				}
 				kit.ControlMotion(kit.GlassFloatingButton(back, p, kit.RadiusFull, ui.Color{}, p.Surface, p.LineSoft)).Children(func() {
 					pop := float32(0)
 					if back.Pressed() {
