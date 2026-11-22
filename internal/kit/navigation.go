@@ -1,7 +1,6 @@
 package kit
 
 import (
-	"math"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -130,6 +129,13 @@ func navInactiveOverlayColors(p Palette, standard bool) (hoverBg, pressBg ui.Col
 	return ui.RGBA(15, 23, 42, 0.045), ui.RGBA(15, 23, 42, 0.085)
 }
 
+func glassNavPillBg(p Palette) ui.Color {
+	if p.Dark {
+		return ui.RGBA(255, 255, 255, 0.14)
+	}
+	return ui.RGBA(15, 23, 42, 0.065)
+}
+
 type DesktopNavOptions struct {
 	Sidebar       bool
 	IconsOnly     bool
@@ -141,10 +147,18 @@ type DesktopNavOptions struct {
 	ToggleTooltip string
 }
 
+type desktopNavScrubState struct {
+	navScrubState
+	slots []navSlot
+}
+
 // DesktopNav renders desktop navigation as either a floating header capsule or
 // an Apple-style floating inset sidebar card, keeping element identity alive
 // across transitions so every destination flies cleanly between layouts.
 func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items []NavTab, opts DesktopNavOptions) {
+	if len(items) == 0 {
+		return
+	}
 	if selected == nil {
 		var scratch int
 		selected = &scratch
@@ -156,6 +170,9 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 
 	tabs := ui.TabsBase(ctx.Key(navKey), selected, len(items))
 	bar := tabs.List.Label(label)
+	if opts.Sidebar {
+		bar.FocusGroup(ui.Vertical)
+	}
 	if !IsOrientationRotating(ctx) {
 		bar.Transition(navMatchTransition(ctx, navPanelMatchKey{}, true))
 	} else {
@@ -173,19 +190,19 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 	}
 	topBarH := DesktopNavTopBarHeight(opts.Touch)
 	topCtrlH := DesktopNavTopControlHeight(opts.Touch)
+	railW := DesktopSidebarRailWidth(opts.IconsOnly, winH)
+	sideMargin, sidePad, sideGap := CompactSidebarSideMargin(winH), float32(8), float32(3)
+	if compactSidebar {
+		sidePad, sideGap = 6, 2
+	}
 
 	if opts.Sidebar {
-		railW := DesktopSidebarRailWidth(opts.IconsOnly, winH)
 		sideRadius := RadiusL + 2
 		if p.LiquidGlass {
 			sideRadius = RadiusXL
 		}
-		sideMargin, sidePad, sideGap := CompactSidebarSideMargin(winH), float32(8), float32(3)
-		if compactSidebar {
-			sidePad, sideGap = 6, 2
-			if opts.IconsOnly {
-				sideRadius = RadiusM + sidePad
-			}
+		if compactSidebar && opts.IconsOnly {
+			sideRadius = RadiusM + sidePad
 		}
 		bar.Column().Width(railW).Shrink(0).
 			Margin(sideMargin, 0, sideMargin, sideMargin).
@@ -217,6 +234,29 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			desktopNavToggle(ctx, p, opts, compactSidebar, topCtrlH)
 		}
 
+		axis, stripGap := navAxisHorizontal, float32(2)
+		var tabsStrip ui.Element
+		if opts.Sidebar {
+			axis, stripGap = navAxisVertical, sideGap
+			tabsStrip = ui.Column(ctx.Key("dnav-strip")).Gap(stripGap)
+			if opts.IconsOnly {
+				tabsStrip.AlignItems(ui.Center).Shrink(0)
+			} else {
+				tabsStrip.FillWidth().AlignItems(ui.Start)
+			}
+			tabsStrip.Draggable(nil, ui.DraggableOptions{Axis: ui.Vertical, Bounds: &ui.Rect{}, Rigid: true})
+		} else {
+			tabsStrip = ui.Row(ctx.Key("dnav-strip")).AlignItems(ui.Center).Gap(stripGap).Shrink(0).
+				Draggable(nil, ui.DraggableOptions{Axis: ui.Horizontal, Bounds: &ui.Rect{}, Rigid: true})
+		}
+
+		st := ui.Local(tabsStrip, "dnav-scrub", func() desktopNavScrubState { return desktopNavScrubState{} })
+		if len(st.slots) != len(items) {
+			st.slots = make([]navSlot, len(items))
+		}
+		tabsStrip.ObserveInput(st.observePointer(axis, stripGap, st.slots, *selected, len(items), true))
+		stripBounds := tabsStrip.LayoutBounds()
+
 		tabRadius := RadiusS
 		switch {
 		case opts.Sidebar && p.LiquidGlass:
@@ -226,23 +266,370 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 		case p.LiquidGlass || opts.Touch:
 			tabRadius = topCtrlH / 2
 		}
-		for index, entry := range items {
-			hasChildren := opts.Sidebar && !opts.IconsOnly && len(entry.Children) > 0
-			open := hasChildren && (index == *selected || entry.Selected >= 0)
-			active := index == *selected && !hasChildren
-			if !hasChildren {
-				desktopNavTab(ctx, p, tabs.Tab(index), index, entry, opts, tabRadius, sideTabH, topCtrlH, selKey, active, false, false)
-				continue
+
+		tabsStrip.Children(func() {
+			var inlineTabs [8]ui.Element
+			var inlineCols [8]ui.Element
+			tabEls := inlineTabs[:0]
+			secCols := inlineCols[:0]
+			if len(items) > len(inlineTabs) {
+				tabEls = make([]ui.Element, 0, len(items))
+				secCols = make([]ui.Element, 0, len(items))
 			}
 
-			ui.Column(ctx.Key("sec-" + entry.Label)).FillWidth().Gap(0).Children(func() {
-				desktopNavTab(ctx, p, tabs.Tab(index), index, entry, opts, tabRadius, sideTabH, topCtrlH, selKey, active, true, open)
-				if open {
-					desktopNavSubItems(ctx, p, entry, subRowH)
+			for index, entry := range items {
+				hasChildren := opts.Sidebar && !opts.IconsOnly && len(entry.Children) > 0
+				open := hasChildren && (index == *selected || entry.Selected >= 0)
+				var secCol, tab ui.Element
+				createTab := func() {
+					tab = tabs.Tab(index).Label(entry.Label).
+						Radius(tabRadius).AlignItems(ui.Center).Gap(opts.TabGap).
+						Background(ui.Transparent).
+						Transition(navMatchTransition(ctx, navTabMatchKey{index: index}, false))
+					if hasChildren {
+						tab.Expanded(open)
+					}
+					if opts.Sidebar {
+						if opts.IconsOnly {
+							tab.Size(sideTabH, sideTabH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
+						} else {
+							tab.FillWidth().Height(sideTabH).Padding(0, 10)
+						}
+					} else {
+						if opts.IconsOnly {
+							tab.Size(topCtrlH, topCtrlH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
+						} else {
+							tab.Height(topCtrlH).Padding(0, opts.TabPad).Shrink(0)
+						}
+					}
 				}
-			})
-		}
+				if hasChildren {
+					secCol = ui.Column(ctx.Key("sec-" + entry.Label)).FillWidth().Gap(0)
+					secCol.Children(createTab)
+				} else {
+					createTab()
+				}
+				tabEls = append(tabEls, tab)
+				secCols = append(secCols, secCol)
+			}
+
+			mode := desktopNavMode(opts, p.LiquidGlass, compactSidebar)
+			modeChanged := !st.hasPrev || st.lastMode != mode || st.lastCount != len(items)
+			sideBorder := float32(0)
+			if !p.LiquidGlass {
+				sideBorder = 2
+			}
+			stripMain, stripCross, crossOff := resolveDesktopNavSlots(ctx, st.slots, tabEls, items, opts, stripBounds, stripGap, sideTabH, subRowH, topCtrlH, railW-2*sidePad-sideBorder, *selected, modeChanged)
+
+			displayIndex, _ := st.stepTabs(ctx, tabsStrip, tabEls, axis, stripGap, st.slots, p.LiquidGlass, true, selected, items)
+
+			if !p.LiquidGlass && !IsOrientationRotating(ctx) {
+				stripPose, stripAnim := navSolidScrubPose(axis, st.active, navMainCoord(axis, st.lastX, st.lastY), stripMain, 3.0, 6)
+				tabsStrip.TransformOrigin(0.5, 0.5).AnimatePose(stripPose, stripAnim)
+			}
+
+			pillStart, pillExtent := st.slots[displayIndex].start, st.slots[displayIndex].extent
+			lastMain := navMainCoord(axis, st.lastX, st.lastY)
+			if st.active {
+				pillStart = clamp32(lastMain-pillExtent*0.5, 0, max(0, stripMain-pillExtent))
+			}
+			hasChildrenAtDisplay := opts.Sidebar && !opts.IconsOnly && len(items[displayIndex].Children) > 0
+			showRestPill := !hasChildrenAtDisplay || st.active
+
+			reduceTransparency := ctx.Preferences().ReduceTransparency
+			target := ui.Rect{X: pillStart, Y: crossOff, W: pillExtent, H: stripCross}
+			if opts.Sidebar {
+				target = ui.Rect{X: crossOff, Y: pillStart, W: stripCross, H: pillExtent}
+			}
+			var lens navGlassLens
+			if p.LiquidGlass {
+				lens = st.animateGlassLens(ctx, tabsStrip, navLensConfig{
+					axis: axis, target: target, mode: mode, count: len(items), keyPrefix: "dnav",
+					style: navLensDesktopStyle, tabPressed: tabEls[displayIndex].Pressed(),
+					restHidden: !showRestPill, forceJump: modeChanged,
+					expand: func(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32) {
+						return desktopNavLensExpand(axis, mainExt, crossExt, elastic, stretch)
+					},
+				})
+				if showRestPill || lens.alpha > 0.01 {
+					restPillBg := glassNavPillBg(p)
+					pillBg := restPillBg
+					if !reduceTransparency {
+						if !showRestPill {
+							pillBg = ui.Transparent
+						} else {
+							pillBg = scaleAlpha(restPillBg, 1-lens.alpha)
+						}
+					}
+					pill := lens.box(ctx.Key(selKey), tabRadius, 0).
+						Background(tabsStrip.AnimateColor("dnav-pill-bg", pillBg, MotionFast))
+					if !opts.Sidebar && p.CardShadow.A > 0 && lens.alpha < 0.5 && showRestPill {
+						pill.Shadow(0, 1, 2, 0, scaleAlpha(p.CardShadow, 1-lens.alpha))
+					}
+				}
+			} else {
+				st.hasPrev, st.lastMode, st.lastCount = true, mode, len(items)
+				if showRestPill {
+					pillBg, pillPose, pillAnim, pillPoseAnim := navSolidPillFeedback(
+						st.active, tabEls[displayIndex].Pressed(), lastMain, stripMain,
+						p.TrackOn, p.Text, 0.08, 0.10,
+					)
+					pill := ui.Box(ctx.Key(selKey)).Absolute().Left(target.X).Top(target.Y).Width(target.W).Height(target.H).
+						ZIndex(0).Radius(tabRadius).TransformOrigin(0.5, 0.5).AnimatePose(pillPose, pillPoseAnim).
+						Background(tabsStrip.AnimateColor("dnav-pill-bg", pillBg, MotionFast)).PassThrough()
+					if !modeChanged && !IsStaticSnapshot(ctx) && !IsScaleReflow(ctx) {
+						pill.Transition(ui.ElementTransition{Position: true, Size: true, Animation: &pillAnim})
+					}
+					if !opts.Sidebar && p.CardShadow.A > 0 && !tabEls[displayIndex].Pressed() && !st.active {
+						pill.Shadow(0, 1, 2, 0, p.CardShadow)
+					}
+				}
+			}
+
+			lensMoving := st.active || lens.inFlight
+			glassOptics := p.LiquidGlass && !reduceTransparency
+			hoverBg, pressBg := navInactiveOverlayColors(p, p.LiquidGlass)
+			idleFg, activeFg := p.Muted, p.TrackOnInk
+			if p.LiquidGlass {
+				idleFg, activeFg = p.Text.Alpha(0.76), p.AccentText
+			}
+			lensMid := lens.bounds.X + lens.bounds.W*0.5
+			lensHalf := max(lens.bounds.W*0.5, 1)
+			if opts.Sidebar {
+				lensMid = lens.bounds.Y + lens.bounds.H*0.5
+				lensHalf = max(lens.bounds.H*0.5, 1)
+			}
+
+			for index, item := range items {
+				entry := item
+				hasChildren := opts.Sidebar && !opts.IconsOnly && len(entry.Children) > 0
+				open := hasChildren && (index == *selected || entry.Selected >= 0)
+				active := index == displayIndex && !hasChildren
+				tab := tabEls[index].OnClick(navTabClick(&st.navScrubState, entry.OnSelect))
+
+				cMain := st.slots[index].start + st.slots[index].extent*0.5
+				u := clamp32(1-abs32(cMain-lensMid)/(lensHalf*0.85), 0, 1)
+				cover := u * u * (3 - 2*u)
+				pressed := tab.Pressed()
+
+				var stateBg ui.Color
+				fg, weight := idleFg, 550
+				colorAnim := MotionNav
+				iconPop := float32(0)
+
+				z := 1
+				if glassOptics {
+					z = 2
+				}
+				tab.ZIndex(z)
+				if hasChildren {
+					secCols[index].ZIndex(z)
+				}
+
+				handled := false
+				if glassOptics {
+					switch {
+					case lensMoving:
+						handled, colorAnim = true, MotionFast
+						fg = idleFg.Mix(activeFg, clamp32(cover*lens.alpha, 0, 1))
+						if open && cover < 0.5 {
+							fg, weight = p.AccentText, 600
+						}
+						iconPop = cover * lens.alpha
+					case active:
+						handled, fg = true, activeFg
+						if pressed {
+							iconPop = max(lens.alpha, 1)
+						} else if lens.alpha > 0.01 {
+							iconPop = cover * lens.alpha
+						}
+					}
+				} else {
+					covered := active || (p.LiquidGlass && lensMoving && cover > 0.5)
+					switch {
+					case active && !st.active && pressed:
+						handled, fg = true, activeFg
+						if !p.LiquidGlass {
+							fg = activeFg.Alpha(0.90)
+						}
+					case covered:
+						handled, fg = true, activeFg
+						if lensMoving {
+							colorAnim = MotionFast
+						}
+					}
+				}
+				if !handled {
+					allowHover := glassOptics || !st.active
+					switch {
+					case open && allowHover && pressed:
+						stateBg, fg, weight = pressBg, p.AccentText, 600
+					case open && allowHover && (tab.Hovered() || tab.FocusVisible()):
+						stateBg, fg, weight = hoverBg, p.AccentText, 600
+					case open:
+						fg, weight = p.AccentText, 600
+					case allowHover && pressed:
+						stateBg, fg = pressBg, p.Text
+					case allowHover && (tab.Hovered() || tab.FocusVisible()):
+						stateBg, fg = hoverBg, p.Text
+					case st.active:
+						colorAnim = MotionFast
+					}
+					if glassOptics && pressed {
+						iconPop = 1
+					}
+				}
+
+				tab.Children(func() {
+					if !active && !st.active {
+						GlassPillControl(ctx.Key("tab-state"), tab, p, tabRadius, ui.Color{}, false, stateBg, 0, ui.Transparent, 0.95)
+					}
+					if entry.Icon != nil {
+						iconSize := float32(15)
+						if opts.Sidebar {
+							iconSize = 17
+						}
+						GlassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(iconSize).
+							TextColor(tab.AnimateColor("tab-fg", fg, colorAnim)), p, iconPop)
+					}
+					if !opts.IconsOnly {
+						AnimatedLabel(ctx, entry.Label).FontSize(13).FontWeight(weight).SingleLine().Shrink(0).
+							TextColor(tab.AnimateColor("tab-text", fg, colorAnim))
+					}
+				})
+
+				if open {
+					secCols[index].Children(func() {
+						desktopNavSubItems(ctx, p, entry, subRowH)
+					})
+				}
+			}
+
+			if lens.optics {
+				lensRadius := max(1, tabRadius+max(lens.padCross, 0))
+				lensEl := lens.box(ctx.Key(selKey+"-lens"), lensRadius, 3)
+				navLensShadow(lensEl, p.Dark, lens.alpha, false)
+				spec := liquidLensSpec{
+					Alpha:     lens.alpha,
+					Glow:      lens.glow,
+					Touch:     lens.touch,
+					ClearLens: true,
+				}
+				if opts.Sidebar {
+					spec.Zoom = 0.90
+					spec.ZoomY = 1 + 0.14*lens.alpha
+				} else {
+					spec.Zoom = 1 + 0.14*lens.alpha
+					spec.ZoomY = 0.90
+				}
+				drawNavGlassLens(ctx, lensEl, lensRadius, spec)
+			}
+		})
 	})
+}
+
+func desktopNavMode(opts DesktopNavOptions, liquidGlass, compactSidebar bool) uint8 {
+	var mode uint8
+	if opts.Sidebar {
+		mode |= 1
+	}
+	if opts.IconsOnly {
+		mode |= 2
+	}
+	if liquidGlass {
+		mode |= 4
+	}
+	if opts.Touch {
+		mode |= 8
+	}
+	if compactSidebar {
+		mode |= 16
+	}
+	return mode
+}
+
+func resolveDesktopNavSlots(
+	ctx *ui.Context,
+	slots []navSlot,
+	tabEls []ui.Element,
+	items []NavTab,
+	opts DesktopNavOptions,
+	stripBounds ui.Rect,
+	stripGap, sideTabH, subRowH, topCtrlH, sideFullW float32,
+	selected int,
+	modeChanged bool,
+) (stripMain, stripCross, crossOff float32) {
+	if !modeChanged && stripBounds.W > 0 && stripBounds.H > 0 {
+		allValid := true
+		for i, tab := range tabEls {
+			tb := tab.LayoutBounds()
+			if tb.W <= 0 || tb.H <= 0 {
+				allValid = false
+				break
+			}
+			if opts.Sidebar {
+				slots[i] = navSlot{start: tb.Y - stripBounds.Y, extent: tb.H}
+			} else {
+				slots[i] = navSlot{start: tb.X - stripBounds.X, extent: tb.W}
+			}
+		}
+		if allValid {
+			tb0 := tabEls[0].LayoutBounds()
+			if opts.Sidebar {
+				return stripBounds.H, tb0.W, tb0.X - stripBounds.X
+			}
+			return stripBounds.W, tb0.H, tb0.Y - stripBounds.Y
+		}
+	}
+
+	if opts.Sidebar {
+		y := float32(0)
+		for i, entry := range items {
+			slots[i] = navSlot{start: y, extent: sideTabH}
+			y += sideTabH
+			if !opts.IconsOnly && len(entry.Children) > 0 && (i == selected || entry.Selected >= 0) {
+				nSub := len(entry.Children)
+				y += 4 + float32(nSub)*subRowH + float32(max(0, nSub-1))*3
+			}
+			if i+1 < len(items) {
+				y += stripGap
+			}
+		}
+		cross := sideTabH
+		if !opts.IconsOnly {
+			cross = sideFullW
+		}
+		return y, cross, 0
+	}
+
+	x := float32(0)
+	for i, entry := range items {
+		w := topCtrlH
+		if !opts.IconsOnly {
+			tw, _ := ctx.MeasureText(1<<20, ui.Span{Text: entry.Label, Size: 13, Weight: 550})
+			w = 2*opts.TabPad + tw
+			if entry.Icon != nil {
+				w += 15 + opts.TabGap
+			}
+		}
+		slots[i] = navSlot{start: x, extent: w}
+		x += w
+		if i+1 < len(items) {
+			x += stripGap
+		}
+	}
+	return x, topCtrlH, 0
+}
+
+func desktopNavLensExpand(axis navScrubAxis, mainExtent, crossExtent, elastic, stretch float32) (dx, dy, padCross float32) {
+	if axis == navAxisVertical {
+		mainEx := clamp32(mainExtent*0.22, 6.0, 10.5)*elastic + mainExtent*stretch*0.35
+		crossEx := clamp32(crossExtent*0.08, 4.0, 7.5)*elastic - min(crossExtent, 48)*stretch*0.04
+		return crossEx, mainEx, crossEx
+	}
+	mainEx := clamp32(mainExtent*0.18, 6.0, 13.0)*elastic + mainExtent*stretch*0.32
+	crossEx := clamp32(crossExtent*0.20, 4.5, 7.5)*elastic - crossExtent*stretch*0.05
+	return mainEx, crossEx, crossEx
 }
 
 func desktopNavToggle(ctx *ui.Context, p Palette, opts DesktopNavOptions, compactSidebar bool, topCtrlH float32) {
@@ -291,94 +678,6 @@ func desktopNavToggle(ctx *ui.Context, p Palette, opts DesktopNavOptions, compac
 		}
 		GlassIconPop(ctx, ui.Icon(ctx, toggleIcon).FontSize(15).
 			TextColor(toggle.AnimateColor("ntog-fg", fg, MotionFast)), p, pop)
-	})
-}
-
-func desktopNavTab(
-	ctx *ui.Context,
-	p Palette,
-	tab ui.Element,
-	index int,
-	entry NavTab,
-	opts DesktopNavOptions,
-	tabRadius, sideTabH, topCtrlH float32,
-	selKey string,
-	active, hasChildren, open bool,
-) {
-	tab = tab.Label(entry.Label).
-		Radius(tabRadius).AlignItems(ui.Center).Gap(opts.TabGap).
-		Background(ui.Transparent).
-		Transition(navMatchTransition(ctx, navTabMatchKey{index: index}, false)).
-		OnClick(entry.OnSelect)
-	if hasChildren {
-		tab.Expanded(open)
-	}
-
-	if opts.Sidebar {
-		if opts.IconsOnly {
-			tab.Size(sideTabH, sideTabH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
-		} else {
-			tab.FillWidth().Height(sideTabH).Padding(0, 10)
-		}
-	} else {
-		if opts.IconsOnly {
-			tab.Size(topCtrlH, topCtrlH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
-		} else {
-			tab.Height(topCtrlH).Padding(0, opts.TabPad).Shrink(0)
-		}
-	}
-
-	var bg ui.Color
-	fg, weight := p.Muted, 550
-	switch {
-	case active && tab.Pressed():
-		tab.ZIndex(0)
-		fg = p.TrackOnInk.Alpha(0.90)
-	case active:
-		tab.ZIndex(0)
-		fg = p.TrackOnInk
-	case open && tab.Pressed():
-		tab.ZIndex(1)
-		bg, fg, weight = p.Press, p.AccentText, 600
-	case open && (tab.Hovered() || tab.FocusVisible()):
-		tab.ZIndex(1)
-		bg, fg, weight = p.Hover, p.AccentText, 600
-	case open:
-		tab.ZIndex(1)
-		fg, weight = p.AccentText, 600
-	case tab.Pressed():
-		tab.ZIndex(1)
-		bg, fg = p.Press, p.Text
-	case tab.Hovered() || tab.FocusVisible():
-		tab.ZIndex(1)
-		bg, fg = p.Hover, p.Text
-	default:
-		tab.ZIndex(1)
-	}
-
-	tab.Children(func() {
-		if active {
-			GlassSelectionPill(ctx.Key(selKey), tab, p, tabRadius, p.TrackOn, selKey, !opts.Sidebar)
-		} else {
-			GlassPillControl(ctx.Key("tab-state"), tab, p, tabRadius, ui.Color{}, false, bg, 0, ui.Transparent, 0.95)
-		}
-		if entry.Icon != nil {
-			iconSize := float32(15)
-			if opts.Sidebar {
-				iconSize = 17
-			}
-			pop := float32(0)
-			if tab.Pressed() {
-				pop = 1
-			}
-			GlassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(iconSize).
-				TextColor(tab.AnimateColor("tab-fg", fg, MotionNav)), p, pop)
-		}
-		if opts.IconsOnly {
-			return
-		}
-		AnimatedLabel(ctx, entry.Label).FontSize(13).FontWeight(weight).SingleLine().Shrink(0).
-			TextColor(tab.AnimateColor("tab-text", fg, MotionNav))
 	})
 }
 
@@ -447,6 +746,7 @@ func SectionTabs(ctx *ui.Context, p Palette, label string, selected int, items [
 	if p.LiquidGlass {
 		tabRadius = RadiusFull
 	}
+	hoverBg, pressBg := navInactiveOverlayColors(p, p.LiquidGlass)
 	ui.Row(ctx).Role(ui.RoleTabList).FocusGroup(ui.Horizontal).Label(label).Gap(4).AlignItems(ui.Center).Children(func() {
 		for index, item := range items {
 			active := index == selected
@@ -458,12 +758,18 @@ func SectionTabs(ctx *ui.Context, p Palette, label string, selected int, items [
 			visibleAtRest := false
 			switch {
 			case active:
-				bg, fg, weight = p.AccentSoft, p.AccentText, 650
-				glassTint, visibleAtRest = GlassAccentTint(p, 0.24, 0.28), true
+				fg, weight = p.AccentText, 650
+				visibleAtRest = true
+				if p.LiquidGlass {
+					bg = glassNavPillBg(p)
+				} else {
+					bg = p.AccentSoft
+					glassTint = GlassAccentTint(p, 0.24, 0.28)
+				}
 			case tab.Pressed():
-				bg, fg = p.Press, p.Text
+				bg, fg = pressBg, p.Text
 			case tab.Hovered() || tab.FocusVisible():
-				bg, fg = p.Hover, p.Text
+				bg, fg = hoverBg, p.Text
 			}
 			ControlMotion(tab).Children(func() {
 				GlassPillControl(ctx.Key("bg"), tab, p, tabRadius, glassTint, visibleAtRest, bg, 0, ui.Transparent, 0.96)
@@ -474,41 +780,22 @@ func SectionTabs(ctx *ui.Context, p Palette, label string, selected int, items [
 }
 
 const (
-	bottomNavPad             float32 = 7
-	bottomNavGap             float32 = 2
-	bottomNavStdPad          float32 = 4
-	bottomNavStdGap          float32 = 2
-	bottomNavStdSlot         float32 = 63
-	bottomNavInactiveW       float32 = 44
-	bottomNavIconSize        float32 = 20
-	bottomNavLabelGap        float32 = 6
-	bottomNavLabelPadX       float32 = 13
-	bottomNavDragThresh      float32 = 12
-	bottomNavGlassDragThresh float32 = 6
+	bottomNavPad       float32 = 7
+	bottomNavGap       float32 = 2
+	bottomNavStdPad    float32 = 4
+	bottomNavStdGap    float32 = 2
+	bottomNavStdSlot   float32 = 63
+	bottomNavInactiveW float32 = 44
+	bottomNavIconSize  float32 = 20
+	bottomNavLabelGap  float32 = 6
+	bottomNavLabelPadX float32 = 13
 )
 
 type mnbDragState struct {
-	pressing      bool
-	active        bool
-	upPending     bool
-	canceled      bool
-	suppressClick bool
-	originX       float32
-	lastX         float32
-	lastY         float32
-	dragIndex     int
-	prevLeft      float32
-	lastTime      time.Time
-	hasPrev       bool
-	lastStandard  bool
-	lastCount     int
-	labels        []string
-	widths        []float32
-	slots         []bottomNavSlot
-}
-
-type bottomNavSlot struct {
-	left, width float32
+	navScrubState
+	labels []string
+	widths []float32
+	slots  []navSlot
 }
 
 func (s *mnbDragState) ensureWidths(ctx *ui.Context, items []NavTab) {
@@ -533,20 +820,20 @@ func (s *mnbDragState) ensureWidths(ctx *ui.Context, items []NavTab) {
 	}
 }
 
-func layoutBottomNav(slots []bottomNavSlot, pad, gap, width float32, active int, activeWidth float32) float32 {
+func layoutBottomNav(slots []navSlot, pad, gap, width float32, active int, activeWidth float32) float32 {
 	x := pad
 	for i := range slots {
 		w := width
 		if i == active {
 			w = activeWidth
 		}
-		slots[i] = bottomNavSlot{left: x, width: w}
+		slots[i] = navSlot{start: x, extent: w}
 		x += w + gap
 	}
 	return x - gap + pad
 }
 
-func layoutStandardBottomNav(ctx *ui.Context, slots []bottomNavSlot, leftInset, rightInset float32) float32 {
+func layoutStandardBottomNav(ctx *ui.Context, slots []navSlot, leftInset, rightInset float32) float32 {
 	availW, _ := ctx.Size()
 	if availW <= 0 {
 		availW = 390
@@ -561,15 +848,6 @@ func layoutStandardBottomNav(ctx *ui.Context, slots []bottomNavSlot, leftInset, 
 	return barW
 }
 
-func mnbSlotIndexAt(x, gap float32, slots []bottomNavSlot) int {
-	for i, slot := range slots {
-		if x < slot.left+slot.width+gap/2 {
-			return i
-		}
-	}
-	return len(slots) - 1
-}
-
 func clamp32(v, lo, hi float32) float32 {
 	if v < lo {
 		return lo
@@ -578,13 +856,6 @@ func clamp32(v, lo, hi float32) float32 {
 		return hi
 	}
 	return v
-}
-
-func mnbRubberBand(overscroll, limit float32) float32 {
-	if overscroll == 0 || limit <= 0 {
-		return 0
-	}
-	return limit * float32(math.Tanh(float64(overscroll)/float64(limit*2.5)))
 }
 
 type BottomNavigationBarOptions struct {
@@ -628,7 +899,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 	barBg := barSolid.Alpha(0.90)
 	barBorder := ui.RGBA(17, 24, 39, 0.08)
 	accentPill := p.Accent.Alpha(0.92).Over(barSolid)
-	stdPillBg := ui.RGBA(15, 23, 42, 0.065)
+	stdPillBg := glassNavPillBg(p)
 	if standard {
 		barBg = ui.Hex("#ffffff").Alpha(0.96)
 	}
@@ -640,7 +911,6 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		}
 		barBorder = ui.RGBA(255, 255, 255, 0.10)
 		accentPill = p.Accent.Alpha(0.76).Over(barSolid)
-		stdPillBg = ui.RGBA(255, 255, 255, 0.14)
 	}
 	pillInk := AccentInk(accentPill)
 
@@ -662,46 +932,14 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 
 		st := ui.Local(bar, "mnb-drag", func() mnbDragState { return mnbDragState{} })
 		if len(st.slots) != len(items) {
-			st.slots = make([]bottomNavSlot, len(items))
+			st.slots = make([]navSlot, len(items))
 		}
 		slots := st.slots
 		if !standard {
 			st.ensureWidths(ctx, items)
 		}
 
-		bar.ObserveInput(func(ev ui.InputEvent) {
-			if ev.Button != 0 {
-				return
-			}
-			switch ev.Kind {
-			case ui.InputPointerDown:
-				st.pressing = true
-				st.active = false
-				st.upPending = false
-				st.canceled = false
-				st.suppressClick = false
-				st.originX = ev.X
-				st.lastX = ev.X
-				st.lastY = ev.Y
-				st.dragIndex = clamp32Index(*selected, len(items))
-			case ui.InputPointerUp:
-				if st.pressing {
-					st.upPending = true
-					if ev.Canceled {
-						st.canceled = true
-					}
-				}
-			}
-		})
-
-		barPressed := bar.Pressed()
-		if b, ok := bar.PressedButton(); ok && b == 0 {
-			barPressed = true
-		}
-		_, _, barDragHeld := bar.Dragged()
-		_, _, barDragEnded := bar.DragEnded()
-		barCanceled := bar.PressCanceled()
-		px, py, _ := bar.PointerPosition()
+		bar.ObserveInput(st.observePointer(navAxisHorizontal, barGap, slots, *selected, len(items), false))
 
 		bar.Children(func() {
 			var inlineTabs [4]ui.Element
@@ -709,9 +947,6 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 			if len(items) > len(tabEls) {
 				tabEls = make([]ui.Element, len(items))
 			}
-			tabPressed := false
-			tabCanceled := false
-			tabDragEnded := false
 			for index, item := range items {
 				tab := tabs.Tab(index).Label(item.Label).Radius(RadiusFull).
 					AlignItems(ui.Center).Justify(ui.Center).Shrink(0).
@@ -724,31 +959,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				} else {
 					tab.Row()
 				}
-				if tab.Pressed() {
-					tabPressed = true
-				} else if b, ok := tab.PressedButton(); ok && b == 0 {
-					tabPressed = true
-				}
-				if _, _, ended := tab.DragEnded(); ended {
-					tabDragEnded = true
-				}
-				if tab.PressCanceled() {
-					tabCanceled = true
-				}
 				tabEls[index] = tab
-			}
-
-			anyPressed := barPressed || barDragHeld || tabPressed
-			anyCanceled := st.canceled || barCanceled || tabCanceled
-			dragEnded := barDragEnded || tabDragEnded
-			// A tab can emit a synthetic release when the dock takes over the drag.
-			if anyPressed && !anyCanceled && !dragEnded {
-				st.upPending = false
-			}
-			released := st.upPending || dragEnded
-
-			if !released && !anyPressed {
-				st.suppressClick = false
 			}
 
 			curIdx := clamp32Index(*selected, len(items))
@@ -763,70 +974,18 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				barW = layoutBottomNav(slots, barPad, barGap, bottomNavInactiveW, curIdx, st.widths[curIdx])
 			}
 
-			dragThresh := bottomNavDragThresh
-			if p.LiquidGlass {
-				dragThresh = bottomNavGlassDragThresh
-			}
-
-			switch {
-			case released:
-				if st.pressing && st.active && !anyCanceled {
-					target := clamp32Index(st.dragIndex, len(items))
-					*selected = target
-					if items[target].OnSelect != nil {
-						items[target].OnSelect()
-					}
-					st.suppressClick = true
-				}
-				st.pressing = false
-				st.active = false
-				st.upPending = false
-				st.canceled = false
-			case anyCanceled || (st.pressing && !anyPressed):
-				st.pressing = false
-				st.active = false
-				st.upPending = false
-				st.canceled = false
-			case anyPressed:
-				if !st.pressing {
-					st.pressing = true
-					st.originX = px
-					st.dragIndex = clamp32Index(*selected, len(items))
-				}
-				st.lastX = px
-				st.lastY = py
-				if !st.active && abs32(px-st.originX) >= dragThresh {
-					st.active = true
-				}
-				if st.active {
-					st.dragIndex = mnbSlotIndexAt(px, barGap, slots)
-				}
-			}
-
-			displayIndex := clamp32Index(*selected, len(items))
-			if st.active {
-				displayIndex = clamp32Index(st.dragIndex, len(items))
-			}
+			displayIndex, anyPressed := st.stepTabs(ctx, bar, tabEls, navAxisHorizontal, barGap, slots, p.LiquidGlass, false, selected, items)
 			if !standard && !p.LiquidGlass && displayIndex != curIdx {
 				barW = layoutBottomNav(slots, barPad, barGap, bottomNavInactiveW, displayIndex, st.widths[displayIndex])
 			}
 
 			capsulePose, capsuleAnim := ui.Pose{}, MotionNav
-			if !p.LiquidGlass && st.active && barW > 0 {
-				var overscroll float32
-				switch {
-				case st.lastX < 0:
-					overscroll = st.lastX
-				case st.lastX > barW:
-					overscroll = st.lastX - barW
-				}
-				nudge := clamp32((st.lastX-barW/2)*0.035, -3.5, 3.5) + mnbRubberBand(overscroll, 8)
-				capsulePose.X = nudge
-				capsuleAnim = MotionCapsuleDrag
+			if !p.LiquidGlass {
+				capsulePose, capsuleAnim = navSolidScrubPose(navAxisHorizontal, st.active, st.lastX, barW, 3.5, 8)
 			}
 			bar.TransformOrigin(0.5, 0.5).AnimatePose(capsulePose, capsuleAnim)
 
-			pillLeft, pillW := slots[displayIndex].left, slots[displayIndex].width
+			pillLeft, pillW := slots[displayIndex].start, slots[displayIndex].extent
 			pillBg := accentPill
 			if standard || p.LiquidGlass {
 				pillBg = stdPillBg
@@ -848,36 +1007,42 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 			}
 
 			pillCheckLeft, pillCheckW := pillLeft, pillW
-			var lens bottomNavLens
+			var lens navGlassLens
 			if p.LiquidGlass {
 				st.applyDockGlass(ctx, bar, p, barW, barHeight, anyPressed || st.active, standard)
-				lens = st.animateLens(ctx, bar, ui.Rect{X: pillLeft, Y: barPad, W: pillW, H: tabHeight}, standard, len(items), tabEls[displayIndex].Pressed())
-				pillCheckLeft, pillCheckW = lens.left, lens.width
+				var mode uint8
+				lensStyle := navLensBottomCapsuleStyle
+				if standard {
+					mode = 1
+					lensStyle = navLensBottomStandardStyle
+				}
+				lens = st.animateGlassLens(ctx, bar, navLensConfig{
+					axis: navAxisHorizontal, target: ui.Rect{X: pillLeft, Y: barPad, W: pillW, H: tabHeight},
+					mode: mode, count: len(items), keyPrefix: "mnb", style: lensStyle,
+					tabPressed: tabEls[displayIndex].Pressed(),
+					expand: func(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32) {
+						dx, dy = bottomNavLensExpand(mainExt, crossExt, elastic, stretch, standard)
+						return dx, dy, 0
+					},
+				})
+				pillCheckLeft, pillCheckW = lens.base.X, lens.base.W
 
 				if !ctx.Preferences().ReduceTransparency {
 					pillBg = scaleAlpha(pillBg, 1-lens.alpha)
 				}
-				pill := lens.box(ctx.Key(selKey), 0).
+				pill := lens.box(ctx.Key(selKey), RadiusFull, 0).
 					Background(bar.AnimateColor("mnb-pill-bg", pillBg, MotionFast))
 				if lens.alpha > 0.01 {
-					bottomNavLensShadow(pill, p.Dark, lens.alpha, standard)
+					navLensShadow(pill, p.Dark, lens.alpha, standard)
 				}
 			} else {
 				st.hasPrev = false
-				pillAnim := MotionCapsulePill
-				pillPose, pillPoseAnim := ui.Pose{}, MotionNav
-				if st.active {
-					pillBg = pillBg.Mix(p.Text, 0.06)
-					pillAnim = MotionCapsuleDrag
-					align := clamp32((st.lastX/max(barW, 1))*2-1, -1, 1)
-					edge := clamp32((abs32(align)-0.72)/0.28, 0, 1)
-					pillPose.Scale = 1 + edge*0.025
-					pillPoseAnim = MotionCapsuleDrag
-				} else if tabEls[displayIndex].Pressed() {
-					pillBg = pillBg.Mix(p.Text, 0.08)
-					pillPose.Scale = 0.96
-					pillPoseAnim = MotionFast
-				}
+				var pillPose ui.Pose
+				var pillAnim, pillPoseAnim ui.Animation
+				pillBg, pillPose, pillAnim, pillPoseAnim = navSolidPillFeedback(
+					st.active, tabEls[displayIndex].Pressed(), st.lastX, barW,
+					pillBg, p.Text, 0.06, 0.08,
+				)
 				pill := ui.Box(ctx.Key(selKey)).Absolute().Left(pillLeft).Top(barPad).
 					Width(pillW).Height(tabHeight).ZIndex(0).Radius(RadiusFull).
 					TransformOrigin(0.5, 0.5).AnimatePose(pillPose, pillPoseAnim).
@@ -909,21 +1074,13 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				active := index == displayIndex
 				slot := slots[index]
 				tab := tabEls[index].
-					Size(slot.width, tabHeight).
+					Size(slot.extent, tabHeight).
 					Transition(ui.ElementTransition{
 						Position: true, Size: true, Animation: &MotionNav,
 					}).
-					OnClick(func() {
-						if st.suppressClick {
-							st.suppressClick = false
-							return
-						}
-						if entry.OnSelect != nil {
-							entry.OnSelect()
-						}
-					})
+					OnClick(navTabClick(&st.navScrubState, entry.OnSelect))
 
-				cx := slot.left + slot.width/2
+				cx := slot.start + slot.extent/2
 				coveredByPill := lensMoving && cx >= pillCheckLeft+6 && cx <= pillCheckLeft+pillCheckW-6
 				pressed := tab.Pressed()
 				tapPressed := !active && !st.active && pressed
@@ -956,43 +1113,29 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				fg := idleFg
 				colorAnim := MotionNav
 				var lensDistance float32
-				if standardGlass {
-					switch {
-					case followLens:
-						lensDistance = abs32(cx - lensMid)
-						u := clamp32(1-lensDistance/(lensHalf*0.80), 0, 1)
-						cover := u * u * (3 - 2*u)
-						fg = idleFg.Mix(activeFg, clamp32(cover*lens.alpha, 0, 1))
+				switch {
+				case followLens:
+					lensDistance = abs32(cx - lensMid)
+					u := clamp32(1-lensDistance/(lensHalf*0.80), 0, 1)
+					cover := u * u * (3 - 2*u)
+					fg = idleFg.Mix(activeFg, clamp32(cover*lens.alpha, 0, 1))
+					colorAnim = MotionFast
+				case !standardGlass && active && !st.active && pressed:
+					fg = activeFg
+					if !p.LiquidGlass {
+						fg = activeFg.Alpha(0.90)
+					}
+				case active || (!standardGlass && coveredByPill):
+					fg = activeFg
+					if !standardGlass && lensMoving {
 						colorAnim = MotionFast
-					case active:
-						fg = activeFg
-					case tapPressed:
-						stateBg, fg = pressBg, p.Text
-					case !st.active && (tab.Hovered() || tab.FocusVisible()):
-						stateBg, fg = hoverBg, p.Text
 					}
-				} else {
-					switch {
-					case active && !st.active && pressed:
-						if p.LiquidGlass {
-							fg = activeFg
-						} else {
-							fg = activeFg.Alpha(0.90)
-						}
-					case active || coveredByPill:
-						fg = activeFg
-						if lensMoving {
-							colorAnim = MotionFast
-						}
-					case tapPressed:
-						stateBg, fg = pressBg, p.Text
-					case !st.active && (tab.Hovered() || tab.FocusVisible()):
-						stateBg, fg = hoverBg, p.Text
-					default:
-						if st.active {
-							colorAnim = MotionFast
-						}
-					}
+				case tapPressed:
+					stateBg, fg = pressBg, p.Text
+				case !st.active && (tab.Hovered() || tab.FocusVisible()):
+					stateBg, fg = hoverBg, p.Text
+				case st.active:
+					colorAnim = MotionFast
 				}
 
 				tab.Children(func() {
@@ -1046,12 +1189,12 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				if capsuleGlass && tapPressed {
 					snap := IsStaticSnapshot(ctx)
 					interaction := trackGlassInteraction(tab, snap)
-					dx, dy := bottomNavLensExpand(slot.width, tabHeight, interaction.elastic, 0, false)
-					tapBox := expandGlass(ui.Rect{X: slot.left, Y: barPad, W: slot.width, H: tabHeight}, dx, dy)
+					dx, dy := bottomNavLensExpand(slot.extent, tabHeight, interaction.elastic, 0, false)
+					tapBox := expandGlass(ui.Rect{X: slot.start, Y: barPad, W: slot.extent, H: tabHeight}, dx, dy)
 					tap := ui.Box(ctx.Key(mnbTapKey(index))).Absolute().Left(tapBox.X).Top(tapBox.Y).
 						Width(tapBox.W).Height(tapBox.H).ZIndex(2).Radius(RadiusFull).PassThrough()
-					bottomNavLensShadow(tap, p.Dark, interaction.glow, false)
-					drawBottomNavGlass(ctx, tap, liquidLensSpec{
+					navLensShadow(tap, p.Dark, interaction.glow, false)
+					drawNavGlassLens(ctx, tap, 0, liquidLensSpec{
 						Alpha: interaction.glow, Glow: interaction.glow, ZoomY: 0.86, Touch: interaction.touch, ClearLens: true,
 					})
 				}
@@ -1070,7 +1213,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					if p.Dark {
 						veil = ui.RGBA(34, 40, 54, 0.24*lens.alpha)
 					}
-					drawBottomNavGlass(ctx, lens.box(ctx.Key(selKey+"-warp"), 1), liquidLensSpec{
+					drawNavGlassLens(ctx, lens.box(ctx.Key(selKey+"-warp"), RadiusFull, 1), 0, liquidLensSpec{
 						Alpha: 1, Tint: veil, Zoom: 1 / lensZoom, ZoomY: barScaleY / lensZoom, WarpOnly: true,
 					})
 					spec.Zoom = standardZoom
@@ -1078,38 +1221,13 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				} else {
 					spec.ZoomY = 0.86
 				}
-				drawBottomNavGlass(ctx, lens.box(ctx.Key(selKey+"-lens"), z), spec)
+				drawNavGlassLens(ctx, lens.box(ctx.Key(selKey+"-lens"), RadiusFull, z), 0, spec)
 			}
 		})
 	})
 }
 
 type mnbTapKey int
-
-func bottomNavLensShadow(el ui.Element, dark bool, amount float32, standard bool) {
-	if standard {
-		alpha := float32(0.068)
-		if dark {
-			alpha = 0.26
-		}
-		el.Shadow(0, 2.0*amount, 9.5*amount, 0, ui.RGBA(12, 18, 30, alpha*min(amount, 1)))
-		return
-	}
-	alpha := float32(0.075)
-	if dark {
-		alpha = 0.24
-	}
-	el.Shadow(0, 1.5*amount, 8*amount, 0, ui.RGBA(12, 18, 30, alpha*min(amount, 1)))
-}
-
-func drawBottomNavGlass(ctx *ui.Context, el ui.Element, spec liquidLensSpec) {
-	if IsStaticSnapshot(ctx) || spec.Alpha <= 0.005 {
-		return
-	}
-	el.Draw(func(p *ui.Painter, box ui.Rect) {
-		paintLiquidGlass(p, box, box.H*0.5, spec)
-	})
-}
 
 func bottomNavLensExpand(width, height, elastic, stretch float32, standard bool) (dx, dy float32) {
 	if standard {
@@ -1162,89 +1280,6 @@ func (s *mnbDragState) applyDockGlass(ctx *ui.Context, bar ui.Element, p Palette
 		} else if glow > 0.01 {
 			bar.Shadow(0, 3+2*glow, 12+4*glow, 0, ui.RGBA(12, 18, 30, 0.06+0.04*glow))
 		}
-	}
-}
-
-type bottomNavLens struct {
-	bounds      ui.Rect
-	touch       ui.Point
-	left, width float32
-	alpha, glow float32
-	inFlight    bool
-	optics      bool
-}
-
-func (l bottomNavLens) box(ctx *ui.Context, z int) ui.Element {
-	return ui.Box(ctx).Absolute().Left(l.bounds.X).Top(l.bounds.Y).
-		Width(l.bounds.W).Height(l.bounds.H).ZIndex(z).Radius(RadiusFull).PassThrough()
-}
-
-func (s *mnbDragState) animateLens(ctx *ui.Context, bar ui.Element, target ui.Rect, standard bool, count int, tabPressed bool) bottomNavLens {
-	now := ctx.Now()
-	left, width := target.X, target.W
-	var stretch, lift float32
-	var inFlight bool
-	if IsStaticSnapshot(ctx) || IsScaleReflow(ctx) || !s.hasPrev || s.lastStandard != standard || s.lastCount != count {
-		bar.Jump("mnb-px", left)
-		bar.Jump("mnb-pw", width)
-		bar.Jump("mnb-stretch", 0)
-		bar.Jump("mnb-lift", 0)
-		s.hasPrev, s.lastStandard, s.lastCount = true, standard, count
-	} else {
-		posSpring := MotionGlassScrub.Spring
-		if standard {
-			if s.active {
-				posSpring = ui.SpringOptions{Duration: 40 * time.Millisecond, Bounce: 0}
-			} else {
-				posSpring = ui.SpringOptions{Duration: 190 * time.Millisecond, Bounce: 0.14}
-			}
-		} else if s.active {
-			posSpring = ui.SpringOptions{Duration: 155 * time.Millisecond, Bounce: 0.16}
-		}
-		left = bar.Spring("mnb-px", left, posSpring)
-		width = bar.Spring("mnb-pw", width, MotionGlassScrub.Spring)
-		var stretchTarget float32
-		if dt := now.Sub(s.lastTime).Seconds(); dt > 0.0005 && dt < 0.25 {
-			speed := abs32(left-s.prevLeft) / float32(dt)
-			if standard {
-				stretchTarget = clamp32(speed/1400, 0, 0.10)
-			} else {
-				stretchTarget = clamp32(speed/750, 0, 0.20)
-			}
-		}
-		stretch = clamp32(bar.Spring("mnb-stretch", stretchTarget, MotionGlassScrub.Spring), 0, 0.24)
-		inFlight = abs32(left-target.X) > 3 || abs32(width-target.W) > 3
-		var liftTarget float32
-		switch {
-		case s.active || tabPressed:
-			liftTarget = 1
-		case inFlight:
-			liftTarget = 0.76
-		}
-		liftSpring := GlassPressAnimation(liftTarget > 0.5).Spring
-		if standard {
-			if liftTarget > 0.5 {
-				liftSpring = ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.16}
-			} else {
-				liftSpring = ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.18}
-			}
-		}
-		lift = bar.Spring("mnb-lift", liftTarget, liftSpring)
-	}
-	s.prevLeft, s.lastTime = left, now
-	alpha := clamp32(lift, 0, 1)
-	elastic := clamp32(lift, -0.18, 1.28)
-	dx, dy := bottomNavLensExpand(width, target.H, elastic, stretch, standard)
-	r := expandGlass(ui.Rect{X: left, Y: target.Y, W: width, H: target.H}, dx, dy)
-	touch := ui.Point{X: 0.5, Y: 0.5}
-	optics := alpha > 0.005 && !ctx.Preferences().ReduceTransparency
-	if optics && s.pressing {
-		touch.X = clamp32((s.lastX-r.X)/r.W, 0.08, 0.92)
-		touch.Y = clamp32((s.lastY-r.Y)/r.H, 0.12, 0.88)
-	}
-	return bottomNavLens{
-		bounds: r, touch: touch, left: left, width: width, alpha: alpha,
-		glow: max(alpha, stretch*1.25), inFlight: inFlight, optics: optics,
 	}
 }
 

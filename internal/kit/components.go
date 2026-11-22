@@ -29,8 +29,12 @@ func ApplyCardShadow(el ui.Element, p Palette) ui.Element {
 }
 
 func Card(ctx *ui.Context, p Palette) ui.Element {
-	return GlassPanel(ui.Column(ctx).FillWidth().MinWidth(0).Gap(12).Padding(16), p, RadiusL, 0.25, p.Surface, p.LineSoft).
-		Transition(LocaleSizeTransition)
+	return StaticCard(ctx, p).Transition(LocaleSizeTransition)
+}
+
+// StaticCard builds a Card without LocaleSizeTransition so scrollable columns can cull off-screen cards.
+func StaticCard(ctx *ui.Context, p Palette) ui.Element {
+	return GlassPanel(ui.Column(ctx).FillWidth().MinWidth(0).Gap(12).Padding(16), p, RadiusL, 0.25, p.Surface, p.LineSoft)
 }
 
 func Panel(ctx *ui.Context, p Palette, title string, content func()) {

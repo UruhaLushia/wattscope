@@ -202,15 +202,28 @@ func optionMenuPopup(ctx *ui.Context, p Palette, trigger ui.Element, open *bool,
 }
 
 func MenuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.SVG, variant ButtonVariant, touch bool, items []MenuItem) ui.Element {
+	return menuButton(ctx, p, open, label, icon, 0, variant, touch, items, false)
+}
+
+// IconMenuButton renders a compact square/pill icon-only menu trigger without text or chevron.
+func IconMenuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.SVG, size float32, variant ButtonVariant, touch bool, items []MenuItem) ui.Element {
+	return menuButton(ctx, p, open, label, icon, size, variant, touch, items, true)
+}
+
+func menuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.SVG, size float32, variant ButtonVariant, touch bool, items []MenuItem, iconOnly bool) ui.Element {
 	btnRadius := RadiusM
 	if p.LiquidGlass {
 		btnRadius = RadiusFull
 	}
 	menu := ui.MenuBase(ctx, open)
-	trigger := menu.Trigger.Height(ControlHeight(touch)).Shrink(0).Padding(0, 9, 0, 11).Gap(4).
-		Radius(btnRadius).AlignItems(ui.Center).Justify(ui.Center).Label(label)
-	if label == "" {
-		trigger.Padding(0, 9)
+	trigger := menu.Trigger.Shrink(0).Radius(btnRadius).AlignItems(ui.Center).Justify(ui.Center).Label(label)
+	if iconOnly {
+		trigger.Size(size, size).Tooltip(label)
+	} else {
+		trigger.Height(ControlHeight(touch)).Padding(0, 9, 0, 11).Gap(4)
+		if label == "" {
+			trigger.Padding(0, 9)
+		}
 	}
 
 	bg, hover, press, ink, border, weight := buttonColors(p, variant)
@@ -239,12 +252,18 @@ func MenuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.S
 	ControlMotion(trigger).Children(func() {
 		GlassPillControl(ctx.Key("bg"), trigger, p, btnRadius, glassTint, visibleAtRest, bg, borderW, border, 0.96)
 		if icon != nil {
-			ui.Icon(ctx, icon).FontSize(14).TextColor(ink).Shrink(0)
+			iconSize := float32(14)
+			if iconOnly {
+				iconSize = 15
+			}
+			ui.Icon(ctx, icon).FontSize(iconSize).TextColor(ink).Shrink(0)
 		}
-		if label != "" {
-			AnimatedLabel(ctx, label).FontSize(13).FontWeight(weight).TextColor(ink).SingleLine().Shrink(0)
+		if !iconOnly {
+			if label != "" {
+				AnimatedLabel(ctx, label).FontSize(13).FontWeight(weight).TextColor(ink).SingleLine().Shrink(0)
+			}
+			animatedChevron(ctx, menu.Open(), chevColor, 14)
 		}
-		animatedChevron(ctx, menu.Open(), chevColor, 14)
 	})
 	MenuPopup(ctx, p, menu, trigger, touch, items)
 	return trigger

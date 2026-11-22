@@ -244,6 +244,9 @@ func ApplyRotateEnterPose(ctx *ui.Context, el ui.Element, key any, start ui.Pose
 		st.gen = fs.orientationRotateGen
 		st.startedAt = now
 	}
+	if !fs.orientationRotating && (st.gen == 0 || now.Sub(st.startedAt) > rotateWindowDur+200*time.Millisecond) {
+		return el
+	}
 	// Hold the start pose through any multi-pass rebuild or same-timestamp inset settle on frame 0, then release 1ms later.
 	if st.gen != 0 && !now.After(st.startedAt) {
 		pose = start
