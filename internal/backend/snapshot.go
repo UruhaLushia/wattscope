@@ -45,6 +45,26 @@ type ChartRange struct {
 	Valid    bool
 }
 
+const historySummaryBlockSize = 16
+
+type sampleSummary struct {
+	count int
+
+	firstSegment, lastSegment uint64
+	firstChange               int
+
+	minPower, maxPower           float64
+	minPowerPos, maxPowerPos     int
+	minVoltage, maxVoltage       float64
+	minVoltagePos, maxVoltagePos int
+	minCurrent, maxCurrent       float64
+	minCurrentPos, maxCurrentPos int
+}
+
+type sampleBlockSummary struct {
+	summary sampleSummary
+}
+
 type ConnectionStatus struct {
 	State       State
 	DeviceID    string
@@ -193,6 +213,11 @@ func (s *Service) snapshotSliceLocked(startIdx, endIdx, maxPoints int) Snapshot 
 		copy(v.History[copied:], s.ring[:n-copied])
 		return v
 	}
+	return s.snapshotDownsampledLocked(v, startIdx, endIdx, maxPoints)
+}
+
+func (s *Service) snapshotDownsampledLocked(v Snapshot, startIdx, endIdx, maxPoints int) Snapshot {
+	n := endIdx - startIdx
 	buckets := max(1, (maxPoints-2)/2)
 	out := make([]device.Sample, 0, maxPoints+2)
 	first := s.sampleAtLocked(startIdx)
@@ -206,25 +231,18 @@ func (s *Service) snapshotSliceLocked(startIdx, endIdx, maxPoints int) Snapshot 
 		if lo >= hi {
 			continue
 		}
-		minIdx, maxIdx := lo, lo
-		minP := s.sampleAtLocked(lo).Power
-		maxP := minP
+		summary := s.summarizeRangeLocked(lo, hi)
+		minIdx := lo + summary.minPowerPos
+		maxIdx := lo + summary.maxPowerPos
 		segChange := -1
-		for idx := lo; idx < hi; idx++ {
-			sample := s.sampleAtLocked(idx)
-			if sample.Power < minP {
-				minP, minIdx = sample.Power, idx
-			}
-			if sample.Power > maxP {
-				maxP, maxIdx = sample.Power, idx
-			}
-			if segChange < 0 && sample.Segment != prevSegment {
-				segChange = idx
-			}
+		if summary.firstSegment != prevSegment {
+			segChange = lo
+		} else if summary.firstChange >= 0 {
+			segChange = lo + summary.firstChange
 		}
-		prevSegment = s.sampleAtLocked(hi - 1).Segment
+		prevSegment = summary.lastSegment
 		if minIdx == maxIdx {
-			minIdx, maxIdx = s.flatPowerExtremaLocked(lo, hi)
+			minIdx, maxIdx = flatPowerExtremaSummary(summary, lo)
 		}
 		selected := [4]int{minIdx, maxIdx, segChange - 1, segChange}
 		slices.Sort(selected[:])
@@ -245,29 +263,107 @@ func (s *Service) snapshotSliceLocked(startIdx, endIdx, maxPoints int) Snapshot 
 }
 
 // Keep voltage and current transients visible when power alone is flat.
-func (s *Service) flatPowerExtremaLocked(lo, hi int) (int, int) {
-	first := s.sampleAtLocked(lo)
-	minV, maxV, minI, maxI := first.Voltage, first.Voltage, first.Current, first.Current
-	minVIdx, maxVIdx, minIIdx, maxIIdx := lo, lo, lo, lo
-	for idx := lo + 1; idx < hi; idx++ {
-		sample := s.sampleAtLocked(idx)
-		if sample.Voltage < minV {
-			minV, minVIdx = sample.Voltage, idx
-		}
-		if sample.Voltage > maxV {
-			maxV, maxVIdx = sample.Voltage, idx
-		}
-		if sample.Current < minI {
-			minI, minIIdx = sample.Current, idx
-		}
-		if sample.Current > maxI {
-			maxI, maxIIdx = sample.Current, idx
+func flatPowerExtremaSummary(summary sampleSummary, start int) (int, int) {
+	if summary.minVoltagePos != summary.maxVoltagePos {
+		return start + summary.minVoltagePos, start + summary.maxVoltagePos
+	}
+	return start + summary.minCurrentPos, start + summary.maxCurrentPos
+}
+
+func (s *Service) rebuildHistoryBlockLocked(index int) {
+	blockIndex := index / historySummaryBlockSize
+	for len(s.historyBlocks) <= blockIndex {
+		s.historyBlocks = append(s.historyBlocks, sampleBlockSummary{})
+	}
+	start := blockIndex * historySummaryBlockSize
+	end := min(start+historySummaryBlockSize, len(s.ring))
+	summary := sampleSummary{}
+	for index := start; index < end; index++ {
+		summary = appendSampleSummary(summary, sampleSummaryForSample(s.ring[index]))
+	}
+	s.historyBlocks[blockIndex] = sampleBlockSummary{summary: summary}
+}
+
+func (s *Service) summarizeRangeLocked(startIdx, endIdx int) sampleSummary {
+	if startIdx >= endIdx {
+		return sampleSummary{}
+	}
+	physicalStart := s.ringIndexLocked(startIdx)
+	firstCount := min(endIdx-startIdx, len(s.ring)-physicalStart)
+	summary := s.summarizePhysicalRangeLocked(physicalStart, physicalStart+firstCount)
+	if firstCount < endIdx-startIdx {
+		summary = appendSampleSummary(summary, s.summarizePhysicalRangeLocked(0, endIdx-startIdx-firstCount))
+	}
+	return summary
+}
+
+func (s *Service) summarizePhysicalRangeLocked(start, end int) sampleSummary {
+	summary := sampleSummary{}
+	for start < end && start%historySummaryBlockSize != 0 {
+		summary = appendSampleSummary(summary, sampleSummaryForSample(s.ring[start]))
+		start++
+	}
+	for start+historySummaryBlockSize <= end {
+		summary = appendSampleSummary(summary, s.historyBlocks[start/historySummaryBlockSize].summary)
+		start += historySummaryBlockSize
+	}
+	for start < end {
+		summary = appendSampleSummary(summary, sampleSummaryForSample(s.ring[start]))
+		start++
+	}
+	return summary
+}
+
+func sampleSummaryForSample(sample device.Sample) sampleSummary {
+	return sampleSummary{
+		count:        1,
+		firstSegment: sample.Segment,
+		lastSegment:  sample.Segment,
+		firstChange:  -1,
+		minPower:     sample.Power, maxPower: sample.Power, minPowerPos: 0, maxPowerPos: 0,
+		minVoltage: sample.Voltage, maxVoltage: sample.Voltage, minVoltagePos: 0, maxVoltagePos: 0,
+		minCurrent: sample.Current, maxCurrent: sample.Current, minCurrentPos: 0, maxCurrentPos: 0,
+	}
+}
+
+func appendSampleSummary(left, right sampleSummary) sampleSummary {
+	if left.count == 0 {
+		return right
+	}
+	if right.count == 0 {
+		return left
+	}
+	offset := left.count
+	out := left
+	out.count += right.count
+	out.lastSegment = right.lastSegment
+	if out.firstChange < 0 {
+		switch {
+		case left.lastSegment != right.firstSegment:
+			out.firstChange = left.count
+		case right.firstChange >= 0:
+			out.firstChange = offset + right.firstChange
 		}
 	}
-	if minVIdx != maxVIdx {
-		return minVIdx, maxVIdx
+	if right.minPower < out.minPower {
+		out.minPower, out.minPowerPos = right.minPower, offset+right.minPowerPos
 	}
-	return minIIdx, maxIIdx
+	if right.maxPower > out.maxPower {
+		out.maxPower, out.maxPowerPos = right.maxPower, offset+right.maxPowerPos
+	}
+	if right.minVoltage < out.minVoltage {
+		out.minVoltage, out.minVoltagePos = right.minVoltage, offset+right.minVoltagePos
+	}
+	if right.maxVoltage > out.maxVoltage {
+		out.maxVoltage, out.maxVoltagePos = right.maxVoltage, offset+right.maxVoltagePos
+	}
+	if right.minCurrent < out.minCurrent {
+		out.minCurrent, out.minCurrentPos = right.minCurrent, offset+right.minCurrentPos
+	}
+	if right.maxCurrent > out.maxCurrent {
+		out.maxCurrent, out.maxCurrentPos = right.maxCurrent, offset+right.maxCurrentPos
+	}
+	return out
 }
 
 func (s *Service) ringIndexLocked(index int) int {
@@ -327,5 +423,6 @@ func (s *Service) ResetStatistics() {
 	s.previous = nil
 	s.ring = nil
 	s.head = 0
+	s.historyBlocks = nil
 	s.notifyLocked()
 }

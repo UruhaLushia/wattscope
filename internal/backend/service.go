@@ -33,6 +33,7 @@ type Service struct {
 	snapshot                                       Snapshot
 	ring                                           []device.Sample
 	head                                           int
+	historyBlocks                                  []sampleBlockSummary
 	previous                                       *device.Sample
 	segment                                        uint64
 	recorder                                       *recording.CSV

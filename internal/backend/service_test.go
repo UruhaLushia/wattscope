@@ -290,7 +290,8 @@ func TestSampledHistoryStaysStableAfterWritesAndReset(t *testing.T) {
 			if len(window.History) != 1 || window.History[0].Power != 2 {
 				t.Fatalf("unexpected trailing window: %v", window.History)
 			}
-			extended := append(held.History, device.Sample{Elapsed: 2, Power: 999})
+			extended := slices.Clip(held.History)
+			extended = append(extended, device.Sample{Elapsed: 2, Power: 999})
 			if err := service.accept(device.Sample{Elapsed: 2, Power: 3}); err != nil {
 				t.Fatal(err)
 			}
@@ -370,6 +371,47 @@ func TestSampledHistoryPreservesVoltageOnFlatPowerAndSegmentEnd(t *testing.T) {
 	}
 	if !sawSeg0End || !sawSeg1Start {
 		t.Fatalf("expected segment boundary pair to survive downsampling: seg0End=%v seg1Start=%v", sawSeg0End, sawSeg1Start)
+	}
+}
+
+func TestSampledHistoryPreservesBoundsAfterRingWrap(t *testing.T) {
+	service := historyService(t, 64)
+	groups := [...]uint16{0, 1}
+	for index := range 200 {
+		voltage := 5.0
+		switch index {
+		case 160:
+			voltage = 20
+		case 161:
+			voltage = 3.3
+		}
+		group := &groups[0]
+		if index >= 170 {
+			group = &groups[1]
+		}
+		if err := service.accept(device.Sample{
+			Elapsed: float64(index),
+			Power:   1,
+			Voltage: voltage,
+			Group:   group,
+		}); err != nil {
+			t.Fatalf("accept(%d): %v", index, err)
+		}
+	}
+
+	sampled := service.SnapshotWindowSampled(0, 4)
+	if len(sampled.History) < 2 || sampled.History[0].Elapsed != 136 || sampled.History[len(sampled.History)-1].Elapsed != 199 {
+		t.Fatalf("unexpected wrapped endpoints: %+v", sampled.History)
+	}
+	var sawHighVoltage, sawLowVoltage, sawSegmentEnd, sawSegmentStart bool
+	for _, sample := range sampled.History {
+		sawHighVoltage = sawHighVoltage || sample.Voltage == 20
+		sawLowVoltage = sawLowVoltage || sample.Voltage == 3.3
+		sawSegmentEnd = sawSegmentEnd || (sample.Elapsed == 169 && sample.Segment == 0)
+		sawSegmentStart = sawSegmentStart || (sample.Elapsed == 170 && sample.Segment == 1)
+	}
+	if !sawHighVoltage || !sawLowVoltage || !sawSegmentEnd || !sawSegmentStart {
+		t.Fatalf("wrapped sample lost extrema or segment boundary: high=%v low=%v end=%v start=%v history=%+v", sawHighVoltage, sawLowVoltage, sawSegmentEnd, sawSegmentStart, sampled.History)
 	}
 }
 

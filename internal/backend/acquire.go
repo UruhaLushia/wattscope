@@ -190,15 +190,19 @@ func (s *Service) accept(v device.Sample) error {
 	s.snapshot.Error = ""
 	s.snapshot.ErrorKind = ""
 	s.snapshot.HistoryVersion++
+	var historyIndex int
 	if s.opts.HistorySize < 0 || len(s.ring) < s.opts.HistorySize {
+		historyIndex = len(s.ring)
 		s.ring = append(s.ring, v)
 	} else {
-		s.ring[s.head] = v
+		historyIndex = s.head
+		s.ring[historyIndex] = v
 		s.head++
 		if s.head == len(s.ring) {
 			s.head = 0
 		}
 	}
+	s.rebuildHistoryBlockLocked(historyIndex)
 	if s.recorder != nil {
 		if err := s.recorder.Write(v); err != nil {
 			return fmt.Errorf("recording failed: %w", err)
