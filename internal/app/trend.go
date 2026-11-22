@@ -254,7 +254,7 @@ func (d *dashboard) landscapeOverview(ctx *ui.Context, p kit.Palette, msgs local
 	chartW := frame.width - leftW - 10
 	chartMinW := min(float32(260), max(float32(180), chartW))
 	ui.Row(ctx).Fill().MinWidth(0).MinHeight(0).Gap(10).AlignItems(ui.Stretch).Children(func() {
-		ovLeft := ui.Scroll(ctx.Key("ov-left")).Scrollbars(false).Width(leftW).Shrink(0).FillHeight().MinHeight(0).TrackScroll(&d.scroll)
+		ovLeft := ui.Scroll(ctx.Key("ov-left")).Scrollbars(false).Width(leftW).Shrink(0).FillHeight().MinHeight(0).TrackScroll(&d.ovLeftScroll)
 		if d.mobile && !d.snapshotOnly {
 			kit.ApplyRotateEnterPose(ctx, ovLeft.TransformOrigin(0.5, 0.5), "rot-ov-left", ui.Pose{X: -12, Scale: 0.975, Fade: 0.55}, kit.MotionRotate)
 		}
@@ -264,7 +264,10 @@ func (d *dashboard) landscapeOverview(ctx *ui.Context, p kit.Palette, msgs local
 				if hasBottom {
 					d.landscapeSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, leftW, touch)
 					if hasLandscapeSignals(frame.readoutSample, pdTotal) {
-						d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true).Padding(10, 12).Gap(7)
+						sigCard := d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true, true).Padding(10, 12).Gap(7)
+						if !d.snapshotOnly {
+							sigCard.Cache()
+						}
 					}
 				}
 			})
@@ -344,7 +347,7 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 			d.chartCard(ctx, p, msgs, frame, cardPad, cardBottomPad, cardGap, touch, false, true, 680, 560, plotHeight, !split)
 			ui.Column(ctx).Width(384).Shrink(0).Gap(12).Children(func() {
 				d.overviewSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, touch)
-				d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true)
+				d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true, false)
 				d.overviewPDCard(ctx, p, msgs, frame.live)
 			})
 		})
@@ -368,7 +371,7 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 		}
 		ui.Row(ctx).FillWidth().Wrap().Gap(bottomGap).AlignItems(ui.Stretch).Children(func() {
 			d.overviewSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, touch).Grow(1).Basis(300).MinWidth(260)
-			d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, compactSignals).Grow(1).Basis(300).MinWidth(260)
+			d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, compactSignals, false).Grow(1).Basis(300).MinWidth(260)
 		})
 	}
 }
@@ -403,7 +406,11 @@ func (d *dashboard) landscapeSessionCard(ctx *ui.Context, p kit.Palette, msgs lo
 			})
 		})
 	}
-	return kit.Card(ctx, p).Radius(kit.RadiusL).Padding(8, 11).Gap(5).Children(func() {
+	card := kit.StaticCard(ctx, p).Radius(kit.RadiusL).Padding(8, 11).Gap(5)
+	if !d.snapshotOnly {
+		card.Cache()
+	}
+	return card.Children(func() {
 		ui.Row(ctx).FillWidth().MinHeight(24).AlignItems(ui.Center).Gap(5).Children(func() {
 			ui.Text(ctx, msgs.GuiSession()).FontSize(13).FontWeight(700).SingleLine().Shrink(0).Role(ui.RoleHeading).Level(2)
 			if live.Recording.Active {
@@ -458,7 +465,7 @@ func (d *dashboard) overviewSessionCard(ctx *ui.Context, p kit.Palette, msgs loc
 	})
 }
 
-func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, sample *device.Sample, pdTotal uint64, compactGrid bool) ui.Element {
+func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, sample *device.Sample, pdTotal uint64, compactGrid, staticCard bool) ui.Element {
 	dirLabel := ""
 	switch displayedCurrentDirection(sample) {
 	case device.CurrentPlugToReceptacle:
@@ -466,7 +473,11 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 	case device.CurrentReceptacleToPlug:
 		dirLabel = msgs.GuiReceptacleToPlug()
 	}
-	return kit.Card(ctx, p).Gap(10).Children(func() {
+	card := kit.Card(ctx, p)
+	if staticCard {
+		card = kit.StaticCard(ctx, p)
+	}
+	return card.Gap(10).Children(func() {
 		ui.Row(ctx).FillWidth().MinHeight(28).AlignItems(ui.Center).Gap(8).Children(func() {
 			kit.SectionTitle(ctx, msgs.GuiSignals())
 			if dirLabel != "" {
@@ -664,9 +675,27 @@ func chartSamplesIdentity(history []device.Sample) chartSamplesKey {
 }
 
 type chartStatsCache struct {
-	key   chartSamplesKey
-	valid uint8
-	stats [len(channels)]channelStat
+	key            chartSamplesKey
+	valid          uint8
+	hasDataChecked uint8
+	hasDataMask    uint8
+	stats          [len(channels)]channelStat
+}
+
+func (d *dashboard) cachedHasChannelData(history []device.Sample, index int) bool {
+	key := chartSamplesIdentity(history)
+	cache := &d.chartStats
+	if cache.key != key {
+		*cache = chartStatsCache{key: key}
+	}
+	bit := uint8(1 << index)
+	if cache.hasDataChecked&bit == 0 {
+		if hasChannelData(history, channels[index]) {
+			cache.hasDataMask |= bit
+		}
+		cache.hasDataChecked |= bit
+	}
+	return cache.hasDataMask&bit != 0
 }
 
 func (d *dashboard) visibleChartStat(history []device.Sample, index int) channelStat {
@@ -698,7 +727,7 @@ func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.
 	var visBuf [len(candidates)]int
 	visible := visBuf[:0]
 	for _, idx := range candidates {
-		if idx < 3 || hasChannelData(history, channels[idx]) {
+		if idx < 3 || d.cachedHasChannelData(history, idx) {
 			visible = append(visible, idx)
 		}
 	}
@@ -1107,11 +1136,230 @@ func (d *dashboard) secondaryAxisChannel(history []device.Sample, seriesMask uin
 		if idx == d.channel || seriesMask&uint8(1<<idx) == 0 {
 			continue
 		}
-		if hasChannelData(history, channels[idx]) {
+		if d.cachedHasChannelData(history, idx) {
 			return idx, true
 		}
 	}
 	return -1, false
+}
+
+type chartTickMetricsKey struct {
+	axisLo        float64
+	axisHi        float64
+	unit          string
+	compactMobile bool
+	hasSample     bool
+}
+
+type chartTickMetricsCache struct {
+	key         chartTickMetricsKey
+	ticks       []chart.Tick
+	labels      []string
+	widths      []float32
+	rightMargin float32
+}
+
+func (d *dashboard) resolveChartTicks(ctx *ui.Context, axis chart.Linear, unit string, compactMobile, hasSample bool) chartTickMetricsCache {
+	key := chartTickMetricsKey{
+		axisLo:        axis.Lo,
+		axisHi:        axis.Hi,
+		unit:          unit,
+		compactMobile: compactMobile,
+		hasSample:     hasSample,
+	}
+	if d.chartTickMetrics.key == key && len(d.chartTickMetrics.ticks) > 0 {
+		return d.chartTickMetrics
+	}
+	ticks := axis.Ticks(4)
+	const tickLabelGap = float32(6)
+	minRight, maxRight := float32(34), float32(64)
+	if compactMobile {
+		minRight, maxRight = 28, 54
+	}
+	if hasSample {
+		if compactMobile {
+			minRight = max(minRight, 40)
+		} else {
+			minRight = max(minRight, 46)
+		}
+	}
+	rightMargin := minRight
+	labels := make([]string, len(ticks))
+	widths := make([]float32, len(ticks))
+	for idx, tick := range ticks {
+		lbl := tick.Label
+		if idx == len(ticks)-1 {
+			lbl = tick.Label + " " + unit
+		}
+		tw, _ := ctx.MeasureText(1<<20, ui.Span{Text: lbl, Size: 10})
+		labels[idx] = lbl
+		widths[idx] = tw
+		rightMargin = max(rightMargin, float32(math.Ceil(float64(tw)))+tickLabelGap)
+	}
+	rightMargin = min(rightMargin, maxRight)
+	d.chartTickMetrics = chartTickMetricsCache{
+		key:         key,
+		ticks:       ticks,
+		labels:      labels,
+		widths:      widths,
+		rightMargin: rightMargin,
+	}
+	return d.chartTickMetrics
+}
+
+type chartPlotCanvasKey struct {
+	geom        chartGeometryKey
+	wPx         int
+	hPx         int
+	scale       float32
+	dark        bool
+	accent      ui.Color
+	surface     ui.Color
+	inset       ui.Color
+	line        ui.Color
+	lineSoft    ui.Color
+	xDivs       int
+	tickCount   int
+	firstTickAt float32
+	lastTickAt  float32
+	firstVal    float64
+	lastVal     float64
+	primary     int
+	seriesMask  uint8
+	hasLeftAxis bool
+}
+
+func makeChartPlotCanvasKey(geomKey chartGeometryKey, wPx, hPx int, scale float32, p kit.Palette, xDivs int, ticks []chart.Tick, primary int, seriesMask uint8, hasLeftAxis bool) chartPlotCanvasKey {
+	geomKey.rect.X = 0
+	geomKey.rect.Y = 0
+	var firstAt, lastAt float32
+	var firstVal, lastVal float64
+	if n := len(ticks); n > 0 {
+		firstAt, lastAt = ticks[0].At, ticks[n-1].At
+		firstVal, lastVal = ticks[0].Value, ticks[n-1].Value
+	}
+	return chartPlotCanvasKey{
+		geom:        geomKey,
+		wPx:         wPx,
+		hPx:         hPx,
+		scale:       scale,
+		dark:        p.Dark,
+		accent:      p.Accent,
+		surface:     p.Surface,
+		inset:       p.Inset,
+		line:        p.Line,
+		lineSoft:    p.LineSoft,
+		xDivs:       xDivs,
+		tickCount:   len(ticks),
+		firstTickAt: firstAt,
+		lastTickAt:  lastAt,
+		firstVal:    firstVal,
+		lastVal:     lastVal,
+		primary:     primary,
+		seriesMask:  seriesMask,
+		hasLeftAxis: hasLeftAxis,
+	}
+}
+
+func (d *dashboard) pixelPoints(points [][2]float32, origin ui.Rect, scale float32) [][2]float32 {
+	n := len(points)
+	if cap(d.chartPixelPts) < n {
+		d.chartPixelPts = make([][2]float32, n)
+	}
+	out := d.chartPixelPts[:n]
+	for i, pt := range points {
+		if math.IsNaN(float64(pt[0])) || math.IsNaN(float64(pt[1])) {
+			out[i] = pt
+			continue
+		}
+		out[i] = [2]float32{(pt[0] - origin.X) * scale, (pt[1] - origin.Y) * scale}
+	}
+	d.chartPixelPts = out
+	return out
+}
+
+func secondaryCurveColor(ch measurement, p kit.Palette, wellAlpha float32) ui.Color {
+	wellBg := p.Inset.Alpha(wellAlpha).Over(p.Surface)
+	c := ch.color(p).Mix(wellBg, 0.14)
+	c.A = 255
+	return c
+}
+
+func (d *dashboard) closestHistorySample(history []device.Sample, target float64) *device.Sample {
+	switch {
+	case d.held != nil && len(d.held.History) > 0:
+		return closestSample(d.held.History, target)
+	case d.service != nil:
+		return d.service.ClosestSample(target)
+	default:
+		return closestSample(history, target)
+	}
+}
+
+func (d *dashboard) drawChartPlotLayer(painter *ui.Painter, rect ui.Rect, scale float32, p kit.Palette, wellAlpha float32, xDivs int, ticks []chart.Tick, geometry *chartGeometry, axis chart.Linear, primary int, hasLeftAxis, pixelSpace bool) {
+	strokeScale, lineW, edge := float32(1), float32(1), float32(0)
+	if pixelSpace {
+		strokeScale, lineW = scale, max(1, scale)
+		edge = lineW * 0.5
+	}
+	left, top, right, bottom := rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H
+	painter.Fill(rect, p.Inset.Alpha(wellAlpha), 4*strokeScale)
+
+	gridV := p.LineSoft.Alpha(0.65)
+	for i := 1; i < xDivs; i++ {
+		gx := left + rect.W*float32(i)/float32(xDivs)
+		painter.Line(gx, top, gx, bottom, lineW, gridV)
+	}
+	for _, tick := range ticks {
+		y := bottom - rect.H*tick.At
+		gridColor := p.LineSoft
+		if math.Abs(tick.Value) < 1e-9 {
+			gridColor = p.Line
+		}
+		painter.Line(left, y, right, y, lineW, gridColor)
+	}
+
+	origin := geometry.key.rect
+	tone := channels[primary].color(p)
+	drawCurves := func() {
+		for index, points := range geometry.lines {
+			if index != primary && len(points) >= 2 {
+				pts := points
+				if pixelSpace {
+					pts = d.pixelPoints(points, origin, scale)
+				}
+				painter.StrokePolyline(pts, 1.5*strokeScale, secondaryCurveColor(channels[index], p, wellAlpha))
+			}
+		}
+		primaryPts := geometry.lines[primary]
+		area := geometry.area
+		if pixelSpace {
+			area = nil
+			if len(primaryPts) >= 2 {
+				primaryPts = d.pixelPoints(primaryPts, origin, scale)
+				area = buildSeriesArea(rect, axis, primaryPts)
+			}
+		}
+		if area != nil {
+			painter.FillPathGradient(area, ui.LinearGradient{Angle: 180, From: tone.Alpha(0.24), To: tone.Alpha(0.01)})
+		}
+		if len(primaryPts) >= 2 {
+			painter.StrokePolyline(primaryPts, 2.2*strokeScale, tone)
+		}
+	}
+	painter.Clip(rect, 0, func() {
+		if pixelSpace {
+			drawCurves()
+			return
+		}
+		painter.Transform(ui.Translation(rect.X-origin.X, rect.Y-origin.Y), 0, 0, drawCurves)
+	})
+
+	painter.Line(left, bottom-edge, right, bottom-edge, lineW, p.Line)
+	painter.Line(right-edge, top, right-edge, bottom, lineW, p.LineSoft)
+	if hasLeftAxis {
+		painter.Line(left+edge, top, left+edge, bottom, lineW, p.LineSoft)
+	}
 }
 
 func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap, live backend.Snapshot, channel measurement, sample *device.Sample, cw chartWindow, height float32, empty string, touch bool, seriesMask uint8, wideLeftAxis bool) {
@@ -1150,29 +1398,9 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		leftMargin = 46
 	}
 	axis := chartAxis(snap.ChartRanges[primary], stat)
-	ticks := axis.Ticks(4)
-	const tickLabelGap = float32(6)
-	minRight, maxRight := float32(34), float32(64)
-	if compactMobile {
-		minRight, maxRight = 28, 54
-	}
-	if sample != nil {
-		if compactMobile {
-			minRight = max(minRight, 40)
-		} else {
-			minRight = max(minRight, 46)
-		}
-	}
-	rightMargin := minRight
-	for idx, tick := range ticks {
-		lbl := tick.Label
-		if idx == len(ticks)-1 {
-			lbl = tick.Label + " " + channel.unit
-		}
-		tw, _ := ctx.MeasureText(1<<20, ui.Span{Text: lbl, Size: 10})
-		rightMargin = max(rightMargin, float32(math.Ceil(float64(tw)))+tickLabelGap)
-	}
-	rightMargin = min(rightMargin, maxRight)
+	tickMetrics := d.resolveChartTicks(ctx, axis, channel.unit, compactMobile, sample != nil)
+	ticks := tickMetrics.ticks
+	rightMargin := tickMetrics.rightMargin
 
 	if cw.winEnd <= cw.winStart {
 		bufStart := history[0].Elapsed
@@ -1197,15 +1425,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 
 	seekAtX := func(localX, boxW float32) {
 		target := winStart + pointerFractionW(localX, boxW)*(winEnd-winStart)
-		var s *device.Sample
-		switch {
-		case d.held != nil && len(d.held.History) > 0:
-			s = closestSample(d.held.History, target)
-		case d.service != nil:
-			s = d.service.ClosestSample(target)
-		default:
-			s = closestSample(history, target)
-		}
+		s := d.closestHistorySample(history, target)
 		if s == nil {
 			return
 		}
@@ -1419,28 +1639,57 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		if p.Dark {
 			wellAlpha = 0.45
 		}
-		painter.Fill(plotRect, p.Inset.Alpha(wellAlpha), 4)
-
 		xDivs := 4
 		if plotRect.W < 420 {
 			xDivs = 2
 		}
-		gridV := p.LineSoft.Alpha(0.65)
+		scale := painter.Scale()
+		if scale <= 0 {
+			scale = 1
+		}
+		tone := channel.color(p)
+		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, scale, winStart, winEnd, primary, seriesMask)
+		wPx := max(1, int(math.Round(float64(plotRect.W*scale))))
+		hPx := max(1, int(math.Round(float64(plotRect.H*scale))))
+
+		if !d.snapshotOnly && wPx <= 4096 && hPx <= 4096 {
+			plotKey := makeChartPlotCanvasKey(geometry.key, wPx, hPx, scale, p, xDivs, ticks, primary, seriesMask, hasLeftAxis)
+			if d.chartCanvas == nil {
+				d.chartCanvas = ui.NewCanvas(wPx, hPx)
+			} else if cwPx, chPx := d.chartCanvas.Size(); cwPx != wPx || chPx != hPx {
+				d.chartCanvas = ui.NewCanvas(wPx, hPx)
+				d.chartCanvasKey = chartPlotCanvasKey{}
+			}
+			if d.chartCanvasKey != plotKey {
+				d.chartCanvas.Draw(painter, func(cp *ui.Painter) {
+					d.drawChartPlotLayer(cp, ui.Rect{W: float32(wPx), H: float32(hPx)}, scale, p, wellAlpha, xDivs, ticks, geometry, axis, primary, hasLeftAxis, true)
+				})
+				d.chartCanvasKey = plotKey
+			}
+			painter.Image(d.chartCanvas.Bitmap(), plotRect, ui.FillBox)
+		} else {
+			d.drawChartPlotLayer(painter, plotRect, scale, p, wellAlpha, xDivs, ticks, geometry, axis, primary, hasLeftAxis, false)
+		}
+
 		for i := 0; i <= xDivs; i++ {
 			frac := float32(i) / float32(xDivs)
 			gx := left + plotRect.W*frac
-			if i > 0 && i < xDivs {
-				painter.Line(gx, top, gx, bottom, 1, gridV)
-			}
 			label := formatChartTime(winStart + float64(frac)*(winEnd-winStart))
 			labelWidth, _ := painter.MeasureText(1<<20, ui.Span{Text: label, Size: 10})
 			lx := clampFloat32(gx-labelWidth/2, left, right-labelWidth)
 			painter.Text(lx, bottom+xLabelOffset, label, 10, p.Muted)
 		}
 
-		// Horizontal grid + Primary Right Y-axis (compute live pill band first to avoid tick overlap).
-		tone := channel.color(p)
-		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, painter.Scale(), winStart, winEnd, primary, seriesMask)
+		toPoint := func(elapsed, value float64, ax chart.Linear) ui.Point {
+			xf := float32((elapsed - winStart) / max(winEnd-winStart, 1e-6))
+			yf := clampFloat32(ax.At(value), 0, 1)
+			return ui.Point{
+				X: clampFloat32(chart.X(plotRect, xf), left, right),
+				Y: clampFloat32(chart.Y(plotRect, yf), top, bottom),
+			}
+		}
+
+		// Primary Right Y-axis + live pill band.
 		hasLivePill := false
 		var livePos ui.Point
 		var liveStr string
@@ -1448,23 +1697,16 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		if sample != nil {
 			if value, ok := channel.read(sample); ok {
 				hasLivePill = true
-				markerX := sample.Elapsed
-				markerValue := value
+				markerX, markerValue := sample.Elapsed, value
 				if geometry.key.smooth && !d.hasCursor && !math.IsNaN(geometry.lastValue) && len(history) > 0 {
 					last := &history[len(history)-1]
 					if sample.Segment == last.Segment && last.Elapsed <= winEnd+1e-9 && math.Abs(sample.Elapsed-last.Elapsed) < 0.25 {
 						if _, valid := channel.read(last); valid {
-							markerX = last.Elapsed
-							markerValue = geometry.lastValue
+							markerX, markerValue = last.Elapsed, geometry.lastValue
 						}
 					}
 				}
-				xf := float32((markerX - winStart) / max(winEnd-winStart, 1e-6))
-				yf := clampFloat32(axis.At(markerValue), 0, 1)
-				livePos = ui.Point{
-					X: clampFloat32(chart.X(plotRect, xf), left, right),
-					Y: clampFloat32(chart.Y(plotRect, yf), top, bottom),
-				}
+				livePos = toPoint(markerX, markerValue, axis)
 				if !d.hasCursor {
 					liveStr = formatCompactMetric(value, channel.decimals)
 					livePillY = clampFloat32(livePos.Y-9, top, bottom-18)
@@ -1475,11 +1717,6 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		topTickSkipped := false
 		for idx, tick := range ticks {
 			y := bottom - plotRect.H*tick.At
-			gridColor := p.LineSoft
-			if math.Abs(tick.Value) < 1e-9 {
-				gridColor = p.Line
-			}
-			painter.Line(left, y, right, y, 1, gridColor)
 			labelY := clampFloat32(y-6, top-2, bottom-10)
 			if liveStr != "" && labelY+12 > livePillY-2 && labelY < livePillY+20 {
 				if idx == len(ticks)-1 {
@@ -1487,12 +1724,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 				}
 				continue
 			}
-			lbl := tick.Label
-			if idx == len(ticks)-1 {
-				lbl = tick.Label + " " + channel.unit
-			}
-			tw, _ := painter.MeasureText(1<<20, ui.Span{Text: lbl, Size: 10})
-			painter.Text(rect.X+rect.W-tw, labelY, lbl, 10, p.Muted)
+			painter.Text(rect.X+rect.W-tickMetrics.widths[idx], labelY, tickMetrics.labels[idx], 10, p.Muted)
 		}
 
 		if hasLeftAxis {
@@ -1513,42 +1745,6 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 				}
 			}
 		}
-
-		painter.Line(left, bottom, right, bottom, 1, p.Line)
-		painter.Line(right, top, right, bottom, 1, p.LineSoft)
-		if hasLeftAxis {
-			painter.Line(left, top, left, bottom, 1, p.LineSoft)
-		}
-
-		toPoint := func(elapsed, value float64, ax chart.Linear) ui.Point {
-			xf := float32((elapsed - winStart) / max(winEnd-winStart, 1e-6))
-			yf := clampFloat32(ax.At(value), 0, 1)
-			return ui.Point{
-				X: clampFloat32(chart.X(plotRect, xf), left, right),
-				Y: clampFloat32(chart.Y(plotRect, yf), top, bottom),
-			}
-		}
-
-		painter.Clip(plotRect, 0, func() {
-			origin := geometry.key.rect
-			painter.Transform(ui.Translation(plotRect.X-origin.X, plotRect.Y-origin.Y), 0, 0, func() {
-				for index, points := range geometry.lines {
-					if index != primary && len(points) >= 2 {
-						painter.StrokePolyline(points, 1.5, channels[index].color(p).Alpha(0.86))
-					}
-				}
-				if geometry.area != nil {
-					painter.FillPathGradient(geometry.area, ui.LinearGradient{
-						Angle: 180,
-						From:  tone.Alpha(0.24),
-						To:    tone.Alpha(0.01),
-					})
-				}
-				if points := geometry.lines[primary]; len(points) >= 2 {
-					painter.StrokePolyline(points, 2.2, tone)
-				}
-			})
-		})
 
 		if hasLivePill {
 			painter.Fill(ui.Rect{X: livePos.X - 5.5, Y: livePos.Y - 5.5, W: 11, H: 11}, tone.Alpha(0.25), 5.5)
@@ -1585,14 +1781,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		var t1, t2 *device.Sample
 		t1Visible := false
 		if d.hasCursor {
-			switch {
-			case d.held != nil && len(d.held.History) > 0:
-				t1 = closestSample(d.held.History, d.cursorAt)
-			case d.service != nil:
-				t1 = d.service.ClosestSample(d.cursorAt)
-			default:
-				t1 = closestSample(history, d.cursorAt)
-			}
+			t1 = d.closestHistorySample(history, d.cursorAt)
 			if t1 != nil && t1.Elapsed >= winStart-1e-6 && t1.Elapsed <= winEnd+1e-6 {
 				t1Visible = true
 				if v1, ok := channel.read(t1); ok {

@@ -112,6 +112,8 @@ func (d *dashboard) resetChartView() {
 	d.chartHistory = chartHistoryCache{}
 	d.chartStats = chartStatsCache{}
 	d.chartGeometry = chartGeometry{}
+	d.chartCanvasKey = chartPlotCanvasKey{}
+	d.chartTickMetrics = chartTickMetricsCache{}
 	d.fullSession = true
 	d.windowSec = defaultWindowSec
 }
@@ -244,6 +246,7 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 		page:             d.page,
 		pageDirection:    d.pageDirection,
 		scroll:           ui.ScrollState{X: d.scroll.X, Y: d.scroll.Y},
+		ovLeftScroll:     ui.ScrollState{X: d.ovLeftScroll.X, Y: d.ovLeftScroll.Y},
 		channel:          d.channel,
 		chartSeries:      d.chartSeries,
 		chartHistory:     d.chartHistory,
@@ -318,13 +321,26 @@ func (d *dashboard) draw(ctx *ui.Context, p kit.Palette, msgs locales.Messages, 
 		overviewPage.content = func() { d.overview(ctx, p, msgs, snapshot, width, height, notice) }
 	}
 
+	var pdHeaderExtra func()
+	if pdHeaderShowsSummary(landscape, position) {
+		winW, _ := ctx.Size()
+		pdHeaderExtra = func() {
+			data := d.packetSnapshot()
+			visible := d.packets.visiblePackets(msgs, data.Packets)
+			summary, capsText := d.packets.summaryState(data.Packets)
+			splitDetail := pdUsesSplitDetail(d.mobile, landscape, winW)
+			d.pdSummaryPill(ctx, p, msgs, data.Packets, visible, summary, capsText, splitDetail, 26)
+		}
+	}
+
 	pages := [...]workspacePage{
 		pageOverview: overviewPage,
 		pagePD: {
-			label:   msgs.PagePd(),
-			icon:    kit.IconUSB,
-			list:    func(bottomPadding float32) { d.pdPage(ctx, p, msgs, snapshot, bottomPadding) },
-			overlay: func() { d.packetDialog(ctx, p, msgs) },
+			label:       msgs.PagePd(),
+			icon:        kit.IconUSB,
+			list:        func(bottomPadding float32) { d.pdPage(ctx, p, msgs, snapshot, position, bottomPadding) },
+			overlay:     func() { d.packetDialog(ctx, p, msgs) },
+			headerExtra: pdHeaderExtra,
 		},
 		pageRecords: {
 			label:   msgs.GuiRecords(),
@@ -587,6 +603,7 @@ func metricCellColors(p kit.Palette, tone ui.Color, active, pressed, hovered, fo
 type metricCellStyle struct {
 	wide          bool
 	inlineSummary bool
+	scrollSafe    bool
 	padY, padX    float32
 	gap           float32
 	dotSize       float32
@@ -630,7 +647,15 @@ func (d *dashboard) metricCell(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 	}
 
 	btn.Children(func() {
-		kit.GlassPillControl(ctx.Key("bg"), btn, p, kit.RadiusM, cellTint, true, bg, borderW, border, 0.985)
+		if style.scrollSafe {
+			bgBox := ui.Box(ctx.Key("bg")).Absolute().Fill().ZIndex(-1).Radius(kit.RadiusM).PassThrough()
+			bgBox.Background(bgBox.AnimateColor("mc-bg", bg, kit.MotionFast))
+			if borderW > 0 {
+				bgBox.Border(borderW, bgBox.AnimateColor("mc-bd", border, kit.MotionFast))
+			}
+		} else {
+			kit.GlassPillControl(ctx.Key("bg"), btn, p, kit.RadiusM, cellTint, true, bg, borderW, border, 0.985)
+		}
 		if style.inlineSummary {
 			ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(style.dotGap).Justify(ui.SpaceBetween).Children(func() {
 				metricLabelRow(ctx, dotColor, labelColor, style.dotSize, style.dotGap, style.labelSize, label).Shrink(0)
@@ -650,12 +675,12 @@ func (d *dashboard) metricCell(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 
 func (d *dashboard) mobileMetricsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, sample *device.Sample, metricStats [3]channelStat, fontSize float32) {
 	wideStyle := metricCellStyle{
-		wide: true, inlineSummary: true,
+		wide: true, inlineSummary: true, scrollSafe: true,
 		padY: 13, padX: 14, gap: 6, dotSize: 6.5, dotGap: 6,
 		labelSize: 12, summarySize: 11, valueSize: min(27, max(24, fontSize+4)), unitSize: 12, readingGap: 5,
 	}
 	narrowStyle := metricCellStyle{
-		wide: false, inlineSummary: false,
+		wide: false, inlineSummary: false, scrollSafe: true,
 		padY: 11, padX: 13, gap: 3, dotSize: 6.5, dotGap: 6,
 		labelSize: 12, summarySize: 11, valueSize: max(19, fontSize-4), unitSize: 12, readingGap: 5,
 	}
@@ -670,11 +695,15 @@ func (d *dashboard) mobileMetricsCard(ctx *ui.Context, p kit.Palette, msgs local
 
 func (d *dashboard) landscapeMetricsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, sample *device.Sample, metricStats [3]channelStat) {
 	style := metricCellStyle{
-		wide: true, inlineSummary: true,
+		wide: true, inlineSummary: true, scrollSafe: true,
 		padY: 6, padX: 10, gap: 1, dotSize: 6, dotGap: 5,
 		labelSize: 11.5, summarySize: 10, valueSize: 18.5, unitSize: 11, readingGap: 4,
 	}
-	kit.Card(ctx, p).Radius(kit.RadiusL).Padding(5).Gap(3).Children(func() {
+	card := kit.StaticCard(ctx, p).Radius(kit.RadiusL).Padding(5).Gap(3)
+	if !d.snapshotOnly {
+		card.Cache()
+	}
+	card.Children(func() {
 		for index := range 3 {
 			d.metricCell(ctx, p, msgs, sample, metricStats, index, style)
 		}

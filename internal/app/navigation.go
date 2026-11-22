@@ -46,12 +46,13 @@ const (
 )
 
 type workspacePage struct {
-	label   string
-	icon    *ui.SVG
-	content func()
-	list    func(bottomPadding float32)
-	fixed   func()
-	overlay func()
+	label       string
+	icon        *ui.SVG
+	content     func()
+	list        func(bottomPadding float32)
+	fixed       func()
+	overlay     func()
+	headerExtra func()
 }
 
 func (d *dashboard) isLandscape(ctx *ui.Context) bool {
@@ -110,6 +111,16 @@ func sidebarWidth(width float32) float32 {
 
 func isMobileSubpage(page int) bool {
 	return page == pageDevice || page == pageConnectionLog || page == pageSettings
+}
+
+func pageScrollsUnderHeader(page workspacePage, pageID int, portraitMobile bool) bool {
+	return page.fixed == nil && page.list == nil && (portraitMobile || (pageID != pageDevice && pageID != pageConnectionLog))
+}
+
+func (d *dashboard) renderTopScrollEdge(ctx *ui.Context, p kit.Palette, page workspacePage, portraitMobile bool, floatingTop float32) {
+	if pageScrollsUnderHeader(page, d.page, portraitMobile) && d.scroll.Y > 0.5 {
+		kit.GlassScrollEdge(ctx, p, 0, floatingTop+4, 8)
+	}
 }
 
 func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pages []workspacePage, position navigationPosition, name, status string, tone ui.Color) {
@@ -216,6 +227,8 @@ func (d *dashboard) renderPageContent(
 			switch {
 			case portraitMobile:
 				basePadY, padX, gap = 10, 14, 10
+			case landscape && page.list != nil:
+				basePadY, padX, gap = 4, 12, 6
 			case landscape:
 				basePadY, padX, gap = 8, 12, 10
 			}
@@ -234,7 +247,7 @@ func (d *dashboard) renderPageContent(
 				if page.fixed != nil {
 					padBottom = bottomInset + 8
 				} else {
-					padBottom, innerBottom = 0, max(basePadY, bottomInset+8)
+					padBottom = max(6, bottomInset+4)
 				}
 			}
 			container := ui.Column(ctx).Fill().MinWidth(0).MinHeight(0).
@@ -319,7 +332,7 @@ func (d *dashboard) renderPortraitWorkspace(
 		}
 	})
 	if p.LiquidGlass {
-		kit.GlassScrollEdge(ctx, p, 0, floatingTop+10, 8)
+		d.renderTopScrollEdge(ctx, p, pages[d.page], true, floatingTop)
 		d.mobileTopBar(ctx, p, msgs, mobileTitle, name, status, tone, topInset, rightInset, leftInset)
 		if hasBottomBar {
 			d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, bottomInset, leftInset, rightInset)
@@ -339,8 +352,12 @@ func (d *dashboard) renderDesktopWorkspace(
 	floatingTop, bottomInset, leftInset float32,
 	pageContent func(),
 ) {
+	var headerExtra func()
+	if position == navigationSide {
+		headerExtra = pages[d.page].headerExtra
+	}
 	if !p.LiquidGlass {
-		d.desktopHeader(ctx, p, msgs, mobileTitle, name, status, tone, topPages)
+		d.desktopHeader(ctx, p, msgs, mobileTitle, name, status, tone, topPages, headerExtra)
 	}
 	body := ui.Row(ctx.Key("desktop-body")).Grow(1).MinWidth(0).MinHeight(0).AlignItems(ui.Stretch)
 	if d.mobile && !d.snapshotOnly {
@@ -367,8 +384,8 @@ func (d *dashboard) renderDesktopWorkspace(
 		desktopContent.Children(pageContent)
 	})
 	if p.LiquidGlass {
-		kit.GlassScrollEdge(ctx, p, 0, floatingTop+10, 8)
-		d.desktopHeader(ctx, p, msgs, mobileTitle, name, status, tone, topPages)
+		d.renderTopScrollEdge(ctx, p, pages[d.page], false, floatingTop)
+		d.desktopHeader(ctx, p, msgs, mobileTitle, name, status, tone, topPages, headerExtra)
 	}
 }
 
@@ -522,7 +539,7 @@ func (d *dashboard) mobileTopBar(ctx *ui.Context, p kit.Palette, msgs locales.Me
 	}
 }
 
-func (d *dashboard) desktopHeader(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pageTitle, name, status string, tone ui.Color, topPages []workspacePage) {
+func (d *dashboard) desktopHeader(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pageTitle, name, status string, tone ui.Color, topPages []workspacePage, headerExtra func()) {
 	top := len(topPages) != 0
 	topInset, rightInset, _, leftInset := ctx.SafeArea()
 	metrics := d.headerLayoutMetrics(ctx)
@@ -558,6 +575,8 @@ func (d *dashboard) desktopHeader(ctx *ui.Context, p kit.Palette, msgs locales.M
 
 		if top {
 			d.pageNavigation(ctx, p, msgs, topPages, navigationTop, plan.navIconsOnly)
+		} else if headerExtra != nil {
+			ui.Box(ctx).Shrink(1).MinWidth(0).Children(headerExtra)
 		}
 
 		ui.Spacer(ctx).MinWidth(0)
@@ -731,6 +750,25 @@ type desktopHeaderPlan struct {
 	pillIconsOnly bool
 }
 
+type desktopHeaderPlanKey struct {
+	mobile        bool
+	landscape     bool
+	availableW    float32
+	leftInset     float32
+	rightInset    float32
+	topPagesCount int
+	locale        string
+	pageTitle     string
+	name          string
+	status        string
+	metrics       desktopHeaderMetrics
+}
+
+type desktopHeaderPlanCache struct {
+	key  desktopHeaderPlanKey
+	plan desktopHeaderPlan
+}
+
 func measureStatusPillWidth(ctx *ui.Context, text string, pillHeight float32) float32 {
 	if text == "" {
 		return pillHeight
@@ -754,13 +792,34 @@ func measureTopTabsWidth(ctx *ui.Context, pages []workspacePage, tabPad, tabGap,
 
 func (d *dashboard) computeDesktopHeaderPlan(ctx *ui.Context, pages []workspacePage, pageTitle, name, status string, metrics desktopHeaderMetrics) desktopHeaderPlan {
 	available, _ := ctx.Size()
+	landscape := d.isLandscape(ctx)
+	var leftInset, rightInset float32
+	if d.mobile {
+		_, rightInset, _, leftInset = ctx.SafeArea()
+	}
+	key := desktopHeaderPlanKey{
+		mobile:        d.mobile,
+		landscape:     landscape,
+		availableW:    available,
+		leftInset:     leftInset,
+		rightInset:    rightInset,
+		topPagesCount: len(pages),
+		locale:        d.locale(),
+		pageTitle:     pageTitle,
+		name:          name,
+		status:        status,
+		metrics:       metrics,
+	}
+	if d.headerPlanCache.key == key {
+		return d.headerPlanCache.plan
+	}
+
 	var brandW float32
 	rightW := float32(windowButtonWidth)
 	if d.mobile {
 		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: pageTitle, Size: 19, Weight: 750})
 		brandW = titleW
 		rightW = metrics.themeBtnSize
-		_, rightInset, _, leftInset := ctx.SafeArea()
 		available -= leftInset + rightInset
 	} else {
 		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: "WattScope", Size: 13, Weight: 750})
@@ -784,14 +843,17 @@ func (d *dashboard) computeDesktopHeaderPlan(ctx *ui.Context, pages []workspaceP
 	}
 	fixed := metrics.padStart + metrics.padEnd + gapCount*headerGap + brandW + rightW
 
+	var plan desktopHeaderPlan
 	if len(pages) == 0 {
-		if available >= fixed+fullPillW {
-			return desktopHeaderPlan{}
+		switch {
+		case available >= fixed+fullPillW:
+		case status != "" && available >= fixed+shortPillW:
+			plan = desktopHeaderPlan{pillCompact: true}
+		default:
+			plan = desktopHeaderPlan{pillIconsOnly: true}
 		}
-		if status != "" && available >= fixed+shortPillW {
-			return desktopHeaderPlan{pillCompact: true}
-		}
-		return desktopHeaderPlan{pillIconsOnly: true}
+		d.headerPlanCache = desktopHeaderPlanCache{key: key, plan: plan}
+		return plan
 	}
 
 	topCtrlH := kit.DesktopNavTopControlHeight(d.mobile)
@@ -800,16 +862,18 @@ func (d *dashboard) computeDesktopHeaderPlan(ctx *ui.Context, pages []workspaceP
 
 	switch {
 	case available >= fixed+metrics.tabsMargin+tabsFullW+fullPillW:
-		return desktopHeaderPlan{}
+		plan = desktopHeaderPlan{}
 	case status != "" && available >= fixed+metrics.tabsMargin+tabsFullW+shortPillW:
-		return desktopHeaderPlan{pillCompact: true}
+		plan = desktopHeaderPlan{pillCompact: true}
 	case available >= fixed+metrics.tabsMargin+tabsFullW+dotPillW:
-		return desktopHeaderPlan{pillIconsOnly: true}
+		plan = desktopHeaderPlan{pillIconsOnly: true}
 	case available >= fixed+metrics.tabsMargin+tabsIconW+fullPillW:
-		return desktopHeaderPlan{navIconsOnly: true}
+		plan = desktopHeaderPlan{navIconsOnly: true}
 	case status != "" && available >= fixed+metrics.tabsMargin+tabsIconW+shortPillW:
-		return desktopHeaderPlan{navIconsOnly: true, pillCompact: true}
+		plan = desktopHeaderPlan{navIconsOnly: true, pillCompact: true}
 	default:
-		return desktopHeaderPlan{navIconsOnly: true, pillIconsOnly: true}
+		plan = desktopHeaderPlan{navIconsOnly: true, pillIconsOnly: true}
 	}
+	d.headerPlanCache = desktopHeaderPlanCache{key: key, plan: plan}
+	return plan
 }

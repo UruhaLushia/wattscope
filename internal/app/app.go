@@ -51,11 +51,17 @@ type dashboard struct {
 	activePage       atomic.Int32
 	pageDirection    int
 	scroll           ui.ScrollState
+	ovLeftScroll     ui.ScrollState
 	channel          int
 	chartSeries      uint8
 	chartHistory     chartHistoryCache
 	chartStats       chartStatsCache
 	chartGeometry    chartGeometry
+	chartCanvas      *ui.Canvas
+	chartCanvasKey   chartPlotCanvasKey
+	chartPixelPts    [][2]float32
+	chartTickMetrics chartTickMetricsCache
+	headerPlanCache  desktopHeaderPlanCache
 	windowSec        float64
 	fullSession      bool
 	held             *backend.Snapshot
@@ -285,6 +291,7 @@ func (d *dashboard) goPage(page int) {
 	d.page = page
 	d.activePage.Store(int32(page))
 	d.scroll = ui.ScrollState{}
+	d.ovLeftScroll = ui.ScrollState{}
 	d.logView.list = ui.ListState{}
 	d.closeAllMenus()
 	if page == pageSettings {

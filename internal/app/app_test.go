@@ -12,12 +12,14 @@ import (
 	"github.com/UruhaLushia/wattscope/internal/device"
 	"github.com/UruhaLushia/wattscope/internal/diagnostics"
 	"github.com/UruhaLushia/wattscope/internal/kit"
+	"github.com/UruhaLushia/wattscope/internal/pdview"
 	"github.com/UruhaLushia/wattscope/internal/protocol/pd"
 	"github.com/UruhaLushia/wattscope/internal/session"
 	"github.com/UruhaLushia/wattscope/locales"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/preferences"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/chart"
 )
 
 func chartFrameFixture() *dashboard {
@@ -468,5 +470,155 @@ func TestLayoutAndNavigationMetrics(t *testing.T) {
 	start, end = horizontalContentPadding(false, false, navigationTop, 16, 44, 12)
 	if start != 16 || end != 16 {
 		t.Fatalf("desktop horizontal padding = (%v, %v), want (16, 16)", start, end)
+	}
+}
+
+func TestPageScrollsUnderHeader(t *testing.T) {
+	noop := func() {}
+	noopList := func(float32) {}
+
+	for _, tc := range []struct {
+		name           string
+		page           workspacePage
+		pageID         int
+		portraitMobile bool
+		want           bool
+	}{
+		{"landscape fixed overview", workspacePage{fixed: noop}, pageOverview, false, false},
+		{"list page", workspacePage{list: noopList}, pagePD, true, false},
+		{"desktop device subnav", workspacePage{content: noop}, pageDevice, false, false},
+		{"desktop log subnav", workspacePage{content: noop}, pageConnectionLog, false, false},
+		{"portrait device page", workspacePage{content: noop}, pageDevice, true, true},
+		{"portrait overview", workspacePage{content: noop}, pageOverview, true, true},
+		{"desktop settings", workspacePage{content: noop}, pageSettings, false, true},
+		{"desktop records", workspacePage{content: noop}, pageRecords, false, true},
+	} {
+		if got := pageScrollsUnderHeader(tc.page, tc.pageID, tc.portraitMobile); got != tc.want {
+			t.Fatalf("%s: pageScrollsUnderHeader = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestChartPlotCanvasKeyAndSecondaryColor(t *testing.T) {
+	_, light := kit.ResolveTheme(false, kit.DefaultAccentHex)
+	_, dark := kit.ResolveTheme(true, kit.DefaultAccentHex)
+	ticks := []chart.Tick{{At: 0, Value: 0}, {At: 1, Value: 10}}
+
+	geomA := chartGeometryKey{rect: ui.Rect{X: 10, Y: 20, W: 300, H: 180}, scale: 2, start: 0, end: 60, primary: 0, series: 7}
+	geomMoved := geomA
+	geomMoved.rect.X, geomMoved.rect.Y = 40, 120
+
+	base := makeChartPlotCanvasKey(geomA, 600, 360, 2, light, 4, ticks, 0, 7, false)
+	moved := makeChartPlotCanvasKey(geomMoved, 600, 360, 2, light, 4, ticks, 0, 7, false)
+	if base != moved {
+		t.Fatal("origin X/Y translation must not invalidate chartPlotCanvasKey")
+	}
+
+	if darkKey := makeChartPlotCanvasKey(geomA, 600, 360, 2, dark, 4, ticks, 0, 7, false); darkKey == base {
+		t.Fatal("theme change must invalidate chartPlotCanvasKey")
+	}
+	if leftAxisKey := makeChartPlotCanvasKey(geomA, 600, 360, 2, light, 4, ticks, 0, 7, true); leftAxisKey == base {
+		t.Fatal("hasLeftAxis change must invalidate chartPlotCanvasKey")
+	}
+	if resized := makeChartPlotCanvasKey(geomA, 602, 360, 2, light, 4, ticks, 0, 7, false); resized == base {
+		t.Fatal("pixel dimension change must invalidate chartPlotCanvasKey")
+	}
+
+	for _, pal := range []kit.Palette{light, dark} {
+		for i, ch := range channels {
+			c := secondaryCurveColor(ch, pal, 0.32)
+			if c.A != 255 {
+				t.Fatalf("channel %d secondaryCurveColor alpha = %d, want 255 for GPU fast path", i, c.A)
+			}
+		}
+	}
+}
+
+func TestPDLandscapeLayoutHelpers(t *testing.T) {
+	if !pdHeaderShowsSummary(true, navigationSide) {
+		t.Fatal("landscape sidebar should render PD summary pill in header")
+	}
+	if pdHeaderShowsSummary(true, navigationTop) {
+		t.Fatal("landscape top-bar must keep PD summary pill out of header")
+	}
+	if pdHeaderShowsSummary(false, navigationSide) {
+		t.Fatal("non-landscape sidebar must not move PD summary pill to header")
+	}
+
+	if !pdUsesSplitDetail(true, true, 853) {
+		t.Fatal("853dp mobile landscape should use split PD detail")
+	}
+	if pdUsesSplitDetail(true, true, 679) {
+		t.Fatal("679dp mobile landscape should not use split PD detail")
+	}
+	if pdUsesSplitDetail(true, false, 900) {
+		t.Fatal("portrait mobile must not use split PD detail")
+	}
+	if !pdUsesSplitDetail(false, false, 760) {
+		t.Fatal("760dp desktop should use split PD detail")
+	}
+
+	_, p := kit.ResolveTheme(false, kit.DefaultAccentHex)
+	if got := pdNegotiationDotColor(p, pd.Packet{Type: "PS_RDY"}); got != p.Green {
+		t.Fatalf("PS_RDY dot = %v, want Green", got)
+	}
+	if got := pdNegotiationDotColor(p, pd.Packet{Type: "Wait"}); got != p.Warning {
+		t.Fatalf("Wait dot = %v, want Warning", got)
+	}
+	if got := pdNegotiationDotColor(p, pd.Packet{Type: "Source_Capabilities"}); got != p.Accent {
+		t.Fatalf("Source_Capabilities dot = %v, want Accent", got)
+	}
+
+	if got := pdCompactCountLabel(74, 74); got != "74" {
+		t.Fatalf("pdCompactCountLabel(74, 74) = %q, want 74", got)
+	}
+	if got := pdCompactCountLabel(37, 74); got != "37/74" {
+		t.Fatalf("pdCompactCountLabel(37, 74) = %q, want 37/74", got)
+	}
+
+	fields := []pdview.Field{
+		{Label: "响应", Value: "18.0 ms"},
+		{Label: "就绪", Value: "20.8 ms"},
+		{Label: "LongFieldLabel", Value: "This is a much longer value exceeding twenty six runes"},
+		{Label: "Empty", Value: ""},
+		{Label: "角色", Value: "Source / DFP"},
+		{Label: "协议", Value: "PD 3.x · ID 6 · 0x0DA6"},
+		{Label: "Tail", Value: "odd"},
+	}
+	pairedFields := pdPairFields(fields)
+	if len(pairedFields) != 4 {
+		t.Fatalf("pdPairFields len = %d, want 4: %+v", len(pairedFields), pairedFields)
+	}
+	if !pairedFields[0].paired || pairedFields[0].left.Label != "响应" || pairedFields[0].right.Label != "就绪" {
+		t.Fatalf("row 0 = %+v, want paired 响应 + 就绪", pairedFields[0])
+	}
+	if pairedFields[1].paired || pairedFields[1].left.Label != "LongFieldLabel" {
+		t.Fatalf("row 1 = %+v, want solo LongFieldLabel", pairedFields[1])
+	}
+	if !pairedFields[2].paired || pairedFields[2].left.Label != "角色" || pairedFields[2].right.Label != "协议" {
+		t.Fatalf("row 2 = %+v, want paired 角色 + 协议", pairedFields[2])
+	}
+	if pairedFields[3].paired || pairedFields[3].left.Label != "Tail" {
+		t.Fatalf("row 3 = %+v, want solo Tail", pairedFields[3])
+	}
+
+	pdos := []pd.PDO{
+		{Position: 1, Kind: "Fixed", MinV: 5, MaxV: 5, MaxA: 3},
+		{Position: 2, Kind: "Fixed", MinV: 9, MaxV: 9, MaxA: 3},
+		{Position: 3, Kind: "SPR AVS", MinV: 9, MaxV: 20, MaxA15V: 3, MaxA20V: 3},
+		{Position: 4, Kind: "PPS", MinV: 3.3, MaxV: 21, MaxA: 5},
+	}
+	pairedPDOs := pdPairPDOs(pdos)
+	if len(pairedPDOs) != 3 {
+		t.Fatalf("pdPairPDOs len = %d, want 3: %+v", len(pairedPDOs), pairedPDOs)
+	}
+	if !pairedPDOs[0].paired || pairedPDOs[0].left.Position != 1 || pairedPDOs[0].right.Position != 2 {
+		t.Fatalf("pdo row 0 = %+v, want paired #1+#2", pairedPDOs[0])
+	}
+	if pairedPDOs[1].paired || pairedPDOs[1].left.Kind != "SPR AVS" {
+		t.Fatalf("pdo row 1 = %+v, want solo SPR AVS", pairedPDOs[1])
+	}
+	if pairedPDOs[2].paired || pairedPDOs[2].left.Position != 4 {
+		t.Fatalf("pdo row 2 = %+v, want solo #4", pairedPDOs[2])
 	}
 }
