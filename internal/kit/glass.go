@@ -9,7 +9,7 @@ func CanvasBackdrop(el ui.Element, p Palette) ui.Element {
 	return el.Background(p.Canvas)
 }
 
-func GlassSurface(el ui.Element, p Palette, _ float32, fallbackBg, fallbackBorder ui.Color) ui.Element {
+func GlassSurface(el ui.Element, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	el.Background(fallbackBg)
 	if fallbackBorder.A > 0 {
 		el.Border(1, fallbackBorder)
@@ -17,8 +17,8 @@ func GlassSurface(el ui.Element, p Palette, _ float32, fallbackBg, fallbackBorde
 	return el
 }
 
-func GlassPanel(el ui.Element, p Palette, radius, clarity float32, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	return ApplyCardShadow(GlassSurface(el.Radius(radius), p, clarity, fallbackBg, fallbackBorder), p)
+func GlassPanel(el ui.Element, p Palette, radius float32, fallbackBg, fallbackBorder ui.Color) ui.Element {
+	return ApplyCardShadow(GlassSurface(el.Radius(radius), fallbackBg, fallbackBorder), p)
 }
 
 func GlassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
@@ -42,11 +42,7 @@ func glassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity fl
 		}
 		return el.Material(staticGlass{base: base, staticSnapshot: snap})
 	}
-	el.Background(fallbackBg)
-	if fallbackBorder.A > 0 {
-		el.Border(1, fallbackBorder)
-	}
-	return el
+	return GlassSurface(el, fallbackBg, fallbackBorder)
 }
 
 func GlassFloatingButton(ctx *ui.Context, el ui.Element, p Palette, radius float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
@@ -100,6 +96,13 @@ func GlassScrollEdge(ctx *ui.Context, p Palette, offset, height float32, zIndex 
 				{Color: ui.Transparent, At: 1},
 			}}, 0)
 		})
+}
+
+func glassNeutral(dark bool, lightAlpha, darkAlpha float32) ui.Color {
+	if dark {
+		return ui.RGBA(255, 255, 255, darkAlpha)
+	}
+	return ui.RGBA(15, 23, 42, lightAlpha)
 }
 
 func GlassAccentTint(p Palette, lightAlpha, darkAlpha float32) ui.Color {

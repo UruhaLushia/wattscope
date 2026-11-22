@@ -13,7 +13,6 @@ const (
 	MotionMoveDur        = 220 * time.Millisecond
 	MotionPopupOpenDur   = 180 * time.Millisecond
 	MotionPopupCloseDur  = 100 * time.Millisecond
-	MotionOptionDur      = 220 * time.Millisecond
 	MotionOptionCloseDur = 125 * time.Millisecond
 	MotionPopupDur       = 230 * time.Millisecond
 	MotionSheetDur       = 260 * time.Millisecond
@@ -32,7 +31,6 @@ var (
 	MotionChipIn       = ui.Animation{Delay: MotionOptionCloseDur, Duration: 75 * time.Millisecond, Ease: EaseStandard}
 	MotionCapsuleIn    = ui.Animation{Duration: 120 * time.Millisecond, Ease: ui.EaseOut}
 	MotionCapsuleDrag  = ui.Animation{Duration: 22 * time.Millisecond, Ease: ui.EaseOut}
-	MotionCapsulePill  = ui.Animation{Duration: MotionNavDur, Ease: EaseStandard}
 	MotionMove         = ui.Animation{Duration: MotionMoveDur, Ease: ui.EaseOut}
 	MotionLocale       = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.04}}
 	MotionPage         = ui.Animation{Duration: MotionPageDur, Ease: EaseStandard}
@@ -46,12 +44,9 @@ var (
 	MotionSpring       = ui.Animation{Spring: ui.SpringOptions{Duration: MotionMoveDur, Bounce: 0.06}}
 	MotionOptionSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 230 * time.Millisecond, Bounce: 0.06}}
 	MotionPopup        = ui.Animation{Duration: MotionPopupOpenDur, Ease: EaseStandard}
-	MotionOption       = ui.Animation{Duration: MotionOptionDur, Ease: EaseStandard}
-	MotionOptionClose  = ui.Animation{Duration: MotionOptionCloseDur, Ease: EaseStandard}
 	MotionDialogPop    = ui.Animation{Spring: ui.SpringOptions{Duration: MotionPopupDur, Bounce: 0.06}}
 	MotionSheet        = ui.Animation{Spring: ui.SpringOptions{Duration: MotionSheetDur, Bounce: 0.04}}
 
-	ValueMotion          = ui.ContentTransition{Animation: &MotionMove}
 	LocaleTextTransition = ui.ContentTransition{Morph: true, Animation: &MotionLocale}
 	LocaleSizeTransition = ui.ElementTransition{Position: true, Size: true, Animation: &MotionLocale}
 
@@ -371,10 +366,6 @@ func PopupMotion(el ui.Element) ui.Element {
 	return el.AttachedOrigin().Transition(PopupTransition)
 }
 
-func PopupMotionAt(el ui.Element, originX, originY float32) ui.Element {
-	return el.TransformOrigin(originX, originY).Transition(PopupTransition)
-}
-
 func OptionMenuMotion(el ui.Element) ui.Element {
 	return el.AttachedOrigin().Transition(OptionPopupTransition)
 }
@@ -393,11 +384,4 @@ func BackdropMotion(el ui.Element, p Palette) ui.Element {
 		bg = ui.RGBA(8, 10, 14, .24)
 	}
 	return el.Background(bg).Transition(BackdropTransition)
-}
-
-func ScrolledEdge(el ui.Element, p Palette) ui.Element {
-	color := p.LineSoft
-	return el.DrawOver(func(painter *ui.Painter, rect ui.Rect) {
-		painter.Fill(ui.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: 1}, color, 0)
-	})
 }

@@ -17,24 +17,26 @@ import (
 )
 
 type measurement struct {
-	name      func(locales.Messages) string
-	unit      string
-	decimals  int
-	chartable bool
-	read      func(*device.Sample) (float64, bool)
-	light     ui.Color
-	dark      ui.Color
+	name     func(locales.Messages) string
+	unit     string
+	decimals int
+	read     func(*device.Sample) (float64, bool)
+	light    ui.Color
+	dark     ui.Color
 }
 
-var channels = [...]measurement{
-	{locales.Messages.Power, "W", 4, true, func(s *device.Sample) (float64, bool) { return s.Power, true }, ui.Hex("#3c718d"), ui.Hex("#77bbdd")},
-	{locales.Messages.Voltage, "V", 4, true, func(s *device.Sample) (float64, bool) { return s.Voltage, true }, ui.Hex("#745b91"), ui.Hex("#baa3d6")},
-	{locales.Messages.Current, "A", 4, true, func(s *device.Sample) (float64, bool) { return s.Current, true }, ui.Hex("#3a7946"), ui.Hex("#79c07d")},
-	{locales.Messages.Temperature, "°C", 1, true, func(s *device.Sample) (float64, bool) { return optional(s.Temperature) }, ui.Hex("#96601e"), ui.Hex("#e4b665")},
-	{locales.Messages.Dp, "V", 3, false, func(s *device.Sample) (float64, bool) { return optional(s.DP) }, ui.Hex("#2f6f9f"), ui.Hex("#6db3e8")},
-	{locales.Messages.Dn, "V", 3, false, func(s *device.Sample) (float64, bool) { return optional(s.DN) }, ui.Hex("#745b91"), ui.Hex("#baa3d6")},
-	{locales.Messages.ExternalTemperature, "°C", 1, true, func(s *device.Sample) (float64, bool) { return optional(s.ExternalTemperature) }, ui.Hex("#b85c38"), ui.Hex("#eb946e")},
-}
+var (
+	chartChannelOrder = [...]int{0, 1, 2, 3, 6, 4, 5}
+	channels          = [...]measurement{
+		{locales.Messages.Power, "W", 4, func(s *device.Sample) (float64, bool) { return s.Power, true }, ui.Hex("#3c718d"), ui.Hex("#77bbdd")},
+		{locales.Messages.Voltage, "V", 4, func(s *device.Sample) (float64, bool) { return s.Voltage, true }, ui.Hex("#745b91"), ui.Hex("#baa3d6")},
+		{locales.Messages.Current, "A", 4, func(s *device.Sample) (float64, bool) { return s.Current, true }, ui.Hex("#3a7946"), ui.Hex("#79c07d")},
+		{locales.Messages.Temperature, "°C", 1, func(s *device.Sample) (float64, bool) { return optional(s.Temperature) }, ui.Hex("#96601e"), ui.Hex("#e4b665")},
+		{locales.Messages.Dp, "V", 3, func(s *device.Sample) (float64, bool) { return optional(s.DP) }, ui.Hex("#2f6f9f"), ui.Hex("#6db3e8")},
+		{locales.Messages.Dn, "V", 3, func(s *device.Sample) (float64, bool) { return optional(s.DN) }, ui.Hex("#745b91"), ui.Hex("#baa3d6")},
+		{locales.Messages.ExternalTemperature, "°C", 1, func(s *device.Sample) (float64, bool) { return optional(s.ExternalTemperature) }, ui.Hex("#b85c38"), ui.Hex("#eb946e")},
+	}
+)
 
 func optional(value *float64) (float64, bool) {
 	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
@@ -180,30 +182,53 @@ func (d *dashboard) clearSession() {
 	}
 }
 
-func (d *dashboard) chartCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, frame overviewFrame, cardPad, cardBottomPad, cardGap float32, touch, landscape, grow bool, basis, minW, pHeight float32, leftAxis bool) {
+type chartCardOptions struct {
+	cardPad, cardBottomPad, cardGap float32
+	touch, landscape, grow          bool
+	basis, minW, plotHeight         float32
+	leftAxis                        bool
+}
+
+func holdResumeButton(ctx *ui.Context, p kit.Palette, msgs locales.Messages, key string, held, touch bool, onClick func()) ui.Element {
+	label, icon, variant := msgs.ActionHold(), kit.IconPause, kit.VariantSecondary
+	if held {
+		label, icon, variant = msgs.ActionResume(), kit.IconPlay, kit.VariantPrimary
+	}
+	return kit.ActionButton(ctx.Key(key), p, variant, icon, label, touch, onClick)
+}
+
+func (d *dashboard) cachedStaticCard(ctx *ui.Context, p kit.Palette) ui.Element {
+	card := kit.StaticCard(ctx, p)
+	if !d.snapshotOnly {
+		card.Cache()
+	}
+	return card
+}
+
+func (d *dashboard) chartCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, frame overviewFrame, opts chartCardOptions) {
 	channel := channels[d.channel]
 	seriesMask := d.effectiveSeriesMask()
-	fillHeight := pHeight <= 0
+	fillHeight := opts.plotHeight <= 0
 	var c ui.Element
-	if grow {
+	if opts.grow {
 		// Skip FillWidth and slow size transitions on flex-grown chart cards so safe-area or orientation changes never lag past the viewport edge.
-		col := ui.Column(ctx).MinWidth(0).Padding(cardPad, cardPad, cardBottomPad, cardPad).Gap(cardGap)
+		col := ui.Column(ctx).MinWidth(0).Padding(opts.cardPad, opts.cardPad, opts.cardBottomPad, opts.cardPad).Gap(opts.cardGap)
 		if fillHeight {
 			col.FillHeight().MinHeight(0)
 		}
-		c = kit.GlassPanel(col, p, kit.RadiusL, 0.25, p.Surface, p.LineSoft).Grow(1).Basis(basis).MinWidth(minW)
-		if landscape && d.mobile && !d.snapshotOnly {
+		c = kit.GlassPanel(col, p, kit.RadiusL, p.Surface, p.LineSoft).Grow(1).Basis(opts.basis).MinWidth(opts.minW)
+		if opts.landscape && d.mobile && !d.snapshotOnly {
 			kit.ApplyRotateEnterPose(ctx, c.TransformOrigin(0.5, 0.5), "rot-ov-chart", ui.Pose{X: 12, Scale: 0.965, Fade: 0.55}, kit.MotionRotate)
 		}
 	} else {
-		c = kit.Card(ctx, p).Padding(cardPad, cardPad, cardBottomPad, cardPad).Gap(cardGap)
+		c = kit.Card(ctx, p).Padding(opts.cardPad, opts.cardPad, opts.cardBottomPad, opts.cardPad).Gap(opts.cardGap)
 	}
 	c.Children(func() {
 		titleSize, hdrMinH, badgeH, btnH := float32(14), float32(0), float32(24), float32(28)
 		if d.mobile {
 			btnH = 32
 		}
-		if landscape {
+		if opts.landscape {
 			titleSize, hdrMinH, badgeH, btnH = 13.5, 26, 22, 26
 		}
 		kit.ActionBar(ctx).MinHeight(hdrMinH).AlignItems(ui.Center).Gap(8).Shrink(0).Children(func() {
@@ -218,11 +243,7 @@ func (d *dashboard) chartCard(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			kit.ValueBadge(ctx, p, formatWindowLabel(frame.cw.windowSec), kit.TonePlain).Height(badgeH)
 
 			detached := d.held != nil || d.hasViewEnd
-			holdLabel, holdIcon, holdVariant := msgs.ActionHold(), kit.IconPause, kit.VariantSecondary
-			if detached {
-				holdLabel, holdIcon, holdVariant = msgs.ActionResume(), kit.IconPlay, kit.VariantPrimary
-			}
-			kit.ActionButton(ctx.Key("hold"), p, holdVariant, holdIcon, holdLabel, touch, func() {
+			holdResumeButton(ctx, p, msgs, "hold", detached, opts.touch, func() {
 				if detached {
 					d.resumeLive()
 				} else {
@@ -233,7 +254,7 @@ func (d *dashboard) chartCard(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			}).Height(btnH).Disabled(!detached && len(frame.snap.History) == 0)
 		})
 
-		d.chartLegendRow(ctx, p, msgs, frame.snap.History, seriesMask, landscape)
+		d.chartLegendRow(ctx, p, msgs, frame.snap.History, seriesMask, opts.landscape)
 
 		empty := msgs.WaitingMeasurements()
 		if len(frame.snap.History) != 0 {
@@ -242,10 +263,11 @@ func (d *dashboard) chartCard(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			empty = frame.notice
 		}
 
+		pHeight := opts.plotHeight
 		if len(frame.snap.History) == 0 && pHeight > 0 {
 			pHeight = min(pHeight, 250)
 		}
-		d.trend(ctx, p, msgs, frame.snap, frame.live, channel, frame.chartSample, frame.cw, pHeight, empty, touch, seriesMask, leftAxis)
+		d.trend(ctx, p, msgs, frame.snap, frame.live, channel, frame.chartSample, frame.cw, pHeight, empty, opts.touch, seriesMask, opts.leftAxis)
 	})
 }
 
@@ -262,17 +284,19 @@ func (d *dashboard) landscapeOverview(ctx *ui.Context, p kit.Palette, msgs local
 			ui.Column(ctx).FillWidth().Shrink(0).Padding(0, 0, 2, 0).Gap(8).Children(func() {
 				d.landscapeMetricsCard(ctx, p, msgs, frame.readoutSample, frame.metricStats)
 				if hasBottom {
-					d.landscapeSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, leftW, touch)
+					d.sessionSummaryCard(ctx, p, msgs, frame.live, frame.readoutStats, sessionCardOptions{
+						compact: true, cardW: leftW, touch: touch, showCSV: true, showRec: true, clearKey: "clear-overview", chargePrec: 2,
+					})
 					if hasLandscapeSignals(frame.readoutSample, pdTotal) {
-						sigCard := d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true, true).Padding(10, 12).Gap(7)
-						if !d.snapshotOnly {
-							sigCard.Cache()
-						}
+						d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true, true).Padding(10, 12).Gap(7)
 					}
 				}
 			})
 		})
-		d.chartCard(ctx, p, msgs, frame, cardPad, cardBottomPad, cardGap, touch, true, true, 0, chartMinW, 0, chartW >= 360)
+		d.chartCard(ctx, p, msgs, frame, chartCardOptions{
+			cardPad: cardPad, cardBottomPad: cardBottomPad, cardGap: cardGap,
+			touch: touch, landscape: true, grow: true, minW: chartMinW, leftAxis: chartW >= 360,
+		})
 	})
 }
 
@@ -331,10 +355,15 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	}
 	wide2K := width >= 1280 && !d.mobile
 	hasBottom := frame.live.State == backend.Streaming || frame.readoutStats.Samples > 0 || frame.live.Recording.Active
-	var pdTotal uint64
+	var pdSnap backend.PacketSnapshot
 	if hasBottom && d.service != nil {
-		pdTotal = d.service.PacketSnapshot(0, 0).Total
+		if wide2K {
+			pdSnap = d.service.PacketSnapshot(0, 6)
+		} else {
+			pdSnap = d.service.PacketSnapshot(0, 0)
+		}
 	}
+	pdTotal := pdSnap.Total
 
 	if landscape {
 		d.landscapeOverview(ctx, p, msgs, frame, pdTotal, cardPad, cardBottomPad, cardGap, touch, hasBottom)
@@ -344,11 +373,16 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	if wide2K && hasBottom {
 		plotHeight := min(650, max(310, height-360))
 		ui.Row(ctx).FillWidth().Gap(14).AlignItems(ui.Start).Children(func() {
-			d.chartCard(ctx, p, msgs, frame, cardPad, cardBottomPad, cardGap, touch, false, true, 680, 560, plotHeight, !split)
+			d.chartCard(ctx, p, msgs, frame, chartCardOptions{
+				cardPad: cardPad, cardBottomPad: cardBottomPad, cardGap: cardGap,
+				touch: touch, grow: true, basis: 680, minW: 560, plotHeight: plotHeight, leftAxis: !split,
+			})
 			ui.Column(ctx).Width(384).Shrink(0).Gap(12).Children(func() {
-				d.overviewSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, touch)
+				d.sessionSummaryCard(ctx, p, msgs, frame.live, frame.readoutStats, sessionCardOptions{
+					touch: touch, showCSV: true, showRec: true, clearKey: "clear-overview", chargePrec: 2,
+				})
 				d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true, false)
-				d.overviewPDCard(ctx, p, msgs, frame.live)
+				d.overviewPDCard(ctx, p, msgs, frame.live, pdSnap)
 			})
 		})
 		return
@@ -361,7 +395,10 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	if d.mobile && split {
 		plotHeight = max(160, min(198, height-500))
 	}
-	d.chartCard(ctx, p, msgs, frame, cardPad, cardBottomPad, cardGap, touch, false, false, 0, 0, plotHeight, !split)
+	d.chartCard(ctx, p, msgs, frame, chartCardOptions{
+		cardPad: cardPad, cardBottomPad: cardBottomPad, cardGap: cardGap,
+		touch: touch, plotHeight: plotHeight, leftAxis: !split,
+	})
 
 	if hasBottom {
 		compactSignals := d.mobile || (width >= 652 && width < 960)
@@ -370,7 +407,9 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 			bottomGap = 10
 		}
 		ui.Row(ctx).FillWidth().Wrap().Gap(bottomGap).AlignItems(ui.Stretch).Children(func() {
-			d.overviewSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, touch).Grow(1).Basis(300).MinWidth(260)
+			d.sessionSummaryCard(ctx, p, msgs, frame.live, frame.readoutStats, sessionCardOptions{
+				touch: touch, showCSV: true, showRec: true, clearKey: "clear-overview", chargePrec: 2,
+			}).Grow(1).Basis(300).MinWidth(260)
 			d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, compactSignals, false).Grow(1).Basis(300).MinWidth(260)
 		})
 	}
@@ -394,88 +433,87 @@ func hasLandscapeSignals(sample *device.Sample, pdTotal uint64) bool {
 	return false
 }
 
-func (d *dashboard) landscapeSessionCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, stats backend.Statistics, cardW float32, touch bool) ui.Element {
-	compactCell := func(label, value, unit string) {
-		ui.Column(ctx).Grow(1).Basis(0).MinWidth(0).Gap(1).Children(func() {
-			ui.Text(ctx, label).FontSize(10).FontWeight(600).TextColor(p.Muted).SingleLine()
-			ui.Row(ctx).AlignItems(ui.Baseline).Gap(2).Children(func() {
-				ui.Text(ctx, value).FontFeatures("tnum").FontSize(11.5).FontWeight(700).MinWidth(0).SingleLine()
-				if unit != "" {
-					ui.Text(ctx, unit).FontSize(9.5).FontWeight(600).TextColor(p.Muted).Shrink(0).SingleLine()
-				}
-			})
-		})
-	}
-	card := kit.StaticCard(ctx, p).Radius(kit.RadiusL).Padding(8, 11).Gap(5)
-	if !d.snapshotOnly {
-		card.Cache()
+type sessionCardOptions struct {
+	compact    bool
+	cardW      float32
+	touch      bool
+	showCSV    bool
+	showRec    bool
+	clearKey   string
+	chargePrec int
+}
+
+func (d *dashboard) sessionSummaryCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, stats backend.Statistics, opts sessionCardOptions) ui.Element {
+	var card ui.Element
+	hdrMinH, hdrGap := float32(28), float32(8)
+	if opts.compact {
+		card = d.cachedStaticCard(ctx, p).Radius(kit.RadiusL).Padding(8, 11).Gap(5)
+		hdrMinH, hdrGap = 24, 5
+	} else {
+		card = kit.Card(ctx, p).Gap(10)
 	}
 	return card.Children(func() {
-		ui.Row(ctx).FillWidth().MinHeight(24).AlignItems(ui.Center).Gap(5).Children(func() {
-			ui.Text(ctx, msgs.GuiSession()).FontSize(13).FontWeight(700).SingleLine().Shrink(0).Role(ui.RoleHeading).Level(2)
-			if live.Recording.Active {
+		ui.Row(ctx).FillWidth().MinHeight(hdrMinH).AlignItems(ui.Center).Gap(hdrGap).Children(func() {
+			if opts.compact {
+				ui.Text(ctx, msgs.GuiSession()).FontSize(13).FontWeight(700).SingleLine().Shrink(0).Role(ui.RoleHeading).Level(2)
+				if opts.showRec && live.Recording.Active {
+					kit.Badge(ctx, p, msgs.RecBadge(), kit.ToneDanger)
+				}
+				ui.Spacer(ctx).MinWidth(0)
+				if stats.Samples > 0 {
+					if opts.cardW < 236 {
+						kit.IconActionButton(ctx.Key(opts.clearKey), p, kit.IconTrash, msgs.ActionClear(), 24, false, d.clearSession)
+					} else {
+						kit.ActionButton(ctx.Key(opts.clearKey), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), opts.touch, d.clearSession).
+							Height(24).Padding(0, 6)
+					}
+				}
+				if opts.showCSV {
+					d.csvButton(ctx, p, msgs, live.Recording, opts.touch).Height(24).Padding(0, 8)
+				}
+				return
+			}
+			kit.SectionTitle(ctx, msgs.GuiSession())
+			ui.Spacer(ctx)
+			if opts.showRec && live.Recording.Active {
 				kit.Badge(ctx, p, msgs.RecBadge(), kit.ToneDanger)
 			}
-			ui.Spacer(ctx).MinWidth(0)
-			if stats.Samples > 0 {
-				if cardW < 236 {
-					kit.IconActionButton(ctx.Key("clear-overview"), p, kit.IconTrash, msgs.ActionClear(), 24, false, d.clearSession)
-				} else {
-					kit.ActionButton(ctx.Key("clear-overview"), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), touch, d.clearSession).
-						Height(24).Padding(0, 6)
+			if opts.showCSV {
+				if stats.Samples > 0 {
+					kit.ActionButton(ctx.Key(opts.clearKey), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), opts.touch, d.clearSession).
+						Height(28).Padding(0, 8)
 				}
+				d.csvButton(ctx, p, msgs, live.Recording, opts.touch).Height(28)
+			} else {
+				kit.ActionButton(ctx.Key(opts.clearKey), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), opts.touch, d.clearSession).
+					Height(28).Padding(0, 8).Disabled(d.service == nil)
 			}
-			d.csvButton(ctx, p, msgs, live.Recording, touch).Height(24).Padding(0, 8)
 		})
 		kit.Divider(ctx, p)
 		durVal, durUnit := formatSessionDuration(stats.MeasuredSeconds)
-		ui.Row(ctx).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			compactCell(msgs.Energy(), formatCompactMetric(stats.WattHours, 3), "Wh")
-			kit.VerticalDivider(ctx, p, 20)
-			compactCell(msgs.ChargeShort(), formatCompactMetric(stats.AbsoluteAmpHours*1000, 2), "mAh")
-			kit.VerticalDivider(ctx, p, 20)
-			compactCell(msgs.GuiDuration(), durVal, durUnit)
-		})
-	})
-}
-
-func (d *dashboard) overviewSessionCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, stats backend.Statistics, touch bool) ui.Element {
-	return kit.Card(ctx, p).Gap(10).Children(func() {
-		ui.Row(ctx).FillWidth().MinHeight(28).AlignItems(ui.Center).Gap(8).Children(func() {
-			kit.SectionTitle(ctx, msgs.GuiSession())
-			ui.Spacer(ctx)
-			if live.Recording.Active {
-				kit.Badge(ctx, p, msgs.RecBadge(), kit.ToneDanger)
+		var items [3]kit.MetricSummaryItem
+		if opts.compact {
+			items = [3]kit.MetricSummaryItem{
+				{Label: msgs.Energy(), Value: formatCompactMetric(stats.WattHours, 3), Unit: "Wh"},
+				{Label: msgs.ChargeShort(), Value: formatCompactMetric(stats.AbsoluteAmpHours*1000, opts.chargePrec), Unit: "mAh"},
+				{Label: msgs.GuiDuration(), Value: durVal, Unit: durUnit},
 			}
-			if stats.Samples > 0 {
-				kit.ActionButton(ctx.Key("clear-overview"), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), touch, d.clearSession).
-					Height(28).Padding(0, 8)
+		} else {
+			items = [3]kit.MetricSummaryItem{
+				{Label: msgs.Energy(), Value: fmt.Sprintf("%.4f", stats.WattHours), Unit: "Wh"},
+				{Label: msgs.ChargeShort(), Value: fmt.Sprintf("%.*f", opts.chargePrec, stats.AbsoluteAmpHours*1000), Unit: "mAh"},
+				{Label: msgs.GuiDuration(), Value: durVal, Unit: durUnit},
 			}
-			d.csvButton(ctx, p, msgs, live.Recording, touch).Height(28)
-		})
-		kit.Divider(ctx, p)
-		ui.Row(ctx).FillWidth().Wrap().Gap(12).AlignItems(ui.Center).Children(func() {
-			kit.MetricSummaryCell(ctx, p, msgs.Energy(), fmt.Sprintf("%.4f", stats.WattHours), "Wh")
-			kit.VerticalDivider(ctx, p, 24)
-			kit.MetricSummaryCell(ctx, p, msgs.ChargeShort(), fmt.Sprintf("%.2f", stats.AbsoluteAmpHours*1000), "mAh")
-			kit.VerticalDivider(ctx, p, 24)
-			durVal, durUnit := formatSessionDuration(stats.MeasuredSeconds)
-			kit.MetricSummaryCell(ctx, p, msgs.GuiDuration(), durVal, durUnit)
-		})
+		}
+		kit.MetricSummaryRow(ctx, p, items[:], opts.compact, !opts.compact)
 	})
 }
 
 func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, sample *device.Sample, pdTotal uint64, compactGrid, staticCard bool) ui.Element {
-	dirLabel := ""
-	switch displayedCurrentDirection(sample) {
-	case device.CurrentPlugToReceptacle:
-		dirLabel = msgs.GuiPlugToReceptacle()
-	case device.CurrentReceptacleToPlug:
-		dirLabel = msgs.GuiReceptacleToPlug()
-	}
+	dirLabel := displayedCurrentDirectionLabel(msgs, sample)
 	card := kit.Card(ctx, p)
 	if staticCard {
-		card = kit.StaticCard(ctx, p)
+		card = d.cachedStaticCard(ctx, p)
 	}
 	return card.Gap(10).Children(func() {
 		ui.Row(ctx).FillWidth().MinHeight(28).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -493,15 +531,13 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 		kit.Divider(ctx, p)
 
 		if sample != nil {
-			type pinTile struct {
-				label, value, unit string
-			}
-			var tileBuf [4]pinTile
-			tiles := tileBuf[:0]
+			var items [4]kit.MetricSummaryItem
+			n := 0
 			for _, index := range [...]int{4, 5} {
 				ch := channels[index]
 				if _, ok := ch.read(sample); ok {
-					tiles = append(tiles, pinTile{ch.name(msgs), ch.format(sample), ch.unit})
+					items[n] = kit.MetricSummaryItem{Label: ch.name(msgs), Value: ch.format(sample), Unit: ch.unit}
+					n++
 				}
 			}
 			for _, line := range [...]struct {
@@ -509,35 +545,28 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 				ptr   *float64
 			}{{"CC1", sample.CC1}, {"CC2", sample.CC2}} {
 				if val, ok := optional(line.ptr); ok {
-					tiles = append(tiles, pinTile{line.label, fmt.Sprintf("%.3f", val), "V"})
+					items[n] = kit.MetricSummaryItem{Label: line.label, Value: fmt.Sprintf("%.3f", val), Unit: "V"}
+					n++
 				}
 			}
-			if len(tiles) == 0 {
+			if n == 0 {
 				if live.Device.Driver != "" {
-					tiles = append(tiles, pinTile{msgs.GuiInfo(), live.Device.Driver, ""})
+					items[n] = kit.MetricSummaryItem{Label: msgs.GuiInfo(), Value: live.Device.Driver}
+					n++
 				}
 				if pdTotal > 0 {
-					tiles = append(tiles, pinTile{msgs.PdHeading(), strconv.FormatUint(pdTotal, 10), ""})
+					items[n] = kit.MetricSummaryItem{Label: msgs.PdHeading(), Value: strconv.FormatUint(pdTotal, 10)}
+					n++
 				}
 			}
-			renderRow := func(items []pinTile) {
-				ui.Row(ctx).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-					for i, tile := range items {
-						if i > 0 {
-							kit.VerticalDivider(ctx, p, 24)
-						}
-						kit.MetricSummaryCell(ctx, p, tile.label, tile.value, tile.unit)
-					}
-				})
-			}
 			switch {
-			case compactGrid && len(tiles) > 2:
+			case compactGrid && n > 2:
 				ui.Column(ctx).FillWidth().Gap(10).Children(func() {
-					renderRow(tiles[:2])
-					renderRow(tiles[2:])
+					kit.MetricSummaryRow(ctx, p, items[:2], false, false)
+					kit.MetricSummaryRow(ctx, p, items[2:n], false, false)
 				})
-			case len(tiles) > 0:
-				renderRow(tiles)
+			case n > 0:
+				kit.MetricSummaryRow(ctx, p, items[:n], false, false)
 			}
 		} else if live.Device.Name != "" {
 			ui.Text(ctx, live.Device.Name).FontSize(12).TextColor(p.Muted)
@@ -545,12 +574,8 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 	})
 }
 
-func (d *dashboard) overviewPDCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot) {
-	if d.service == nil {
-		return
-	}
-	pdSnap := d.service.PacketSnapshot(0, 6)
-	if len(pdSnap.Packets) == 0 && !live.Device.Supports(device.CapPDCapture) {
+func (d *dashboard) overviewPDCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, pdSnap backend.PacketSnapshot) {
+	if d.service == nil || (len(pdSnap.Packets) == 0 && !live.Device.Supports(device.CapPDCapture)) {
 		return
 	}
 	kit.Card(ctx, p).Gap(8).Children(func() {
@@ -682,12 +707,17 @@ type chartStatsCache struct {
 	stats          [len(channels)]channelStat
 }
 
-func (d *dashboard) cachedHasChannelData(history []device.Sample, index int) bool {
+func (d *dashboard) chartStatsFor(history []device.Sample) *chartStatsCache {
 	key := chartSamplesIdentity(history)
 	cache := &d.chartStats
 	if cache.key != key {
 		*cache = chartStatsCache{key: key}
 	}
+	return cache
+}
+
+func (d *dashboard) cachedHasChannelData(history []device.Sample, index int) bool {
+	cache := d.chartStatsFor(history)
 	bit := uint8(1 << index)
 	if cache.hasDataChecked&bit == 0 {
 		if hasChannelData(history, channels[index]) {
@@ -699,11 +729,7 @@ func (d *dashboard) cachedHasChannelData(history []device.Sample, index int) boo
 }
 
 func (d *dashboard) visibleChartStat(history []device.Sample, index int) channelStat {
-	key := chartSamplesIdentity(history)
-	cache := &d.chartStats
-	if cache.key != key {
-		*cache = chartStatsCache{key: key}
-	}
+	cache := d.chartStatsFor(history)
 	mask := uint8(1 << index)
 	if cache.valid&mask == 0 {
 		stat := channelStat{low: math.Inf(1), high: math.Inf(-1)}
@@ -723,10 +749,9 @@ func (d *dashboard) visibleChartStat(history []device.Sample, index int) channel
 }
 
 func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.Messages, history []device.Sample, seriesMask uint8, compact bool) {
-	candidates := [...]int{0, 1, 2, 3, 6, 4, 5}
-	var visBuf [len(candidates)]int
+	var visBuf [len(chartChannelOrder)]int
 	visible := visBuf[:0]
-	for _, idx := range candidates {
+	for _, idx := range chartChannelOrder {
 		if idx < 3 || d.cachedHasChannelData(history, idx) {
 			visible = append(visible, idx)
 		}
@@ -842,16 +867,20 @@ func seriesGapThreshold(history []device.Sample) float64 {
 	return max(baseGap, cadence*4)
 }
 
-func visibleHistory(history []device.Sample, start, end float64) []device.Sample {
-	n := len(history)
-	lo := sort.Search(n, func(i int) bool { return history[i].Elapsed >= start })
-	hi := sort.Search(n, func(i int) bool { return history[i].Elapsed > end })
+func historyWindowBounds(n int, at func(int) float64, start, end float64) (lo, hi int) {
+	lo = sort.Search(n, func(i int) bool { return at(i) >= start })
+	hi = sort.Search(n, func(i int) bool { return at(i) > end })
 	if lo > 0 {
 		lo--
 	}
 	if hi < n {
 		hi++
 	}
+	return lo, hi
+}
+
+func visibleHistory(history []device.Sample, start, end float64) []device.Sample {
+	lo, hi := historyWindowBounds(len(history), func(i int) float64 { return history[i].Elapsed }, start, end)
 	return history[lo:hi]
 }
 
@@ -925,20 +954,10 @@ func smoothSeriesRun(run []seriesSample, sigma, radius float64) []seriesSample {
 
 func trimRunToWindow(run []seriesSample, winStart, winEnd float64) []seriesSample {
 	n := len(run)
-	lo := sort.Search(n, func(i int) bool { return run[i].elapsed >= winStart })
-	if lo == n {
+	if n == 0 || run[n-1].elapsed < winStart || run[0].elapsed > winEnd {
 		return nil
 	}
-	hi := sort.Search(n, func(i int) bool { return run[i].elapsed > winEnd })
-	if lo == 0 && hi == 0 {
-		return nil
-	}
-	if lo > 0 {
-		lo--
-	}
-	if hi < n {
-		hi++
-	}
+	lo, hi := historyWindowBounds(n, func(i int) float64 { return run[i].elapsed }, winStart, winEnd)
 	return run[lo:hi]
 }
 
@@ -983,7 +1002,7 @@ func sampleNormalizedSeries(view []device.Sample, ch measurement, axis chart.Lin
 			}
 			for _, pt := range visible {
 				xf := float32((pt.elapsed - winStart) / span)
-				yf := clampFloat32(axis.At(pt.value), 0, 1)
+				yf := clampOrder(axis.At(pt.value), 0, 1)
 				xs = append(xs, xf)
 				ysUp = append(ysUp, yf)
 				if pt.elapsed >= winStart && pt.elapsed <= winEnd+1e-9 {
@@ -1023,7 +1042,7 @@ func seriesPointsFromNormalized(plotRect ui.Rect, xs, ysUp []float32) [][2]float
 func buildSeriesArea(rect ui.Rect, axis chart.Linear, points [][2]float32) *ui.Path {
 	baseline := rect.Y + rect.H
 	if axis.Lo < 0 {
-		baseline = chart.Y(rect, clampFloat32(axis.At(0), 0, 1))
+		baseline = chart.Y(rect, clampOrder(axis.At(0), 0, 1))
 	}
 	var path *ui.Path
 	start := 0
@@ -1118,16 +1137,6 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 	return cache
 }
 
-func clampFloat32(v, lo, hi float32) float32 {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
 func (d *dashboard) secondaryAxisChannel(history []device.Sample, seriesMask uint8, wideLeftAxis bool) (int, bool) {
 	if !wideLeftAxis {
 		return -1, false
@@ -1144,9 +1153,11 @@ func (d *dashboard) secondaryAxisChannel(history []device.Sample, seriesMask uin
 }
 
 type chartTickMetricsKey struct {
+	channel       int
 	axisLo        float64
 	axisHi        float64
 	unit          string
+	scale         float32
 	compactMobile bool
 	hasSample     bool
 }
@@ -1159,16 +1170,22 @@ type chartTickMetricsCache struct {
 	rightMargin float32
 }
 
-func (d *dashboard) resolveChartTicks(ctx *ui.Context, axis chart.Linear, unit string, compactMobile, hasSample bool) chartTickMetricsCache {
+func (d *dashboard) resolveChartTicks(ctx *ui.Context, slot, channel int, axis chart.Linear, unit string, compactMobile, hasSample bool) chartTickMetricsCache {
+	scale := ctx.Zoom()
+	if scale <= 0 {
+		scale = 1
+	}
 	key := chartTickMetricsKey{
+		channel:       channel,
 		axisLo:        axis.Lo,
 		axisHi:        axis.Hi,
 		unit:          unit,
+		scale:         scale,
 		compactMobile: compactMobile,
 		hasSample:     hasSample,
 	}
-	if d.chartTickMetrics.key == key && len(d.chartTickMetrics.ticks) > 0 {
-		return d.chartTickMetrics
+	if cached := d.chartTickMetrics[slot]; cached.key == key && len(cached.ticks) > 0 {
+		return cached
 	}
 	ticks := axis.Ticks(4)
 	const tickLabelGap = float32(6)
@@ -1197,14 +1214,17 @@ func (d *dashboard) resolveChartTicks(ctx *ui.Context, axis chart.Linear, unit s
 		rightMargin = max(rightMargin, float32(math.Ceil(float64(tw)))+tickLabelGap)
 	}
 	rightMargin = min(rightMargin, maxRight)
-	d.chartTickMetrics = chartTickMetricsCache{
+	resolved := chartTickMetricsCache{
 		key:         key,
 		ticks:       ticks,
 		labels:      labels,
 		widths:      widths,
 		rightMargin: rightMargin,
 	}
-	return d.chartTickMetrics
+	if !d.snapshotOnly {
+		d.chartTickMetrics[slot] = resolved
+	}
+	return resolved
 }
 
 type chartPlotCanvasKey struct {
@@ -1362,67 +1382,42 @@ func (d *dashboard) drawChartPlotLayer(painter *ui.Painter, rect ui.Rect, scale 
 	}
 }
 
-func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap, live backend.Snapshot, channel measurement, sample *device.Sample, cw chartWindow, height float32, empty string, touch bool, seriesMask uint8, wideLeftAxis bool) {
-	history := snap.History
-	primary := d.channel
-	stat := d.visibleChartStat(history, primary)
-	if stat.count == 0 {
-		emptyBox := ui.Box(ctx).FillWidth().Center()
-		if height <= 0 {
-			emptyBox.Grow(1).MinHeight(120)
-		} else {
-			emptyBox.MinHeight(height)
-		}
-		emptyBox.Children(func() {
-			kit.EmptyState(ctx, p, kit.IconActivity, empty, "", func() {
-				switch {
-				case live.ErrorKind == "selection":
-					kit.ActionButton(ctx.Key("find-empty"), p, kit.VariantPrimary, kit.IconSearch, msgs.GuiFindMeters(), touch, func() {
-						d.goPage(pageDevice)
-						d.scanMeters(msgs, false)
-					}).Disabled(d.busy)
-				case live.State != backend.Streaming && live.State != backend.Connecting:
-					kit.ActionButton(ctx.Key("connect-empty"), p, kit.VariantPrimary, kit.IconPlay, msgs.GuiConnect(), touch, func() {
-						d.connect()
-					}).Disabled(d.busy)
-				}
-			})
+func (d *dashboard) resetChartDrag() {
+	d.dragMode = chartDragNone
+	d.dragMoved = false
+	d.dragClicks = 0
+}
+
+func (d *dashboard) trendEmptyState(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, height float32, empty string, touch bool) {
+	emptyBox := ui.Box(ctx).FillWidth().Center()
+	if height <= 0 {
+		emptyBox.Grow(1).MinHeight(120)
+	} else {
+		emptyBox.MinHeight(height)
+	}
+	emptyBox.Children(func() {
+		kit.EmptyState(ctx, p, kit.IconActivity, empty, "", func() {
+			switch {
+			case live.ErrorKind == "selection":
+				kit.ActionButton(ctx.Key("find-empty"), p, kit.VariantPrimary, kit.IconSearch, msgs.GuiFindMeters(), touch, func() {
+					d.goPage(pageDevice)
+					d.scanMeters(msgs, false)
+				}).Disabled(d.busy)
+			case live.State != backend.Streaming && live.State != backend.Connecting:
+				kit.ActionButton(ctx.Key("connect-empty"), p, kit.VariantPrimary, kit.IconPlay, msgs.GuiConnect(), touch, func() {
+					d.connect()
+				}).Disabled(d.busy)
+			}
 		})
-		return
-	}
+	})
+}
 
-	compactMobile := d.mobile && !wideLeftAxis
-	secIdx, hasLeftAxis := d.secondaryAxisChannel(history, seriesMask, wideLeftAxis)
-	leftMargin := float32(0)
-	if hasLeftAxis {
-		leftMargin = 46
-	}
-	axis := chartAxis(snap.ChartRanges[primary], stat)
-	tickMetrics := d.resolveChartTicks(ctx, axis, channel.unit, compactMobile, sample != nil)
-	ticks := tickMetrics.ticks
-	rightMargin := tickMetrics.rightMargin
-
-	if cw.winEnd <= cw.winStart {
-		bufStart := history[0].Elapsed
-		if d.fullSession {
-			bufStart = 0
-		}
-		bufEnd := history[len(history)-1].Elapsed
-		cw = chartWindowAt(bufStart, bufEnd, cw.windowSec, bufEnd)
-	}
+func (d *dashboard) handleChartInput(ctx *ui.Context, history []device.Sample, cw chartWindow, leftMargin, rightMargin float32) func(ui.InputEvent) bool {
 	winStart, winEnd := cw.winStart, cw.winEnd
 	pointerFractionW := func(localX, boxW float32) float64 {
 		plotW := max(1, boxW-leftMargin-rightMargin)
-		return clampFloat(float64(localX-leftMargin)/float64(plotW), 0, 1)
+		return clampOrder(float64(localX-leftMargin)/float64(plotW), 0, 1)
 	}
-	sampleAtX := func(localX, boxW float32, samples []device.Sample) *device.Sample {
-		if len(samples) == 0 {
-			return nil
-		}
-		target := winStart + pointerFractionW(localX, boxW)*(winEnd-winStart)
-		return closestSample(samples, target)
-	}
-
 	seekAtX := func(localX, boxW float32) {
 		target := winStart + pointerFractionW(localX, boxW)*(winEnd-winStart)
 		s := d.closestHistorySample(history, target)
@@ -1433,160 +1428,328 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 			if bufStart, bufEnd, ok := d.historyBounds(cw); ok {
 				minEnd := min(bufEnd, bufStart+cw.windowSec)
 				d.hasViewEnd = true
-				d.viewEnd = clampFloat(winEnd, minEnd, bufEnd)
+				d.viewEnd = clampOrder(winEnd, minEnd, bufEnd)
 			}
 		}
 		d.cursorAt = s.Elapsed
 		d.hasCursor = true
 		d.displayAt = time.Time{}
 	}
-
-	canPan := cw.bufEnd-cw.bufStart > cw.windowSec+1e-3 || (d.hasViewEnd && d.viewEnd < cw.bufEnd-1e-3)
 	nearCursor := func(localX, boxW float32) bool {
-		if !d.hasCursor {
-			return false
-		}
-		if winEnd <= winStart || d.cursorAt < winStart-1e-6 || d.cursorAt > winEnd+1e-6 {
+		if !d.hasCursor || winEnd <= winStart || !cw.contains(d.cursorAt) {
 			return false
 		}
 		plotW := max(1, boxW-leftMargin-rightMargin)
 		t1X := leftMargin + float32((d.cursorAt-winStart)/(winEnd-winStart))*plotW
 		return math.Abs(float64(localX-t1X)) <= 12
 	}
+	return func(event ui.InputEvent) bool {
+		rect := d.chartHandle.Bounds(ctx)
+		plotW := max(1, rect.W-leftMargin-rightMargin)
+		switch event.Kind {
+		case ui.InputZoom:
+			if event.Scale > 0 && event.Scale != 1 {
+				d.zoomByFactor(cw, pointerFractionW(event.X, rect.W), 1/float64(event.Scale))
+				return true
+			}
+		case ui.InputScroll:
+			if math.Abs(float64(event.DX)) > math.Abs(float64(event.DY)) || event.Mods&ui.Shift != 0 {
+				delta := event.DX
+				if delta == 0 {
+					delta = event.DY
+				}
+				if d.held == nil && !d.hasViewEnd && (delta > 0 || event.Momentum) {
+					return true
+				}
+				atEdge := d.panChart(delta, plotW, cw)
+				if d.held == nil && d.hasViewEnd && delta > 0 && atEdge {
+					d.resumeLive()
+				}
+				return true
+			}
+			if (d.mobile && event.Precise) || event.DY == 0 {
+				return false
+			}
+			if event.Precise && event.Momentum {
+				return true
+			}
+			dy := clampOrder(float64(event.DY), -120, 120)
+			d.zoomByFactor(cw, pointerFractionW(event.X, rect.W), math.Exp(dy*0.0045))
+			return true
+		case ui.InputPointerDown:
+			if event.Button == 0 {
+				d.dragStartX, d.dragLastX = event.X, event.X
+				d.dragMoved = false
+				d.dragClicks = event.Clicks
+				if d.lastPressDragged {
+					d.dragClicks = 1
+				}
+				d.dragMode = chartDragPending
+				return true
+			}
+			if event.Button == 2 {
+				d.dragMode = chartDragPan
+				d.dragMoved = true
+				d.dragLastX = event.X
+				return true
+			}
+		case ui.InputPointerMove:
+			switch d.dragMode {
+			case chartDragPending:
+				moved := event.X - d.dragStartX
+				if math.Abs(float64(moved)) < 4 {
+					return true
+				}
+				d.dragMoved = true
+				d.dragMode = chartDragPan
+				d.panChart(-moved, plotW, cw)
+				d.dragLastX = event.X
+				return true
+			case chartDragPan:
+				dx := event.X - d.dragLastX
+				d.dragLastX = event.X
+				d.panChart(-dx, plotW, cw)
+				return true
+			}
+		case ui.InputPointerUp:
+			switch d.dragMode {
+			case chartDragPending:
+				wasMoved, clicks := d.dragMoved, d.dragClicks
+				d.lastPressDragged = wasMoved
+				d.resetChartDrag()
+				if !event.Canceled && event.Button == 0 && !wasMoved {
+					switch {
+					case clicks >= 2:
+						if d.held != nil || d.hasViewEnd || d.hasCursor {
+							d.resumeLive()
+						} else {
+							sessionSpan := max(0, cw.bufEnd-cw.bufStart)
+							if d.fullSession || math.Abs(cw.windowSec-defaultWindowSec) > 0.5 {
+								d.fullSession, d.windowSec, d.displayAt = false, defaultWindowSec, time.Time{}
+							} else if sessionSpan > defaultWindowSec+0.5 {
+								d.fullSession, d.windowSec, d.displayAt = true, sessionSpan, time.Time{}
+							}
+						}
+					case nearCursor(event.X, rect.W):
+						d.hasCursor = false
+						d.displayAt = time.Time{}
+						if d.held == nil && d.atLiveEdge(cw, 1.5) {
+							d.resumeLive()
+						}
+					default:
+						seekAtX(event.X, rect.W)
+					}
+				}
+				return true
+			case chartDragPan:
+				if event.Button == 0 || event.Button == 2 || event.Canceled {
+					d.lastPressDragged = true
+					d.resetChartDrag()
+					if d.held == nil && d.hasViewEnd && d.atLiveEdge(cw, 0.15) {
+						d.resumeLive()
+					}
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
 
+func (d *dashboard) drawChartOverlay(painter *ui.Painter, p kit.Palette, msgs locales.Messages, rect, plotRect ui.Rect, history []device.Sample, sample *device.Sample, channel measurement, geometry *chartGeometry, axis chart.Linear, tickMetrics, secTickMetrics chartTickMetricsCache, secIdx int, rightMargin, xLabelOffset float32, xDivs int, cw chartWindow, seriesMask uint8) {
+	winStart, winEnd := cw.winStart, cw.winEnd
+	left, top, right, bottom := plotRect.X, plotRect.Y, plotRect.X+plotRect.W, plotRect.Y+plotRect.H
+	tone := channel.color(p)
+
+	for i := 0; i <= xDivs; i++ {
+		frac := float32(i) / float32(xDivs)
+		gx := left + plotRect.W*frac
+		label := formatChartTime(winStart + float64(frac)*(winEnd-winStart))
+		labelWidth, _ := painter.MeasureText(1<<20, ui.Span{Text: label, Size: 10})
+		lx := clampOrder(gx-labelWidth/2, left, right-labelWidth)
+		painter.Text(lx, bottom+xLabelOffset, label, 10, p.Muted)
+	}
+
+	toPoint := func(elapsed, value float64, ax chart.Linear) ui.Point {
+		xf := float32((elapsed - winStart) / max(winEnd-winStart, 1e-6))
+		yf := clampOrder(ax.At(value), 0, 1)
+		return ui.Point{
+			X: clampOrder(chart.X(plotRect, xf), left, right),
+			Y: clampOrder(chart.Y(plotRect, yf), top, bottom),
+		}
+	}
+
+	// Primary Right Y-axis + live pill band.
+	hasLivePill := false
+	var livePos ui.Point
+	var liveStr string
+	var livePillY float32
+	if sample != nil {
+		if value, ok := channel.read(sample); ok {
+			hasLivePill = true
+			markerX, markerValue := sample.Elapsed, value
+			if geometry.key.smooth && !d.hasCursor && !math.IsNaN(geometry.lastValue) && len(history) > 0 {
+				last := &history[len(history)-1]
+				if sample.Segment == last.Segment && last.Elapsed <= winEnd+1e-9 && math.Abs(sample.Elapsed-last.Elapsed) < 0.25 {
+					if _, valid := channel.read(last); valid {
+						markerX, markerValue = last.Elapsed, geometry.lastValue
+					}
+				}
+			}
+			livePos = toPoint(markerX, markerValue, axis)
+			if !d.hasCursor {
+				liveStr = formatCompactMetric(value, channel.decimals)
+				livePillY = clampOrder(livePos.Y-9, top, bottom-18)
+			}
+		}
+	}
+
+	topTickSkipped := false
+	for idx, tick := range tickMetrics.ticks {
+		y := bottom - plotRect.H*tick.At
+		labelY := clampOrder(y-6, top-2, bottom-10)
+		if liveStr != "" && labelY+12 > livePillY-2 && labelY < livePillY+20 {
+			if idx == len(tickMetrics.ticks)-1 {
+				topTickSkipped = true
+			}
+			continue
+		}
+		painter.Text(rect.X+rect.W-tickMetrics.widths[idx], labelY, tickMetrics.labels[idx], 10, p.Muted)
+	}
+
+	if len(secTickMetrics.ticks) > 0 {
+		secTone := channels[secIdx].color(p)
+		for idx, tick := range secTickMetrics.ticks {
+			y := bottom - plotRect.H*tick.At
+			painter.Text(left-6-secTickMetrics.widths[idx], clampOrder(y-6, top-2, bottom-10), secTickMetrics.labels[idx], 10, secTone.Alpha(0.85))
+		}
+	}
+
+	if hasLivePill {
+		painter.Fill(ui.Rect{X: livePos.X - 5.5, Y: livePos.Y - 5.5, W: 11, H: 11}, tone.Alpha(0.25), 5.5)
+		painter.Fill(ui.Rect{X: livePos.X - 3, Y: livePos.Y - 3, W: 6, H: 6}, tone, 3)
+
+		if liveStr != "" {
+			pillStr := liveStr
+			if topTickSkipped {
+				withUnit := liveStr + " " + channel.unit
+				if uw, _ := painter.MeasureText(1<<20, ui.Span{Text: withUnit, Size: 10}); uw+8 <= rightMargin-3 {
+					pillStr = withUnit
+				}
+			}
+			lw, _ := painter.MeasureText(1<<20, ui.Span{Text: pillStr, Size: 10})
+			pillW := min(rightMargin-3, lw+8)
+			pillX := rect.X + rect.W - pillW
+			painter.Fill(ui.Rect{X: pillX, Y: livePillY, W: pillW, H: 18}, tone, 4)
+			painter.Text(pillX+(pillW-lw)/2, livePillY+3, pillStr, 10, kit.AccentInk(tone))
+		}
+	}
+
+	if (d.held != nil || d.hasViewEnd) && cw.bufEnd-cw.bufStart > cw.windowSec+0.5 {
+		bufSpan := cw.bufEnd - cw.bufStart
+		startFrac := clampOrder(float32((winStart-cw.bufStart)/bufSpan), 0, 1)
+		endFrac := clampOrder(float32((winEnd-cw.bufStart)/bufSpan), startFrac, 1)
+		thumbX := left + plotRect.W*startFrac
+		thumbW := max(14, plotRect.W*(endFrac-startFrac))
+		if thumbX+thumbW > right {
+			thumbX = max(left, right-thumbW)
+		}
+		painter.Fill(ui.Rect{X: thumbX, Y: bottom + 1, W: thumbW, H: 1.5}, p.Muted.Alpha(0.45), 0.75)
+	}
+
+	var t1, t2 *device.Sample
+	t1Visible := false
+	if d.hasCursor {
+		t1 = d.closestHistorySample(history, d.cursorAt)
+		if t1 != nil && cw.contains(t1.Elapsed) {
+			t1Visible = true
+			if v1, ok := channel.read(t1); ok {
+				p1 := toPoint(t1.Elapsed, v1, axis)
+				painter.Line(p1.X, top, p1.X, bottom, 1, tone.Alpha(0.75))
+				painter.Line(left, p1.Y, right, p1.Y, 1, tone.Alpha(0.22))
+				painter.Fill(ui.Rect{X: p1.X - 3, Y: top, W: 6, H: 3}, tone, 1.5)
+				painter.Fill(ui.Rect{X: p1.X - 5, Y: p1.Y - 5, W: 10, H: 10}, tone.Alpha(0.25), 5)
+				painter.Fill(ui.Rect{X: p1.X - 3, Y: p1.Y - 3, W: 6, H: 6}, tone, 3)
+			}
+		}
+	}
+	if d.hasHover {
+		t2 = closestSample(history, d.hoverAt)
+		if t2 != nil {
+			if v2, ok := channel.read(t2); ok {
+				p2 := toPoint(t2.Elapsed, v2, axis)
+				painter.Line(p2.X, top, p2.X, bottom, 1, p.Muted.Alpha(0.60))
+				painter.Line(left, p2.Y, right, p2.Y, 1, p.Muted.Alpha(0.22))
+				painter.Fill(ui.Rect{X: p2.X - 3.5, Y: p2.Y - 3.5, W: 7, H: 7}, p.Surface, 3.5)
+				painter.Stroke(ui.Rect{X: p2.X - 3.5, Y: p2.Y - 3.5, W: 7, H: 7}, tone, 3.5, 1.5)
+			}
+		}
+	}
+
+	hudSample := t2
+	if hudSample == nil && t1Visible {
+		hudSample = t1
+	}
+	if hudSample != nil {
+		d.drawCrosshairHUD(painter, p, msgs, plotRect, seriesMask, winStart, winEnd, hudSample, t1, t2)
+	}
+}
+
+func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap, live backend.Snapshot, channel measurement, sample *device.Sample, cw chartWindow, height float32, empty string, touch bool, seriesMask uint8, wideLeftAxis bool) {
+	history := snap.History
+	primary := d.channel
+	stat := d.visibleChartStat(history, primary)
+	if stat.count == 0 {
+		d.trendEmptyState(ctx, p, msgs, live, height, empty, touch)
+		return
+	}
+
+	compactMobile := d.mobile && !wideLeftAxis
+	secIdx, hasLeftAxis := d.secondaryAxisChannel(history, seriesMask, wideLeftAxis)
+	leftMargin := float32(0)
+	if hasLeftAxis {
+		leftMargin = 46
+	}
+	axis := chartAxis(snap.ChartRanges[primary], stat)
+	tickMetrics := d.resolveChartTicks(ctx, 0, primary, axis, channel.unit, compactMobile, sample != nil)
+	ticks := tickMetrics.ticks
+	rightMargin := tickMetrics.rightMargin
+
+	var secTickMetrics chartTickMetricsCache
+	if hasLeftAxis {
+		if secStat := d.visibleChartStat(history, secIdx); secStat.count > 0 {
+			secCh := channels[secIdx]
+			secAxis := chartAxis(snap.ChartRanges[secIdx], secStat)
+			secTickMetrics = d.resolveChartTicks(ctx, 1, secIdx, secAxis, secCh.unit, compactMobile, false)
+		}
+	}
+
+	if cw.winEnd <= cw.winStart {
+		bufStart := history[0].Elapsed
+		if d.fullSession {
+			bufStart = 0
+		}
+		bufEnd := history[len(history)-1].Elapsed
+		cw = chartWindowAt(bufStart, bufEnd, cw.windowSec, bufEnd)
+	}
+	winStart, winEnd := cw.winStart, cw.winEnd
+	sampleAtX := func(localX, boxW float32, samples []device.Sample) *device.Sample {
+		if len(samples) == 0 {
+			return nil
+		}
+		plotW := max(1, boxW-leftMargin-rightMargin)
+		frac := clampOrder(float64(localX-leftMargin)/float64(plotW), 0, 1)
+		return closestSample(samples, winStart+frac*(winEnd-winStart))
+	}
+
+	canPan := cw.bufEnd-cw.bufStart > cw.windowSec+1e-3 || (d.hasViewEnd && d.viewEnd < cw.bufEnd-1e-3)
 	plot := ui.Box(ctx.Key("chart")).Bind(&d.chartHandle).FillWidth()
 	if height <= 0 {
 		plot.Grow(1).MinHeight(120)
 	} else {
 		plot.Height(height)
 	}
-	plot.
-		HandleInput(func(event ui.InputEvent) bool {
-			rect := d.chartHandle.Bounds(ctx)
-			plotW := max(1, rect.W-leftMargin-rightMargin)
-			switch event.Kind {
-			case ui.InputZoom:
-				if event.Scale > 0 && event.Scale != 1 {
-					d.zoomByFactor(cw, pointerFractionW(event.X, rect.W), 1/float64(event.Scale))
-					return true
-				}
-			case ui.InputScroll:
-				if math.Abs(float64(event.DX)) > math.Abs(float64(event.DY)) || event.Mods&ui.Shift != 0 {
-					delta := event.DX
-					if delta == 0 {
-						delta = event.DY
-					}
-					if d.held == nil && !d.hasViewEnd && delta > 0 {
-						return true
-					}
-					if d.held == nil && !d.hasViewEnd && event.Momentum {
-						return true
-					}
-					atEdge := d.panChart(delta, plotW, cw)
-					if d.held == nil && d.hasViewEnd && delta > 0 && atEdge {
-						d.resumeLive()
-					}
-					return true
-				}
-				if d.mobile && event.Precise {
-					return false
-				}
-				if event.DY == 0 {
-					return false
-				}
-				if event.Precise && event.Momentum {
-					return true
-				}
-				dy := clampFloat(float64(event.DY), -120, 120)
-				d.zoomByFactor(cw, pointerFractionW(event.X, rect.W), math.Exp(dy*0.0045))
-				return true
-			case ui.InputPointerDown:
-				if event.Button == 0 {
-					d.dragStartX, d.dragLastX = event.X, event.X
-					d.dragMoved = false
-					d.dragClicks = event.Clicks
-					if d.lastPressDragged {
-						d.dragClicks = 1
-					}
-					d.dragMode = chartDragPending
-					return true
-				}
-				if event.Button == 2 {
-					d.dragMode = chartDragPan
-					d.dragMoved = true
-					d.dragLastX = event.X
-					return true
-				}
-			case ui.InputPointerMove:
-				switch d.dragMode {
-				case chartDragPending:
-					moved := event.X - d.dragStartX
-					if math.Abs(float64(moved)) < 4 {
-						return true
-					}
-					d.dragMoved = true
-					d.dragMode = chartDragPan
-					d.panChart(-moved, plotW, cw)
-					d.dragLastX = event.X
-					return true
-				case chartDragPan:
-					dx := event.X - d.dragLastX
-					d.dragLastX = event.X
-					d.panChart(-dx, plotW, cw)
-					return true
-				}
-			case ui.InputPointerUp:
-				switch d.dragMode {
-				case chartDragPending:
-					wasMoved := d.dragMoved
-					clicks := d.dragClicks
-					d.lastPressDragged = wasMoved
-					d.dragMode = chartDragNone
-					d.dragMoved = false
-					d.dragClicks = 0
-					if !event.Canceled && event.Button == 0 && !wasMoved {
-						switch {
-						case clicks >= 2:
-							if d.held != nil || d.hasViewEnd || d.hasCursor {
-								d.resumeLive()
-							} else {
-								sessionSpan := max(0, cw.bufEnd-cw.bufStart)
-								if d.fullSession || math.Abs(cw.windowSec-defaultWindowSec) > 0.5 {
-									d.fullSession = false
-									d.windowSec = defaultWindowSec
-									d.displayAt = time.Time{}
-								} else if sessionSpan > defaultWindowSec+0.5 {
-									d.fullSession = true
-									d.windowSec = sessionSpan
-									d.displayAt = time.Time{}
-								}
-							}
-						case nearCursor(event.X, rect.W):
-							d.hasCursor = false
-							d.displayAt = time.Time{}
-							if d.held == nil && d.atLiveEdge(cw, 1.5) {
-								d.resumeLive()
-							}
-						default:
-							seekAtX(event.X, rect.W)
-						}
-					}
-					return true
-				case chartDragPan:
-					if event.Button == 0 || event.Button == 2 || event.Canceled {
-						d.lastPressDragged = true
-						d.dragMode = chartDragNone
-						d.dragMoved = false
-						d.dragClicks = 0
-						if d.held == nil && d.hasViewEnd && d.atLiveEdge(cw, 0.15) {
-							d.resumeLive()
-						}
-						return true
-					}
-				}
-			}
-			return false
-		})
+	plot.HandleInput(d.handleChartInput(ctx, history, cw, leftMargin, rightMargin))
 	if plot.RightClicked() {
 		d.resumeLive()
 	}
@@ -1622,11 +1785,9 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 	}
 
 	plot.Draw(func(painter *ui.Painter, rect ui.Rect) {
-		plotTop, plotBottom := float32(8), float32(20)
-		xLabelOffset := float32(5)
+		plotTop, plotBottom, xLabelOffset := float32(8), float32(20), float32(5)
 		if compactMobile {
-			plotTop, plotBottom = 4, 18
-			xLabelOffset = 4
+			plotTop, plotBottom, xLabelOffset = 4, 18, 4
 		}
 		left, right := rect.X+leftMargin, rect.X+rect.W-rightMargin
 		top, bottom := rect.Y+plotTop, rect.Y+rect.H-plotBottom
@@ -1647,7 +1808,6 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		if scale <= 0 {
 			scale = 1
 		}
-		tone := channel.color(p)
 		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, scale, winStart, winEnd, primary, seriesMask)
 		wPx := max(1, int(math.Round(float64(plotRect.W*scale))))
 		hPx := max(1, int(math.Round(float64(plotRect.H*scale))))
@@ -1671,149 +1831,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 			d.drawChartPlotLayer(painter, plotRect, scale, p, wellAlpha, xDivs, ticks, geometry, axis, primary, hasLeftAxis, false)
 		}
 
-		for i := 0; i <= xDivs; i++ {
-			frac := float32(i) / float32(xDivs)
-			gx := left + plotRect.W*frac
-			label := formatChartTime(winStart + float64(frac)*(winEnd-winStart))
-			labelWidth, _ := painter.MeasureText(1<<20, ui.Span{Text: label, Size: 10})
-			lx := clampFloat32(gx-labelWidth/2, left, right-labelWidth)
-			painter.Text(lx, bottom+xLabelOffset, label, 10, p.Muted)
-		}
-
-		toPoint := func(elapsed, value float64, ax chart.Linear) ui.Point {
-			xf := float32((elapsed - winStart) / max(winEnd-winStart, 1e-6))
-			yf := clampFloat32(ax.At(value), 0, 1)
-			return ui.Point{
-				X: clampFloat32(chart.X(plotRect, xf), left, right),
-				Y: clampFloat32(chart.Y(plotRect, yf), top, bottom),
-			}
-		}
-
-		// Primary Right Y-axis + live pill band.
-		hasLivePill := false
-		var livePos ui.Point
-		var liveStr string
-		var livePillY float32
-		if sample != nil {
-			if value, ok := channel.read(sample); ok {
-				hasLivePill = true
-				markerX, markerValue := sample.Elapsed, value
-				if geometry.key.smooth && !d.hasCursor && !math.IsNaN(geometry.lastValue) && len(history) > 0 {
-					last := &history[len(history)-1]
-					if sample.Segment == last.Segment && last.Elapsed <= winEnd+1e-9 && math.Abs(sample.Elapsed-last.Elapsed) < 0.25 {
-						if _, valid := channel.read(last); valid {
-							markerX, markerValue = last.Elapsed, geometry.lastValue
-						}
-					}
-				}
-				livePos = toPoint(markerX, markerValue, axis)
-				if !d.hasCursor {
-					liveStr = formatCompactMetric(value, channel.decimals)
-					livePillY = clampFloat32(livePos.Y-9, top, bottom-18)
-				}
-			}
-		}
-
-		topTickSkipped := false
-		for idx, tick := range ticks {
-			y := bottom - plotRect.H*tick.At
-			labelY := clampFloat32(y-6, top-2, bottom-10)
-			if liveStr != "" && labelY+12 > livePillY-2 && labelY < livePillY+20 {
-				if idx == len(ticks)-1 {
-					topTickSkipped = true
-				}
-				continue
-			}
-			painter.Text(rect.X+rect.W-tickMetrics.widths[idx], labelY, tickMetrics.labels[idx], 10, p.Muted)
-		}
-
-		if hasLeftAxis {
-			secCh := channels[secIdx]
-			secStat := d.visibleChartStat(history, secIdx)
-			if secStat.count > 0 {
-				secAxis := chartAxis(snap.ChartRanges[secIdx], secStat)
-				secTone := secCh.color(p)
-				secTicks := secAxis.Ticks(4)
-				for idx, tick := range secTicks {
-					y := bottom - plotRect.H*tick.At
-					lbl := tick.Label
-					if idx == len(secTicks)-1 {
-						lbl = tick.Label + " " + secCh.unit
-					}
-					tw, _ := painter.MeasureText(1<<20, ui.Span{Text: lbl, Size: 10})
-					painter.Text(left-6-tw, clampFloat32(y-6, top-2, bottom-10), lbl, 10, secTone.Alpha(0.85))
-				}
-			}
-		}
-
-		if hasLivePill {
-			painter.Fill(ui.Rect{X: livePos.X - 5.5, Y: livePos.Y - 5.5, W: 11, H: 11}, tone.Alpha(0.25), 5.5)
-			painter.Fill(ui.Rect{X: livePos.X - 3, Y: livePos.Y - 3, W: 6, H: 6}, tone, 3)
-
-			if liveStr != "" {
-				pillStr := liveStr
-				if topTickSkipped {
-					withUnit := liveStr + " " + channel.unit
-					if uw, _ := painter.MeasureText(1<<20, ui.Span{Text: withUnit, Size: 10}); uw+8 <= rightMargin-3 {
-						pillStr = withUnit
-					}
-				}
-				lw, _ := painter.MeasureText(1<<20, ui.Span{Text: pillStr, Size: 10})
-				pillW := min(rightMargin-3, lw+8)
-				pillX := rect.X + rect.W - pillW
-				painter.Fill(ui.Rect{X: pillX, Y: livePillY, W: pillW, H: 18}, tone, 4)
-				painter.Text(pillX+(pillW-lw)/2, livePillY+3, pillStr, 10, kit.AccentInk(tone))
-			}
-		}
-
-		if (d.held != nil || d.hasViewEnd) && cw.bufEnd-cw.bufStart > cw.windowSec+0.5 {
-			bufSpan := cw.bufEnd - cw.bufStart
-			startFrac := clampFloat32(float32((winStart-cw.bufStart)/bufSpan), 0, 1)
-			endFrac := clampFloat32(float32((winEnd-cw.bufStart)/bufSpan), startFrac, 1)
-			thumbX := left + plotRect.W*startFrac
-			thumbW := max(14, plotRect.W*(endFrac-startFrac))
-			if thumbX+thumbW > right {
-				thumbX = max(left, right-thumbW)
-			}
-			painter.Fill(ui.Rect{X: thumbX, Y: bottom + 1, W: thumbW, H: 1.5}, p.Muted.Alpha(0.45), 0.75)
-		}
-
-		var t1, t2 *device.Sample
-		t1Visible := false
-		if d.hasCursor {
-			t1 = d.closestHistorySample(history, d.cursorAt)
-			if t1 != nil && t1.Elapsed >= winStart-1e-6 && t1.Elapsed <= winEnd+1e-6 {
-				t1Visible = true
-				if v1, ok := channel.read(t1); ok {
-					p1 := toPoint(t1.Elapsed, v1, axis)
-					painter.Line(p1.X, top, p1.X, bottom, 1, tone.Alpha(0.75))
-					painter.Line(left, p1.Y, right, p1.Y, 1, tone.Alpha(0.22))
-					painter.Fill(ui.Rect{X: p1.X - 3, Y: top, W: 6, H: 3}, tone, 1.5)
-					painter.Fill(ui.Rect{X: p1.X - 5, Y: p1.Y - 5, W: 10, H: 10}, tone.Alpha(0.25), 5)
-					painter.Fill(ui.Rect{X: p1.X - 3, Y: p1.Y - 3, W: 6, H: 6}, tone, 3)
-				}
-			}
-		}
-		if d.hasHover {
-			t2 = closestSample(history, d.hoverAt)
-			if t2 != nil {
-				if v2, ok := channel.read(t2); ok {
-					p2 := toPoint(t2.Elapsed, v2, axis)
-					painter.Line(p2.X, top, p2.X, bottom, 1, p.Muted.Alpha(0.60))
-					painter.Line(left, p2.Y, right, p2.Y, 1, p.Muted.Alpha(0.22))
-					painter.Fill(ui.Rect{X: p2.X - 3.5, Y: p2.Y - 3.5, W: 7, H: 7}, p.Surface, 3.5)
-					painter.Stroke(ui.Rect{X: p2.X - 3.5, Y: p2.Y - 3.5, W: 7, H: 7}, tone, 3.5, 1.5)
-				}
-			}
-		}
-
-		hudSample := t2
-		if hudSample == nil && t1Visible {
-			hudSample = t1
-		}
-		if hudSample != nil {
-			d.drawCrosshairHUD(painter, p, msgs, plotRect, seriesMask, winStart, winEnd, hudSample, t1, t2)
-		}
+		d.drawChartOverlay(painter, p, msgs, rect, plotRect, history, sample, channel, geometry, axis, tickMetrics, secTickMetrics, secIdx, rightMargin, xLabelOffset, xDivs, cw, seriesMask)
 	})
 }
 
@@ -1824,7 +1842,7 @@ func (d *dashboard) drawCrosshairHUD(painter *ui.Painter, p kit.Palette, msgs lo
 		return
 	}
 	xf := float32((target.Elapsed - winStart) / max(winEnd-winStart, 1e-6))
-	cx := clampFloat32(chart.X(plotRect, xf), plotRect.X, plotRect.X+plotRect.W)
+	cx := clampOrder(chart.X(plotRect, xf), plotRect.X, plotRect.X+plotRect.W)
 
 	header := formatChartTime(target.Elapsed)
 	if t1 != nil && t2 != nil && math.Abs(t2.Elapsed-t1.Elapsed) >= 0.05 {
@@ -1838,21 +1856,22 @@ func (d *dashboard) drawCrosshairHUD(painter *ui.Painter, p kit.Palette, msgs lo
 		color ui.Color
 		text  string
 	}
-	var rows []row
+	var rowBuf [len(chartChannelOrder)]row
+	rows := rowBuf[:0]
 	maxW, _ := painter.MeasureText(1<<20, ui.Span{Text: header, Size: 10.5, Weight: 600})
-	for _, idx := range []int{d.channel, 0, 1, 2, 3, 6, 4, 5} {
-		if idx != d.channel && seriesMask&uint8(1<<idx) == 0 {
-			continue
-		}
-		if idx == d.channel && len(rows) > 0 {
-			continue
-		}
+	addRow := func(idx int) {
 		c := channels[idx]
 		if v, ok := c.read(target); ok {
 			txt := fmt.Sprintf("%s: %s %s", c.name(msgs), formatCompactMetric(v, c.decimals), c.unit)
 			tw, _ := painter.MeasureText(1<<20, ui.Span{Text: txt, Size: 10.5})
 			maxW = max(maxW, tw+12)
 			rows = append(rows, row{c.color(p), txt})
+		}
+	}
+	addRow(d.channel)
+	for _, idx := range chartChannelOrder {
+		if idx != d.channel && seriesMask&uint8(1<<idx) != 0 {
+			addRow(idx)
 		}
 	}
 
@@ -1862,8 +1881,8 @@ func (d *dashboard) drawCrosshairHUD(painter *ui.Painter, p kit.Palette, msgs lo
 	if hudX+hudW > plotRect.X+plotRect.W-4 {
 		hudX = cx - hudW - 10
 	}
-	hudX = clampFloat32(hudX, plotRect.X+4, plotRect.X+plotRect.W-hudW-4)
-	hudY := clampFloat32(plotRect.Y+6, plotRect.Y+4, plotRect.Y+plotRect.H-hudH-4)
+	hudX = clampOrder(hudX, plotRect.X+4, plotRect.X+plotRect.W-hudW-4)
+	hudY := clampOrder(plotRect.Y+6, plotRect.Y+4, plotRect.Y+plotRect.H-hudH-4)
 
 	cardRect := ui.Rect{X: hudX, Y: hudY, W: hudW, H: hudH}
 	painter.Shadow(cardRect, kit.RadiusS, 0, 4, 12, 0, p.Shadow)
@@ -1888,7 +1907,7 @@ func (d *dashboard) zoomByFactor(cw chartWindow, fraction, factor float64) {
 	}
 	maxWin := d.maxWindowFor(sessionSpan)
 	oldWin := cw.windowSec
-	newWin := clampFloat(oldWin*factor, minWindowSec, maxWin)
+	newWin := clampOrder(oldWin*factor, minWindowSec, maxWin)
 	hitMax := factor > 1 && sessionSpan > 0 && newWin >= sessionSpan-1e-3
 	if hitMax {
 		newWin = max(minWindowSec, sessionSpan)
@@ -1909,7 +1928,7 @@ func (d *dashboard) zoomByFactor(cw chartWindow, fraction, factor float64) {
 	tMouse := cw.winStart + fraction*oldWin
 	rawEnd := tMouse + (1-fraction)*newWin
 	minEnd := min(bufEnd, bufStart+newWin)
-	newEnd := clampFloat(rawEnd, minEnd, bufEnd)
+	newEnd := clampOrder(rawEnd, minEnd, bufEnd)
 	if d.held == nil && factor > 1 && newEnd >= bufEnd-1e-3 && newEnd-newWin <= bufStart+1e-3 {
 		d.hasViewEnd = false
 		d.hasCursor = false
@@ -1941,7 +1960,7 @@ func (d *dashboard) panChart(dx, plotW float32, cw chartWindow) bool {
 	if d.held == nil && !d.hasViewEnd && rawEnd >= bufEnd-1e-3 {
 		return true
 	}
-	clamped := clampFloat(rawEnd, minEnd, bufEnd)
+	clamped := clampOrder(rawEnd, minEnd, bufEnd)
 	d.hasViewEnd = true
 	d.viewEnd = clamped
 	d.displayAt = time.Time{}

@@ -227,51 +227,72 @@ func (d *dashboard) selectPDPacket(msgs locales.Messages, visible, all []pd.Pack
 		return
 	}
 	view := &d.packets
-	if idx := findPacketBySequence(visible, seq); idx >= 0 {
-		if splitDetail {
-			view.selected = seq
-			view.row = idx
-			view.list.Selected = &view.row
-			view.list.Choose(idx)
-			view.list.ScrollIntoView(idx)
-		} else {
-			view.detail = visible[idx]
-			view.expanded = true
+	selectAt := func(idx int, pkt pd.Packet) {
+		if !splitDetail {
+			view.detail, view.expanded = pkt, true
+			return
 		}
+		view.selected, view.row = seq, idx
+		view.list.Selected = &view.row
+		view.list.Choose(idx)
+		view.list.ScrollIntoView(idx)
+	}
+	if idx := findPacketBySequence(visible, seq); idx >= 0 {
+		selectAt(idx, visible[idx])
 		return
 	}
-	if idx := findPacketBySequence(all, seq); idx >= 0 {
-		pkt := all[idx]
-		if splitDetail {
-			filterChanged := false
-			view.search = ""
-			if pkt.GoodCRC() && view.hideGoodCRC {
-				view.hideGoodCRC = false
-				filterChanged = true
-			}
-			if pkt.KeepAlive() && view.hideKeepAlive {
-				view.hideKeepAlive = false
-				filterChanged = true
-			}
-			if filterChanged {
-				d.savePDFilters()
-			}
-			view.selected = seq
-			visible = view.visiblePackets(msgs, all)
-			if newIdx := findPacketBySequence(visible, seq); newIdx >= 0 {
-				view.row = newIdx
-				view.list.Selected = &view.row
-				view.list.Choose(newIdx)
-				view.list.ScrollIntoView(newIdx)
-			}
-		} else {
-			view.detail = pkt
-			view.expanded = true
-		}
+	idx := findPacketBySequence(all, seq)
+	if idx < 0 {
+		return
+	}
+	pkt := all[idx]
+	if !splitDetail {
+		selectAt(-1, pkt)
+		return
+	}
+	filterChanged := false
+	view.search = ""
+	if pkt.GoodCRC() && view.hideGoodCRC {
+		view.hideGoodCRC, filterChanged = false, true
+	}
+	if pkt.KeepAlive() && view.hideKeepAlive {
+		view.hideKeepAlive, filterChanged = false, true
+	}
+	if filterChanged {
+		d.savePDFilters()
+	}
+	view.selected = seq
+	visible = view.visiblePackets(msgs, all)
+	if newIdx := findPacketBySequence(visible, seq); newIdx >= 0 {
+		selectAt(newIdx, visible[newIdx])
 	}
 }
 
-func (d *dashboard) pdMoreMenuItems(msgs locales.Messages, snap backend.Snapshot, data backend.PacketSnapshot, visible []pd.Packet, compact, landscape bool) []kit.MenuItem {
+type pdFrame struct {
+	data          backend.PacketSnapshot
+	visible       []pd.Packet
+	summary       pdLiveSummary
+	capsText      string
+	splitDetail   bool
+	canReturnLive bool
+}
+
+func (d *dashboard) preparePDFrame(msgs locales.Messages, landscape bool, width float32) pdFrame {
+	view := &d.packets
+	data := d.packetSnapshot()
+	visible := view.visiblePackets(msgs, data.Packets)
+	summary, capsText := view.summaryState(data.Packets)
+	return pdFrame{
+		data:          data,
+		visible:       visible,
+		summary:       summary,
+		capsText:      capsText,
+		splitDetail:   pdUsesSplitDetail(d.mobile, landscape, width),
+		canReturnLive: view.offline == nil && len(visible) > 0 && (view.held != nil || view.selected != 0 || !view.list.AtEnd()),
+	}
+}
+
+func (d *dashboard) pdMoreMenuItems(msgs locales.Messages, snap backend.Snapshot, f pdFrame, compact, landscape bool) []kit.MenuItem {
 	view := &d.packets
 	var items []kit.MenuItem
 	if view.offline == nil || compact || landscape {
@@ -297,15 +318,15 @@ func (d *dashboard) pdMoreMenuItems(msgs locales.Messages, snap backend.Snapshot
 			OnSelect: d.pdFollowLive,
 		})
 	}
-	if len(visible) > 0 {
+	if len(f.visible) > 0 {
 		items = append(items, kit.MenuItem{
 			Label:    msgs.ExportPackets(),
 			Icon:     kit.IconDownload,
 			Disabled: d.busy,
-			OnSelect: func() { d.exportPackets(msgs, visible) },
+			OnSelect: func() { d.exportPackets(msgs, f.visible) },
 		})
 	}
-	if len(data.Packets) > 0 {
+	if len(f.data.Packets) > 0 {
 		items = append(items, kit.MenuItem{
 			Label:  msgs.ActionClear(),
 			Icon:   kit.IconTrash,
@@ -331,15 +352,15 @@ func (d *dashboard) pdFilterChips(ctx *ui.Context, p kit.Palette, msgs locales.M
 	pdFilterChip(ctx.Key("chip-keepalive"), p, msgs.GuiHideKeepAlive(), &view.hideKeepAlive, height, d.savePDFilters)
 }
 
-func (d *dashboard) pdSummaryPill(ctx *ui.Context, p kit.Palette, msgs locales.Messages, all, visible []pd.Packet, summary pdLiveSummary, capsText string, splitDetail bool, pillH float32) {
+func (d *dashboard) pdSummaryPill(ctx *ui.Context, p kit.Palette, msgs locales.Messages, f pdFrame, pillH float32) {
 	reqText := ""
-	if summary.contract != nil {
-		reqText = summary.contract.Summary()
+	if f.summary.contract != nil {
+		reqText = f.summary.contract.Summary()
 	}
-	if capsText == "" && reqText == "" {
+	if f.capsText == "" && reqText == "" {
 		return
 	}
-	label := capsText
+	label := f.capsText
 	if reqText != "" {
 		if label != "" {
 			label += " · " + reqText
@@ -347,25 +368,23 @@ func (d *dashboard) pdSummaryPill(ctx *ui.Context, p kit.Palette, msgs locales.M
 			label = reqText
 		}
 	}
-	targetSeq := summary.contractSeq
+	targetSeq := f.summary.contractSeq
 	if targetSeq == 0 {
-		targetSeq = summary.capsSeq
+		targetSeq = f.summary.capsSeq
 	}
 	tone := kit.ToneAccent
-	switch summary.contractStage {
+	switch f.summary.contractStage {
 	case "ready", "accepted":
 		tone = kit.ToneSuccess
 	case "rejected", "wait":
 		tone = kit.ToneWarning
 	}
 	bg, fg := kit.BadgeColors(p, tone)
-	radius := kit.RadiusS
-	if p.LiquidGlass {
-		radius = kit.RadiusFull
-	}
-	btn := ui.ButtonBase(ctx.Key("pd-summary")).Height(pillH).MaxWidthPercent(100).Shrink(1).MinWidth(0).Padding(0, 10).Gap(6).
-		Radius(radius).AlignItems(ui.Center).Background(bg).Label(label).
-		OnClick(func() { d.selectPDPacket(msgs, visible, all, targetSeq, splitDetail) })
+	btn := ui.ButtonBase(ctx.Key("pd-summary")).Height(pillH).MaxWidthPercent(100).Shrink(1).MinWidth(0).
+		Padding(0, 10).Gap(6).Radius(kit.PillRadius(p, kit.RadiusS)).AlignItems(ui.Center).
+		Background(bg).Label(label).OnClick(func() {
+		d.selectPDPacket(msgs, f.visible, f.data.Packets, targetSeq, f.splitDetail)
+	})
 	kit.ControlMotion(btn).Children(func() {
 		ui.Icon(ctx, kit.IconZap).FontSize(12).TextColor(fg).Shrink(0)
 		ui.Text(ctx, label).FontSize(11.5).FontWeight(650).FontFeatures("tnum").TextColor(fg).SingleLine().Shrink(1).MinWidth(0)
@@ -387,24 +406,20 @@ func pdCompactCountLabel(visibleCount int, total uint64) string {
 	return strconv.Itoa(visibleCount)
 }
 
-func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, data backend.PacketSnapshot, visible []pd.Packet, summary pdLiveSummary, capsText string, touch, compact, landscape, splitDetail bool, position navigationPosition) {
+func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, f pdFrame, touch, compact, landscape bool, position navigationPosition) {
 	view := &d.packets
-	canReturnLive := view.offline == nil && len(visible) > 0 && (view.held != nil || view.selected != 0 || !view.list.AtEnd())
 	renderCount := func(btnH float32) {
-		fullCount := msgs.PacketsCount(len(visible))
-		if uint64(len(visible)) != data.Total {
-			fullCount = msgs.PacketCount(strconv.Itoa(len(visible)), strconv.FormatUint(data.Total, 10))
+		fullCount := msgs.PacketsCount(len(f.visible))
+		if uint64(len(f.visible)) != f.data.Total {
+			fullCount = msgs.PacketCount(strconv.Itoa(len(f.visible)), strconv.FormatUint(f.data.Total, 10))
 		}
 		if landscape {
-			countRadius := kit.RadiusS
-			if p.LiquidGlass {
-				countRadius = kit.RadiusFull
-			}
+			countRadius := kit.PillRadius(p, kit.RadiusS)
 			ui.Row(ctx).Shrink(0).AlignItems(ui.Center).Gap(5).Children(func() {
 				ui.Box(ctx).Height(btnH).Shrink(0).Padding(0, 8).Radius(countRadius).
 					Background(p.Inset).Border(1, p.LineSoft).AlignItems(ui.Center).Justify(ui.Center).
 					Tooltip(fullCount).Children(func() {
-					ui.Text(ctx, pdCompactCountLabel(len(visible), data.Total)).
+					ui.Text(ctx, pdCompactCountLabel(len(f.visible), f.data.Total)).
 						FontFeatures("tnum").FontSize(12).FontWeight(700).SingleLine().Shrink(0)
 				})
 				if view.offline != nil {
@@ -421,7 +436,7 @@ func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			case view.held != nil:
 				kit.Badge(ctx, p, msgs.Hold(), kit.ToneWarning)
 			}
-			if canReturnLive {
+			if f.canReturnLive {
 				kit.ActionButton(ctx.Key("follow-live"), p, kit.VariantPrimary, kit.IconArrowDown, msgs.PdLive(), false, d.pdFollowLive).
 					Height(max(24, min(28, btnH))).Padding(0, 8)
 			}
@@ -448,25 +463,22 @@ func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 				d.packets = packetView{hideGoodCRC: d.settings.HideGoodCRC, hideKeepAlive: d.settings.HideKeepAlive}
 			}))
 		} else {
-			recording := data.Recording
+			recording := f.data.Recording
 			if d.service != nil && view.held != nil {
 				recording = d.service.PacketSnapshot(0, 0).Recording
 			}
 			applyActionStyle(d.captureButton(ctx, p, msgs, recording, touch))
-			label, icon, variant := msgs.ActionHold(), kit.IconPause, kit.VariantSecondary
-			if view.held != nil {
-				label, icon, variant = msgs.ActionResume(), kit.IconPlay, kit.VariantPrimary
-			}
-			applyActionStyle(kit.ActionButton(ctx.Key("hold-pd"), p, variant, icon, label, touch, func() {
+			applyActionStyle(holdResumeButton(ctx, p, msgs, "hold-pd", view.held != nil, touch, func() {
 				if view.held != nil {
 					d.pdFollowLive()
 				} else {
-					view.held = &data
+					held := f.data
+					view.held = &held
 				}
-			}).Disabled(len(data.Packets) == 0 && view.held == nil))
+			}).Disabled(len(f.data.Packets) == 0 && view.held == nil))
 		}
 		menuOpen := d.menuOpen("pd-more")
-		if items := d.pdMoreMenuItems(msgs, snap, data, visible, compact, landscape); len(items) > 0 {
+		if items := d.pdMoreMenuItems(msgs, snap, f, compact, landscape); len(items) > 0 {
 			if landscape {
 				kit.IconMenuButton(ctx.Key("more"), p, menuOpen, msgs.GuiMore(), kit.IconMore, btnH, kit.VariantSecondary, touch, items)
 			} else {
@@ -509,8 +521,8 @@ func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			ui.Row(ctx).Shrink(0).Gap(5).AlignItems(ui.Center).Children(func() {
 				renderActions(barH)
 			})
-			if !splitDetail && !pdHeaderShowsSummary(landscape, position) {
-				d.pdSummaryPill(ctx, p, msgs, data.Packets, visible, summary, capsText, splitDetail, 26)
+			if !f.splitDetail && !pdHeaderShowsSummary(landscape, position) {
+				d.pdSummaryPill(ctx, p, msgs, f, 26)
 			}
 		})
 	case compact:
@@ -525,7 +537,7 @@ func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		ctrlH := kit.ControlHeight(touch)
 		kit.ActionBar(ctx).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Box(ctx).Grow(1).MinWidth(100).Children(func() { renderCount(ctrlH) })
-			d.pdSummaryPill(ctx, p, msgs, data.Packets, visible, summary, capsText, splitDetail, 26)
+			d.pdSummaryPill(ctx, p, msgs, f, 26)
 			renderActions(ctrlH)
 		})
 	}
@@ -553,16 +565,16 @@ func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		if compact {
 			ui.Row(ctx).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
 				d.pdFilterChips(ctx, p, msgs, 28)
-				d.pdSummaryPill(ctx, p, msgs, data.Packets, visible, summary, capsText, splitDetail, 28)
+				d.pdSummaryPill(ctx, p, msgs, f, 28)
 			})
 		}
 	}
 }
 
-func (d *dashboard) pdEmptyState(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, data backend.PacketSnapshot, touch, landscape, splitDetail bool, bottomPadding float32) {
+func (d *dashboard) pdEmptyState(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, f pdFrame, touch, landscape bool, bottomPadding float32) {
 	view := &d.packets
 	title, hint := msgs.PdWaiting(), ""
-	hasFilters := len(data.Packets) > 0
+	hasFilters := len(f.data.Packets) > 0
 	switch {
 	case hasFilters:
 		title = msgs.PdNoMatch()
@@ -579,8 +591,8 @@ func (d *dashboard) pdEmptyState(ctx *ui.Context, p kit.Palette, msgs locales.Me
 	case snap.CanCheckPDHost:
 		hint = strings.TrimRight(msgs.PdInstruction(), ".。")
 	}
-	box := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(140), p, kit.RadiusL, 0.25, p.Surface, p.LineSoft).Center()
-	if splitDetail || landscape {
+	box := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(140), p, kit.RadiusL, p.Surface, p.LineSoft).Center()
+	if f.splitDetail || landscape {
 		box.Grow(1).MinHeight(0)
 		if landscape && bottomPadding > 0 {
 			box.Margin(0, 0, bottomPadding, 0)
@@ -624,48 +636,83 @@ func pdNegotiationDotColor(p kit.Palette, packet pd.Packet) ui.Color {
 	}
 }
 
-func (d *dashboard) pdPacketRow(row ui.ListRow, p kit.Palette, msgs locales.Messages, packet pd.Packet, touch, landscape, splitDetail bool) {
-	view := &d.packets
-	compactSplit := landscape && splitDetail
-	selected := (splitDetail && row.Selected()) || (!splitDetail && view.expanded && packet.Sequence == view.detail.Sequence)
-	color, secondary := p.Text, p.Muted
-	rowBg := ui.Transparent
-	if !splitDetail {
-		rowBg = p.Surface
+type pdRowStyle struct {
+	bg, color, secondary ui.Color
+	padY, padX, radius   float32
+	colGap               float32
+	seqSize, typeSize    float32
+	metaSize             float32
+}
+
+func resolvePDRowStyle(row ui.ListRow, p kit.Palette, packet pd.Packet, touch, splitDetail, compactSplit, selected bool) pdRowStyle {
+	s := pdRowStyle{
+		color:     p.Text,
+		secondary: p.Muted,
+		bg:        ui.Transparent,
+		padY:      7,
+		padX:      12,
+		radius:    kit.RadiusM,
+		colGap:    2,
+		seqSize:   11,
+		typeSize:  13,
+		metaSize:  11,
 	}
 	hoverBg, pressBg := p.Hover, p.Press
 	if !splitDetail {
+		s.bg = p.Surface
 		hoverBg, pressBg = p.SurfaceHi, p.SurfaceHi
 	}
 	switch {
 	case selected:
-		rowBg = p.Surface.Mix(p.Accent, .11)
-		color, secondary = p.Text, p.AccentText
+		s.bg = p.Surface.Mix(p.Accent, .11)
+		s.color, s.secondary = p.Text, p.AccentText
 	case row.Pressed():
-		rowBg = pressBg
+		s.bg = pressBg
 	case row.Hovered():
-		rowBg = hoverBg
+		s.bg = hoverBg
 	}
 	switch {
 	case !selected && packet.Error != "":
-		color = p.Warning
+		s.color = p.Warning
 	case !selected && (packet.GoodCRC() || packet.KeepAlive()):
 		if compactSplit {
 			muted := p.Muted.Alpha(0.82)
-			color, secondary = muted, muted
+			s.color, s.secondary = muted, muted
 		} else {
-			color = p.Muted
+			s.color = p.Muted
 		}
 	}
-	rowPadY, rowPadX, rowRadius, colGap := float32(7), float32(12), kit.RadiusM, float32(2)
 	switch {
 	case compactSplit:
-		rowPadY, rowPadX, rowRadius, colGap = 4, 8, kit.RadiusS, 1
+		s.padY, s.padX, s.radius, s.colGap = 4, 8, kit.RadiusS, 1
+		s.seqSize, s.typeSize, s.metaSize = 10.5, 12, 10.5
 	case touch:
-		rowPadY, rowPadX = 9, 12
+		s.padY, s.padX = 9, 12
 	}
-	rowEl := ui.Row(row.Context).FillWidth().Padding(rowPadY, rowPadX).Gap(8).AlignItems(ui.Center).
-		Radius(rowRadius).Background(rowBg)
+	return s
+}
+
+func pdPacketTitleRow(ctx *ui.Context, p kit.Palette, packet pd.Packet, s pdRowStyle, selected, compactSplit bool) {
+	ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
+		ui.Text(ctx, fmt.Sprintf("#%d", packet.Sequence)).
+			FontFeatures("tnum").Font("monospace").FontSize(s.seqSize).TextColor(s.secondary).Shrink(0)
+		if compactSplit && !selected && pdIsNegotiation(packet) {
+			ui.Box(ctx).Size(5, 5).Shrink(0).Radius(kit.RadiusFull).Background(pdNegotiationDotColor(p, packet))
+		}
+		ui.Text(ctx, packet.Type).
+			SingleLine().FontWeight(650).FontSize(s.typeSize).TextColor(s.color).Grow(1).MinWidth(0)
+		ui.Text(ctx, fmt.Sprintf("%.3fs", packet.Elapsed)).
+			FontFeatures("tnum").FontSize(s.seqSize).TextColor(s.secondary).Shrink(0)
+	})
+}
+
+func (d *dashboard) pdPacketRow(row ui.ListRow, p kit.Palette, msgs locales.Messages, packet pd.Packet, touch, landscape, splitDetail bool) {
+	view := &d.packets
+	compactSplit := landscape && splitDetail
+	selected := (splitDetail && row.Selected()) || (!splitDetail && view.expanded && packet.Sequence == view.detail.Sequence)
+	s := resolvePDRowStyle(row, p, packet, touch, splitDetail, compactSplit, selected)
+	rowEl := ui.Row(row.Context).FillWidth().Padding(s.padY, s.padX).Gap(8).AlignItems(ui.Center).
+		Radius(s.radius).Background(s.bg)
 	if compactSplit {
 		rowEl.Margin(0, 0, 1, 0)
 	}
@@ -683,10 +730,6 @@ func (d *dashboard) pdPacketRow(row ui.ListRow, p kit.Palette, msgs locales.Mess
 		view.detail = packet
 		view.expanded = true
 	}
-	seqSize, typeSize, metaSize := float32(11), float32(13), float32(11)
-	if compactSplit {
-		seqSize, typeSize, metaSize = 10.5, 12, 10.5
-	}
 	rowEl.Children(func() {
 		if selected {
 			barInset := float32(4)
@@ -697,18 +740,8 @@ func (d *dashboard) pdPacketRow(row ui.ListRow, p kit.Palette, msgs locales.Mess
 		} else if compactSplit && !row.Hovered() && !row.Pressed() {
 			ui.Box(row.Context).Absolute().Left(8).Right(8).Bottom(0).Height(1).Background(p.LineSoft.Alpha(0.45)).PassThrough()
 		}
-		ui.Column(row.Context).Grow(1).MinWidth(0).Gap(colGap).Children(func() {
-			ui.Row(row.Context).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
-				ui.Text(row.Context, fmt.Sprintf("#%d", packet.Sequence)).
-					FontFeatures("tnum").Font("monospace").FontSize(seqSize).TextColor(secondary).Shrink(0)
-				if compactSplit && !selected && pdIsNegotiation(packet) {
-					ui.Box(row.Context).Size(5, 5).Shrink(0).Radius(kit.RadiusFull).Background(pdNegotiationDotColor(p, packet))
-				}
-				ui.Text(row.Context, packet.Type).
-					SingleLine().FontWeight(650).FontSize(typeSize).TextColor(color).Grow(1).MinWidth(0)
-				ui.Text(row.Context, fmt.Sprintf("%.3fs", packet.Elapsed)).
-					FontFeatures("tnum").FontSize(seqSize).TextColor(secondary).Shrink(0)
-			})
+		ui.Column(row.Context).Grow(1).MinWidth(0).Gap(s.colGap).Children(func() {
+			pdPacketTitleRow(row.Context, p, packet, s, selected, compactSplit)
 			meta := packet.SOP
 			if packet.PowerRole != "" {
 				meta += " · " + packet.PowerRole
@@ -719,7 +752,7 @@ func (d *dashboard) pdPacketRow(row ui.ListRow, p kit.Palette, msgs locales.Mess
 			if packet.Error != "" {
 				meta += " · !"
 			}
-			ui.Text(row.Context, meta).SingleLine().FontSize(metaSize).TextColor(secondary)
+			ui.Text(row.Context, meta).SingleLine().FontSize(s.metaSize).TextColor(s.secondary)
 		})
 		if !splitDetail {
 			ui.Icon(row.Context, kit.IconChevronR).FontSize(14).TextColor(p.Muted).Shrink(0)
@@ -730,7 +763,7 @@ func (d *dashboard) pdPacketRow(row ui.ListRow, p kit.Palette, msgs locales.Mess
 func (d *dashboard) pdPacketList(p kit.Palette, msgs locales.Messages, visible []pd.Packet, el ui.Element, touch, landscape, splitDetail bool) {
 	view := &d.packets
 	if splitDetail {
-		el = kit.GlassPanel(el.Clip(), p, kit.RadiusL, 0.25, p.Surface, p.LineSoft)
+		el = kit.GlassPanel(el.Clip(), p, kit.RadiusL, p.Surface, p.LineSoft)
 	} else {
 		el = el.Gap(6)
 	}
@@ -752,24 +785,23 @@ func pdPacketHeaderMeta(packet pd.Packet) string {
 	return fmt.Sprintf("#%d · %.3f s · %s", packet.Sequence, packet.Elapsed, packet.SOP)
 }
 
-func (d *dashboard) pdSplitDetailPane(ctx *ui.Context, p kit.Palette, msgs locales.Messages, all, visible []pd.Packet, summary pdLiveSummary, capsText string, landscape bool, position navigationPosition, bottomPadding float32) {
+func (d *dashboard) pdSplitDetailPane(ctx *ui.Context, p kit.Palette, msgs locales.Messages, f pdFrame, landscape bool, position navigationPosition, bottomPadding float32) {
 	view := &d.packets
-	if view.row < 0 || view.row >= len(visible) {
+	if view.row < 0 || view.row >= len(f.visible) {
 		return
 	}
-	detailBasis, detailMin := float32(360), float32(280)
-	detailGap := float32(10)
+	detailBasis, detailMin, detailGap := float32(360), float32(280), float32(10)
 	if landscape {
 		detailBasis, detailMin, detailGap = 300, 240, 6
 	}
-	packet := visible[view.row]
+	packet := f.visible[view.row]
 	col := ui.Column(ctx).Grow(7).Basis(detailBasis).MinWidth(detailMin).FillHeight().MinHeight(0).Gap(detailGap)
 	if landscape {
 		col.Padding(10, 12, 8, 12)
 	} else {
 		col.Padding(16)
 	}
-	kit.GlassPanel(col, p, kit.RadiusL, 0.25, p.Surface, p.LineSoft).Children(func() {
+	kit.GlassPanel(col, p, kit.RadiusL, p.Surface, p.LineSoft).Children(func() {
 		ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			if landscape {
 				ui.Row(ctx).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -793,56 +825,50 @@ func (d *dashboard) pdSplitDetailPane(ctx *ui.Context, p kit.Palette, msgs local
 			scroll.Padding(0, 0, bottomPadding, 0)
 		}
 		scroll.Children(func() {
-			if landscape && !pdHeaderShowsSummary(landscape, position) && (summary.caps != nil || summary.contract != nil) {
+			if landscape && !pdHeaderShowsSummary(landscape, position) && (f.summary.caps != nil || f.summary.contract != nil) {
 				ui.Box(ctx).FillWidth().Padding(0, 0, 6, 0).Children(func() {
-					d.pdSummaryPill(ctx, p, msgs, all, visible, summary, capsText, true, 22)
+					d.pdSummaryPill(ctx, p, msgs, f, 22)
 				})
 			}
 			d.packetDetail(ctx, p, msgs, packet, func(seq uint64) {
-				d.selectPDPacket(msgs, visible, all, seq, true)
+				d.selectPDPacket(msgs, f.visible, f.data.Packets, seq, true)
 			}, landscape, landscape)
 		})
 	})
 }
 
-func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, position navigationPosition, bottomPadding float32) {
+func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, f pdFrame, position navigationPosition, bottomPadding float32) {
 	view := &d.packets
-	data := d.packetSnapshot()
-	visible := view.visiblePackets(msgs, data.Packets)
-	width, _ := ctx.Size()
 	touch := d.touchUI()
 	landscape := d.isLandscape(ctx)
-	splitDetail := pdUsesSplitDetail(d.mobile, landscape, width)
 	compact := !landscape && kit.NarrowWidth(ctx)
-	summary, capsText := view.summaryState(data.Packets)
 
-	d.pdToolbar(ctx, p, msgs, snap, data, visible, summary, capsText, touch, compact, landscape, splitDetail, position)
+	d.pdToolbar(ctx, p, msgs, snap, f, touch, compact, landscape, position)
 
-	if len(visible) == 0 {
-		d.pdEmptyState(ctx, p, msgs, snap, data, touch, landscape, splitDetail, bottomPadding)
+	if len(f.visible) == 0 {
+		d.pdEmptyState(ctx, p, msgs, snap, f, touch, landscape, bottomPadding)
 		return
 	}
 
-	view.row = len(visible) - 1
-	if splitDetail && view.selected != 0 {
-		if idx := findPacketBySequence(visible, view.selected); idx >= 0 {
+	view.row = len(f.visible) - 1
+	if f.splitDetail && view.selected != 0 {
+		if idx := findPacketBySequence(f.visible, view.selected); idx >= 0 {
 			view.row = idx
 		}
 	}
-	if splitDetail {
+	if f.splitDetail {
 		view.list.Selected = &view.row
 		view.list.Choose(view.row)
 	} else {
 		view.list.Selected = nil
 	}
 	view.list.Label = func(i int) string {
-		return fmt.Sprintf("#%d %s", visible[i].Sequence, visible[i].Type)
+		return fmt.Sprintf("#%d %s", f.visible[i].Sequence, f.visible[i].Type)
 	}
 	view.list.FollowEnd = view.offline == nil && view.held == nil && view.selected == 0 && !view.expanded
 
-	canReturnLive := view.offline == nil && len(visible) > 0 && (view.held != nil || view.selected != 0 || !view.list.AtEnd())
 	renderFollowFAB := func() {
-		if !landscape || !canReturnLive {
+		if !landscape || !f.canReturnLive {
 			return
 		}
 		ui.Box(ctx.Key("pd-follow-fab")).Absolute().Right(8).Bottom(8).ZIndex(2).Children(func() {
@@ -853,41 +879,37 @@ func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages
 			}
 		})
 	}
+	renderListBox := func(box ui.Element) {
+		box.Children(func() {
+			list := ui.List(ctx.Key("packets"), &view.list, len(f.visible)).Fill()
+			switch {
+			case f.splitDetail && landscape:
+				list.Padding(4, 4, max(4, bottomPadding), 4)
+			case bottomPadding > 0 || !f.splitDetail:
+				list.Padding(0, 0, bottomPadding, 0)
+			}
+			d.pdPacketList(p, msgs, f.visible, list, touch, landscape, f.splitDetail)
+			renderFollowFAB()
+		})
+	}
 
-	if splitDetail {
+	if f.splitDetail {
 		listBasis, listMin, listMax, rowGap := float32(300), float32(260), float32(420), float32(12)
 		if landscape {
 			listBasis, listMin, listMax, rowGap = 260, 220, 360, 8
 		}
 		ui.Row(ctx).FillWidth().Grow(1).MinHeight(0).Gap(rowGap).AlignItems(ui.Stretch).Children(func() {
-			ui.Box(ctx).Grow(5).Basis(listBasis).MinWidth(listMin).MaxWidth(listMax).FillHeight().MinHeight(0).Children(func() {
-				list := ui.List(ctx.Key("packets"), &view.list, len(visible)).Fill()
-				switch {
-				case landscape:
-					list.Padding(4, 4, max(4, bottomPadding), 4)
-				case bottomPadding > 0:
-					list.Padding(0, 0, bottomPadding, 0)
-				}
-				d.pdPacketList(p, msgs, visible, list, touch, landscape, splitDetail)
-				renderFollowFAB()
-			})
-			d.pdSplitDetailPane(ctx, p, msgs, data.Packets, visible, summary, capsText, landscape, position, bottomPadding)
+			renderListBox(ui.Box(ctx).Grow(5).Basis(listBasis).MinWidth(listMin).MaxWidth(listMax).FillHeight().MinHeight(0))
+			d.pdSplitDetailPane(ctx, p, msgs, f, landscape, position, bottomPadding)
 		})
 	} else {
-		ui.Box(ctx).FillWidth().Grow(1).MinHeight(140).Children(func() {
-			list := ui.List(ctx.Key("packets"), &view.list, len(visible)).Fill().Padding(0, 0, bottomPadding, 0)
-			d.pdPacketList(p, msgs, visible, list, touch, landscape, splitDetail)
-			renderFollowFAB()
-		})
+		renderListBox(ui.Box(ctx).FillWidth().Grow(1).MinHeight(140))
 	}
 }
 
 func pdFilterChip(ctx *ui.Context, p kit.Palette, label string, hide *bool, height float32, onChange func()) {
 	active := *hide
-	radius := kit.RadiusS
-	if p.LiquidGlass {
-		radius = kit.RadiusFull
-	}
+	radius := kit.PillRadius(p, kit.RadiusS)
 	padX, gap, iconSize, textSize := float32(10), float32(5), float32(13), float32(12)
 	if height <= 28 {
 		padX, gap, iconSize, textSize = 8, 4, 12, 11.5
@@ -1091,22 +1113,32 @@ func pdLandscapeKVCell(ctx *ui.Context, p kit.Palette, f pdview.Field) {
 	})
 }
 
-func pdLandscapeKVGrid(ctx *ui.Context, p kit.Palette, rows []pdview.Field) {
-	grouped := pdPairFields(rows)
-	for i, g := range grouped {
+func pdPairedGrid[T any](ctx *ui.Context, p kit.Palette, rows []pdPairedRow[T], minH, rowPadV, pairGap float32, renderSolo, renderCell func(T)) {
+	for i, g := range rows {
 		if i > 0 {
 			kit.Divider(ctx, p)
 		}
 		if !g.paired {
-			pdCompactKVRow(ctx, p, g.left.Label, g.left.Value)
+			renderSolo(g.left)
 			continue
 		}
-		ui.Row(ctx).FillWidth().MinHeight(26).Padding(4, 0).Gap(10).AlignItems(ui.Center).Children(func() {
-			pdLandscapeKVCell(ctx, p, g.left)
+		row := ui.Row(ctx).FillWidth().Padding(rowPadV, 0).Gap(pairGap).AlignItems(ui.Center)
+		if minH > 0 {
+			row.MinHeight(minH)
+		}
+		row.Children(func() {
+			renderCell(g.left)
 			kit.VerticalDivider(ctx, p, 16)
-			pdLandscapeKVCell(ctx, p, g.right)
+			renderCell(g.right)
 		})
 	}
+}
+
+func pdLandscapeKVGrid(ctx *ui.Context, p kit.Palette, rows []pdview.Field) {
+	pdPairedGrid(ctx, p, pdPairFields(rows), 26, 4, 10,
+		func(f pdview.Field) { pdCompactKVRow(ctx, p, f.Label, f.Value) },
+		func(f pdview.Field) { pdLandscapeKVCell(ctx, p, f) },
+	)
 }
 
 func isShortPDO(offer pd.PDO) bool {
@@ -1144,43 +1176,44 @@ func pdLandscapePDOCell(ctx *ui.Context, p kit.Palette, offer pd.PDO, activePos 
 }
 
 func pdLandscapePDOGrid(ctx *ui.Context, p kit.Palette, pdos []pd.PDO, activePos int) {
-	grouped := pdPairPDOs(pdos)
-	for i, g := range grouped {
-		if i > 0 {
-			kit.Divider(ctx, p)
-		}
-		if !g.paired {
+	pdPairedGrid(ctx, p, pdPairPDOs(pdos), 0, 2, 6,
+		func(offer pd.PDO) {
 			ui.Box(ctx).FillWidth().Padding(2, 0).Children(func() {
-				pdLandscapePDOCell(ctx, p, g.left, activePos, true)
+				pdLandscapePDOCell(ctx, p, offer, activePos, true)
 			})
-			continue
+		},
+		func(offer pd.PDO) { pdLandscapePDOCell(ctx, p, offer, activePos, false) },
+	)
+}
+
+type pdDetailMetrics struct {
+	outerGap, warnPadY, warnPadX, warnSize                       float32
+	stepGap, stepBtnH, stepPadX                                  float32
+	pdoPadY, pdoPadX, pdoRowPadY, pdoRowGap, pdoPosSize, pdoPosW float32
+	pdoDescSize, kvPadX                                          float32
+}
+
+func resolvePDDetailMetrics(landscape bool) pdDetailMetrics {
+	if landscape {
+		return pdDetailMetrics{
+			outerGap: 7, warnPadY: 5, warnPadX: 8, warnSize: 11.5,
+			stepGap: 4, stepBtnH: 20, stepPadX: 7,
+			pdoPadY: 4, pdoPadX: 10, pdoRowPadY: 4, pdoRowGap: 8, pdoPosSize: 10.5, pdoPosW: 22, pdoDescSize: 11.5, kvPadX: 10,
 		}
-		ui.Row(ctx).FillWidth().Padding(2, 0).Gap(6).AlignItems(ui.Center).Children(func() {
-			pdLandscapePDOCell(ctx, p, g.left, activePos, false)
-			kit.VerticalDivider(ctx, p, 16)
-			pdLandscapePDOCell(ctx, p, g.right, activePos, false)
-		})
+	}
+	return pdDetailMetrics{
+		outerGap: 12, warnPadY: 8, warnPadX: 10, warnSize: 12,
+		stepGap: 6, stepBtnH: 22, stepPadX: 8,
+		pdoPadY: 6, pdoPadX: 12, pdoRowPadY: 7, pdoRowGap: 10, pdoPosSize: 11, pdoPosW: 24, pdoDescSize: 12, kvPadX: 12,
 	}
 }
 
 func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Messages, packet pd.Packet, onSelect func(uint64), landscape, omitHeader bool) {
 	explanation := pdview.ExplainPacket(msgs, packet)
 	negotiation := pdIsNegotiation(packet)
+	m := resolvePDDetailMetrics(landscape)
 
-	outerGap := float32(12)
-	warnPadY, warnPadX, warnSize := float32(8), float32(10), float32(12)
-	stepGap, stepBtnH, stepPadX, stepSize := float32(6), float32(22), float32(8), float32(11)
-	pdoPadY, pdoPadX, pdoRowPadY, pdoRowGap, pdoPosSize, pdoPosW, pdoDescSize := float32(6), float32(12), float32(7), float32(10), float32(11), float32(24), float32(12)
-	kvPadX := float32(12)
-	if landscape {
-		outerGap = 7
-		warnPadY, warnPadX, warnSize = 5, 8, 11.5
-		stepGap, stepBtnH, stepPadX, stepSize = 4, 20, 7, 10.5
-		pdoPadY, pdoPadX, pdoRowPadY, pdoRowGap, pdoPosSize, pdoPosW, pdoDescSize = 4, 10, 4, 8, 10.5, 22, 11.5
-		kvPadX = 10
-	}
-
-	ui.Column(ctx).FillWidth().Gap(outerGap).Children(func() {
+	ui.Column(ctx).FillWidth().Gap(m.outerGap).Children(func() {
 		if !omitHeader {
 			ui.Row(ctx).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(ctx, packet.Type).FontSize(15).FontWeight(750)
@@ -1191,8 +1224,8 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 		}
 
 		renderWarning := func(msg string) {
-			ui.Row(ctx).FillWidth().Padding(warnPadY, warnPadX).Radius(kit.RadiusS).Background(p.WarningSoft).Children(func() {
-				ui.Text(ctx, msg).FillWidth().FontSize(warnSize).TextColor(p.Warning).Wrap()
+			ui.Row(ctx).FillWidth().Padding(m.warnPadY, m.warnPadX).Radius(kit.RadiusS).Background(p.WarningSoft).Children(func() {
+				ui.Text(ctx, msg).FillWidth().FontSize(m.warnSize).TextColor(p.Warning).Wrap()
 			})
 		}
 		if packet.Error != "" {
@@ -1204,7 +1237,7 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 
 		if negotiation && packet.Analysis != nil {
 			analysis := packet.Analysis
-			ui.Row(ctx).FillWidth().Wrap().Gap(stepGap).Children(func() {
+			ui.Row(ctx).FillWidth().Wrap().Gap(m.stepGap).Children(func() {
 				for _, step := range []struct {
 					label    string
 					sequence uint64
@@ -1216,23 +1249,14 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 				} {
 					switch {
 					case step.sequence == 0:
-						kit.Badge(ctx, p, "○ "+step.label, kit.TonePlain).Height(stepBtnH)
+						kit.Badge(ctx, p, "○ "+step.label, kit.TonePlain).Height(m.stepBtnH)
 					case onSelect != nil && step.sequence != packet.Sequence:
 						seq := step.sequence
-						stepLabel := fmt.Sprintf("✓ %s #%d", step.label, seq)
-						bg, fg := kit.BadgeColors(p, kit.ToneSuccess)
-						radius := kit.RadiusS
-						if p.LiquidGlass {
-							radius = kit.RadiusFull
-						}
-						btn := ui.ButtonBase(ctx.Key(fmt.Sprintf("step-%d-%s", seq, step.label))).Height(stepBtnH).Shrink(0).Padding(0, stepPadX).
-							AlignItems(ui.Center).Justify(ui.Center).Radius(radius).Background(bg).Label(stepLabel).
-							OnClick(func() { onSelect(seq) })
-						kit.ControlMotion(btn).Children(func() {
-							ui.Text(ctx, stepLabel).FontSize(stepSize).FontWeight(650).TextColor(fg).SingleLine().Shrink(0)
-						})
+						kit.BadgeButton(ctx.Key(fmt.Sprintf("step-%d-%s", seq, step.label)), p, fmt.Sprintf("✓ %s #%d", step.label, seq), kit.ToneSuccess, m.stepBtnH, func() {
+							onSelect(seq)
+						}).Padding(0, m.stepPadX)
 					default:
-						kit.Badge(ctx, p, fmt.Sprintf("✓ %s #%d", step.label, step.sequence), kit.ToneSuccess).Height(stepBtnH)
+						kit.Badge(ctx, p, fmt.Sprintf("✓ %s #%d", step.label, step.sequence), kit.ToneSuccess).Height(m.stepBtnH)
 					}
 				}
 			})
@@ -1243,9 +1267,9 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 			if packet.Analysis != nil && packet.Analysis.Request != nil {
 				activePos = packet.Analysis.Request.Position
 			}
-			ui.Column(ctx).FillWidth().Padding(pdoPadY, pdoPadX).Radius(kit.RadiusM).Background(p.Inset).Border(1, p.LineSoft).Children(func() {
+			ui.Column(ctx).FillWidth().Padding(m.pdoPadY, m.pdoPadX).Radius(kit.RadiusM).Background(p.Inset).Border(1, p.LineSoft).Children(func() {
 				if summary := pdCapabilitiesSummary(packet.AdvertisedSource()); summary != "" {
-					ui.Row(ctx).FillWidth().Padding(pdoRowPadY, 0).Children(func() {
+					ui.Row(ctx).FillWidth().Padding(m.pdoRowPadY, 0).Children(func() {
 						ui.Text(ctx, summary).FontSize(11).FontWeight(650).TextColor(p.AccentText)
 					})
 					kit.Divider(ctx, p)
@@ -1257,9 +1281,9 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 						if index > 0 {
 							kit.Divider(ctx, p)
 						}
-						ui.Row(ctx).FillWidth().Padding(pdoRowPadY, 0).Gap(pdoRowGap).AlignItems(ui.Center).Children(func() {
-							ui.Text(ctx, fmt.Sprintf("#%d", offer.Position)).FontFeatures("tnum").Font("monospace").FontSize(pdoPosSize).TextColor(p.Muted).Width(pdoPosW)
-							ui.Text(ctx, offer.Summary()).Grow(1).MinWidth(0).FontSize(pdoDescSize).FontFeatures("tnum").Wrap()
+						ui.Row(ctx).FillWidth().Padding(m.pdoRowPadY, 0).Gap(m.pdoRowGap).AlignItems(ui.Center).Children(func() {
+							ui.Text(ctx, fmt.Sprintf("#%d", offer.Position)).FontFeatures("tnum").Font("monospace").FontSize(m.pdoPosSize).TextColor(p.Muted).Width(m.pdoPosW)
+							ui.Text(ctx, offer.Summary()).Grow(1).MinWidth(0).FontSize(m.pdoDescSize).FontFeatures("tnum").Wrap()
 							if activePos > 0 && offer.Position == activePos {
 								kit.Badge(ctx, p, msgs.PdRequestStep(), kit.ToneAccent)
 							}
@@ -1303,17 +1327,20 @@ func (d *dashboard) packetDetail(ctx *ui.Context, p kit.Palette, msgs locales.Me
 		}
 		rows = append(rows, pdview.Field{Label: msgs.GuiProtocol(), Value: fmt.Sprintf("PD %s · ID %d · 0x%04X", packet.Revision, packet.MessageID, packet.Header)})
 
-		ui.Column(ctx).FillWidth().Padding(2, kvPadX).Radius(kit.RadiusM).Background(p.Inset).Border(1, p.LineSoft).Children(func() {
+		ui.Column(ctx).FillWidth().Padding(2, m.kvPadX).Radius(kit.RadiusM).Background(p.Inset).Border(1, p.LineSoft).Children(func() {
 			if landscape {
 				pdLandscapeKVGrid(ctx, p, rows)
-			} else {
-				for i, r := range rows {
-					if i > 0 {
-						kit.Divider(ctx, p)
-					}
-					kit.KVRow(ctx, p, r.Label, r.Value, d.mobile, nil)
-				}
+				return
 			}
+			var kvBuf [16]kit.KVItem
+			items := kvBuf[:0]
+			if len(rows) > len(kvBuf) {
+				items = make([]kit.KVItem, 0, len(rows))
+			}
+			for _, r := range rows {
+				items = append(items, kit.KVItem{Label: r.Label, Value: r.Value})
+			}
+			kit.KVList(ctx, p, items, d.mobile)
 		})
 
 		d.rawBytes(ctx, p, msgs.RawBytes(), packet.CRC, packet.MessageHex, msgs, landscape)
@@ -1342,8 +1369,7 @@ func (d *dashboard) rawBytes(ctx *ui.Context, p kit.Palette, label, crcState, da
 			}
 			ui.Spacer(ctx)
 			kit.ActionButton(ctx.Key("copy-"+label), p, kit.VariantGhost, kit.IconCopy, msgs.GuiCopy(), false, func() {
-				ctx.Services().WriteClipboard(data)
-				d.notify(msgs.GuiCopied(), "success")
+				d.copyText(ctx, msgs, data)
 			}).Height(btnH).Padding(0, btnPadX)
 		})
 		var lines strings.Builder

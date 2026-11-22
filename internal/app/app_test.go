@@ -473,6 +473,20 @@ func TestLayoutAndNavigationMetrics(t *testing.T) {
 	}
 }
 
+func TestNormalizeWorkspacePage(t *testing.T) {
+	if got := normalizeWorkspacePage(pageMore, true); got != pageMore {
+		t.Fatalf("portrait pageMore = %d, want %d", got, pageMore)
+	}
+	if got := normalizeWorkspacePage(pageMore, false); got != pageOverview {
+		t.Fatalf("landscape pageMore = %d, want %d", got, pageOverview)
+	}
+	for _, page := range []int{pageOverview, pagePD, pageRecords, pageDevice, pageSettings, pageConnectionLog} {
+		if got := normalizeWorkspacePage(page, false); got != page {
+			t.Fatalf("page %d changed during landscape normalization: %d", page, got)
+		}
+	}
+}
+
 func TestPageScrollsUnderHeader(t *testing.T) {
 	noop := func() {}
 	noopList := func(float32) {}
@@ -620,5 +634,113 @@ func TestPDLandscapeLayoutHelpers(t *testing.T) {
 	}
 	if pairedPDOs[2].paired || pairedPDOs[2].left.Position != 4 {
 		t.Fatalf("pdo row 2 = %+v, want solo #4", pairedPDOs[2])
+	}
+}
+
+func TestResolveChartTicksDualSlot(t *testing.T) {
+	const chPower, chVoltage, chCurrent = 0, 1, 2
+	d := &dashboard{}
+	var ran bool
+	tt := ui.NewTester(func(ctx *ui.Context) {
+		ran = true
+		ax0 := chart.Linear{Lo: 0, Hi: 50}
+		ax1 := chart.Linear{Lo: 0, Hi: 20}
+
+		res0 := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true)
+		res1 := d.resolveChartTicks(ctx, 1, chVoltage, ax1, "V", false, true)
+		if len(res0.ticks) == 0 || len(res0.labels) != len(res0.ticks) || res0.rightMargin <= 0 {
+			t.Fatalf("slot 0 unexpected ticks: %+v", res0)
+		}
+		if len(res1.ticks) == 0 || res1.key.channel != chVoltage || res1.key.unit != "V" {
+			t.Fatalf("slot 1 unexpected ticks: %+v", res1)
+		}
+		if d.chartTickMetrics[0].key.channel != chPower || d.chartTickMetrics[1].key.channel != chVoltage {
+			t.Fatalf("slots collided: [0]=%+v [1]=%+v", d.chartTickMetrics[0].key, d.chartTickMetrics[1].key)
+		}
+
+		// Cache hit preserves exact cached slice & width.
+		d.chartTickMetrics[0].rightMargin = 123.5
+		if hit := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true); hit.rightMargin != 123.5 {
+			t.Fatalf("expected slot 0 cache hit (123.5), got %v", hit.rightMargin)
+		}
+
+		// Scale mismatch invalidates cache.
+		zoom := ctx.Zoom()
+		if zoom <= 0 {
+			zoom = 1
+		}
+		d.chartTickMetrics[0].key.scale = zoom + 1
+		scaled := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true)
+		if scaled.rightMargin == 123.5 || scaled.key.scale != zoom {
+			t.Fatalf("expected scale mismatch invalidation, got width=%v scale=%v", scaled.rightMargin, scaled.key.scale)
+		}
+
+		// Channel switch updates slot 0 without clobbering slot 1.
+		cur := d.resolveChartTicks(ctx, 0, chCurrent, chart.Linear{Lo: 0, Hi: 5}, "A", false, true)
+		if cur.key.channel != chCurrent || d.chartTickMetrics[1].key.channel != chVoltage {
+			t.Fatalf("channel switch affected slot 1 or failed: [0]=%+v [1]=%+v", d.chartTickMetrics[0].key, d.chartTickMetrics[1].key)
+		}
+
+		// snapshotOnly computes fresh ticks without mutating cached slot.
+		d.snapshotOnly = true
+		snapRes := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true)
+		d.snapshotOnly = false
+		if snapRes.key.channel != chPower || d.chartTickMetrics[0].key.channel != chCurrent {
+			t.Fatalf("snapshotOnly mutated cache: snap=%+v cached=%+v", snapRes.key, d.chartTickMetrics[0].key)
+		}
+	}, 400, 200)
+	tt.Frame()
+	if !ran {
+		t.Fatal("tester frame callback did not run")
+	}
+}
+
+func TestDashboardStatusAndPageOrder(t *testing.T) {
+	msgs := locales.In("en")
+	cases := []struct {
+		name string
+		snap backend.Snapshot
+		err  error
+		want kit.BadgeTone
+	}{
+		{name: "error", snap: backend.Snapshot{State: backend.Streaming}, err: context.Canceled, want: kit.ToneDanger},
+		{name: "missing", snap: backend.Snapshot{ErrorKind: "missing"}, want: kit.TonePlain},
+		{name: "permission", snap: backend.Snapshot{ErrorKind: "permission"}, want: kit.ToneWarning},
+		{name: "offline", snap: backend.Snapshot{}, want: kit.TonePlain},
+		{name: "connecting", snap: backend.Snapshot{State: backend.Connecting}, want: kit.ToneWarning},
+		{name: "waiting", snap: backend.Snapshot{State: backend.Waiting}, want: kit.ToneWarning},
+		{name: "streaming", snap: backend.Snapshot{State: backend.Streaming}, want: kit.ToneSuccess},
+	}
+	for _, tc := range cases {
+		_, _, got := dashboardStatus(msgs, tc.snap, tc.err)
+		if got != tc.want {
+			t.Fatalf("%s: dashboardStatus tone = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	mob := &dashboard{mobile: true}
+	if mob.pageOrder(pageOverview) >= mob.pageOrder(pagePD) ||
+		mob.pageOrder(pagePD) >= mob.pageOrder(pageRecords) ||
+		mob.pageOrder(pageRecords) >= mob.pageOrder(pageMore) ||
+		mob.pageOrder(pageMore) >= mob.pageOrder(pageDevice) ||
+		mob.pageOrder(pageDevice) >= mob.pageOrder(pageConnectionLog) ||
+		mob.pageOrder(pageConnectionLog) >= mob.pageOrder(pageSettings) {
+		t.Fatalf("unexpected mobile pageOrder sequence")
+	}
+	if mob.pageOrder(-1) != 0 || mob.pageOrder(99) != 0 {
+		t.Fatalf("expected out-of-bounds mobile pageOrder to return 0, got %d/%d", mob.pageOrder(-1), mob.pageOrder(99))
+	}
+
+	desk := &dashboard{mobile: false}
+	if desk.pageOrder(pageOverview) >= desk.pageOrder(pagePD) ||
+		desk.pageOrder(pagePD) >= desk.pageOrder(pageRecords) ||
+		desk.pageOrder(pageRecords) >= desk.pageOrder(pageDevice) ||
+		desk.pageOrder(pageDevice) >= desk.pageOrder(pageConnectionLog) ||
+		desk.pageOrder(pageConnectionLog) >= desk.pageOrder(pageSettings) ||
+		desk.pageOrder(pageSettings) >= desk.pageOrder(pageMore) {
+		t.Fatalf("unexpected desktop pageOrder sequence")
+	}
+	if desk.pageOrder(-1) != 0 || desk.pageOrder(99) != 0 {
+		t.Fatalf("expected out-of-bounds desktop pageOrder to return 0, got %d/%d", desk.pageOrder(-1), desk.pageOrder(99))
 	}
 }

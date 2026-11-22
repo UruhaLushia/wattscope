@@ -21,6 +21,39 @@ const (
 	VariantGhost
 )
 
+func PillRadius(p Palette, solid float32) float32 {
+	if p.LiquidGlass {
+		return RadiusFull
+	}
+	return solid
+}
+
+func GlassRadius(p Palette, solid, glass float32) float32 {
+	if p.LiquidGlass {
+		return glass
+	}
+	return solid
+}
+
+func InteractiveBg(el ui.Element, p Palette) ui.Color {
+	switch {
+	case el.Pressed():
+		return p.Press
+	case el.Hovered() || el.FocusVisible():
+		return p.Hover
+	default:
+		return ui.Transparent
+	}
+}
+
+func GlassIconPopOnPress(ctx *ui.Context, owner, iconEl ui.Element, p Palette) {
+	var pop float32
+	if !owner.IsDisabled() && owner.Pressed() {
+		pop = 1
+	}
+	GlassIconPop(ctx, iconEl, p, pop)
+}
+
 func ApplyCardShadow(el ui.Element, p Palette) ui.Element {
 	if p.CardShadow.A > 0 {
 		return el.Shadow(0, 1, 3, 0, p.CardShadow)
@@ -34,13 +67,22 @@ func Card(ctx *ui.Context, p Palette) ui.Element {
 
 // StaticCard builds a Card without LocaleSizeTransition so scrollable columns can cull off-screen cards.
 func StaticCard(ctx *ui.Context, p Palette) ui.Element {
-	return GlassPanel(ui.Column(ctx).FillWidth().MinWidth(0).Gap(12).Padding(16), p, RadiusL, 0.25, p.Surface, p.LineSoft)
+	return GlassPanel(ui.Column(ctx).FillWidth().MinWidth(0).Gap(12).Padding(16), p, RadiusL, p.Surface, p.LineSoft)
 }
 
-func Panel(ctx *ui.Context, p Palette, title string, content func()) {
-	Card(ctx, p).Children(func() {
-		SectionTitle(ctx, title)
-		content()
+func TitledCard(ctx *ui.Context, p Palette, title string, trailing, content func()) ui.Element {
+	return Card(ctx, p).Gap(10).Children(func() {
+		ui.Row(ctx).FillWidth().MinHeight(28).AlignItems(ui.Center).Gap(8).Children(func() {
+			SectionTitle(ctx, title)
+			ui.Spacer(ctx)
+			if trailing != nil {
+				trailing()
+			}
+		})
+		Divider(ctx, p)
+		if content != nil {
+			content()
+		}
 	})
 }
 
@@ -64,7 +106,7 @@ func FormGroup(ctx *ui.Context, p Palette, title string, trailing, rows func()) 
 		if title != "" {
 			SectionHeader(ctx, p, title, trailing)
 		}
-		GlassPanel(ui.Column(ctx).FillWidth().Padding(0, formGroupInset), p, RadiusL, 0.25, p.Surface, p.LineSoft).
+		GlassPanel(ui.Column(ctx).FillWidth().Padding(0, formGroupInset), p, RadiusL, p.Surface, p.LineSoft).
 			Transition(LocaleSizeTransition).Children(rows)
 	})
 }
@@ -101,10 +143,6 @@ func IconSettingRow(ctx *ui.Context, p Palette, icon *ui.SVG, label, hint string
 	})
 }
 
-func PropertyRow(ctx *ui.Context, p Palette, label, value string, trailing func()) {
-	KVRow(ctx, p, label, value, false, trailing)
-}
-
 func KVRow(ctx *ui.Context, p Palette, label, value string, mobile bool, trailing func()) {
 	if value == "" && trailing == nil {
 		return
@@ -129,6 +167,25 @@ func KVRow(ctx *ui.Context, p Palette, label, value string, mobile bool, trailin
 			trailing()
 		}
 	})
+}
+
+type KVItem struct {
+	Label string
+	Value string
+}
+
+func KVList(ctx *ui.Context, p Palette, items []KVItem, mobile bool) {
+	first := true
+	for _, item := range items {
+		if item.Value == "" {
+			continue
+		}
+		if !first {
+			Divider(ctx, p)
+		}
+		first = false
+		KVRow(ctx, p, item.Label, item.Value, mobile, nil)
+	}
 }
 
 func ActionBar(ctx *ui.Context) ui.Element {
@@ -169,21 +226,13 @@ func ValueBadge(ctx *ui.Context, p Palette, text string, tone BadgeTone) ui.Elem
 
 func badge(ctx *ui.Context, p Palette, text string, tone BadgeTone, animate bool) ui.Element {
 	bg, fg := BadgeColors(p, tone)
-	radius := RadiusS
-	if p.LiquidGlass {
-		radius = RadiusFull
-	}
 	box := ui.Box(ctx).Height(22).Shrink(0).Padding(0, 8).AlignItems(ui.Center).Justify(ui.Center).
-		Radius(radius).Background(bg)
+		Radius(PillRadius(p, RadiusS)).Background(bg)
 	if animate {
 		box.Transition(LocaleSizeTransition)
 	}
 	if p.LiquidGlass && tone == TonePlain {
-		if p.Dark {
-			box.Background(ui.RGBA(255, 255, 255, 0.08)).Border(1, ui.RGBA(255, 255, 255, 0.12))
-		} else {
-			box.Background(ui.RGBA(15, 23, 42, 0.05)).Border(1, ui.RGBA(15, 23, 42, 0.06))
-		}
+		box.Background(glassNeutral(p.Dark, 0.05, 0.08)).Border(1, glassNeutral(p.Dark, 0.06, 0.12))
 	}
 	return box.Children(func() {
 		label := ui.Text(ctx, text).FontSize(11).FontWeight(650).TextColor(fg).SingleLine().Shrink(0)
@@ -193,18 +242,68 @@ func badge(ctx *ui.Context, p Palette, text string, tone BadgeTone, animate bool
 	})
 }
 
+func BadgeButton(ctx *ui.Context, p Palette, text string, tone BadgeTone, height float32, onClick func()) ui.Element {
+	bg, fg := BadgeColors(p, tone)
+	fontSize := float32(11)
+	if height <= 20 {
+		fontSize = 10.5
+	}
+	btn := ui.ButtonBase(ctx).Height(height).Shrink(0).Padding(0, 8).AlignItems(ui.Center).Justify(ui.Center).
+		Radius(PillRadius(p, RadiusS)).Background(bg).Label(text).OnClick(onClick)
+	return ControlMotion(btn).Children(func() {
+		ui.Text(ctx, text).FontSize(fontSize).FontWeight(650).TextColor(fg).SingleLine()
+	})
+}
+
 func StatusDot(ctx *ui.Context, color ui.Color, size float32) ui.Element {
 	el := ui.Box(ctx).Size(size, size).Shrink(0).Radius(RadiusFull)
 	return el.Background(el.AnimateColor("dot", color, MotionFast))
 }
 
-func IconBadge(ctx *ui.Context, p Palette, icon *ui.SVG, size float32, bg, fg ui.Color) ui.Element {
+func IconBadge(ctx *ui.Context, icon *ui.SVG, size float32, bg, fg ui.Color) ui.Element {
 	radius, iconSize := RadiusS, float32(16)
 	if size > 32 {
 		radius, iconSize = RadiusM, 20
 	}
 	return ui.Box(ctx).Size(size, size).Shrink(0).Radius(radius).Center().Background(bg).Children(func() {
 		ui.Icon(ctx, icon).FontSize(iconSize).TextColor(fg)
+	})
+}
+
+type MetricSummaryItem struct {
+	Label string
+	Value string
+	Unit  string
+}
+
+func MetricSummaryRow(ctx *ui.Context, p Palette, items []MetricSummaryItem, compact, wrap bool) ui.Element {
+	gap, divH := float32(12), float32(24)
+	if compact {
+		gap, divH = 6, 20
+	}
+	row := ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(gap)
+	if wrap {
+		row.Wrap()
+	}
+	return row.Children(func() {
+		for i, item := range items {
+			if i > 0 {
+				VerticalDivider(ctx, p, divH)
+			}
+			if !compact {
+				MetricSummaryCell(ctx, p, item.Label, item.Value, item.Unit)
+				continue
+			}
+			ui.Column(ctx).Grow(1).Basis(0).MinWidth(0).Gap(1).Children(func() {
+				ui.Text(ctx, item.Label).FontSize(10).FontWeight(600).TextColor(p.Muted).SingleLine()
+				ui.Row(ctx).AlignItems(ui.Baseline).Gap(2).Children(func() {
+					ui.Text(ctx, item.Value).FontFeatures("tnum").FontSize(11.5).FontWeight(700).MinWidth(0).SingleLine()
+					if item.Unit != "" {
+						ui.Text(ctx, item.Unit).FontSize(9.5).FontWeight(600).TextColor(p.Muted).Shrink(0).SingleLine()
+					}
+				})
+			})
+		}
 	})
 }
 
@@ -223,7 +322,7 @@ func MetricSummaryCell(ctx *ui.Context, p Palette, label, value, unit string) ui
 func EmptyState(ctx *ui.Context, p Palette, icon *ui.SVG, title, hint string, actions func()) {
 	ui.Column(ctx).Grow(1).FillWidth().Padding(24, 16).AlignItems(ui.Center).Justify(ui.Center).Gap(6).Children(func() {
 		if icon != nil {
-			IconBadge(ctx, p, icon, 44, p.Inset, p.Muted).Margin(0, 0, 6, 0)
+			IconBadge(ctx, icon, 44, p.Inset, p.Muted).Margin(0, 0, 6, 0)
 		}
 		ui.Text(ctx, title).FontSize(14).FontWeight(700).TextAlign(ui.Center)
 		if hint != "" {
@@ -292,15 +391,18 @@ func ValueButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SVG
 	return actionButton(ctx, p, variant, icon, label, touch, onClick, false)
 }
 
-func actionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SVG, label string, touch bool, onClick func(), animateLabel bool) ui.Element {
-	radius := RadiusM
-	if p.LiquidGlass {
-		radius = RadiusFull
-	}
-	el := ui.ButtonBase(ctx).Height(ControlHeight(touch)).Shrink(0).Padding(0, 12).Gap(7).
-		Radius(radius).AlignItems(ui.Center).Justify(ui.Center).Label(label).OnClick(onClick)
-	bg, hover, press, ink, border, weight := buttonColors(p, variant)
-	if !el.IsDisabled() {
+func resolveButtonStyle(el ui.Element, p Palette, variant ButtonVariant, activeOpen bool) (bg, ink, border, glassTint ui.Color, borderW float32, weight int, visibleAtRest bool) {
+	var hover, press ui.Color
+	bg, hover, press, ink, border, weight = buttonColors(p, variant)
+	glassTint, visibleAtRest = buttonGlassStyle(p, variant)
+	if activeOpen && variant != VariantPrimary {
+		bg = p.AccentSoft
+		ink = p.AccentText
+		glassTint, visibleAtRest = GlassAccentTint(p, 0.28, 0.32), true
+		if border.A > 0 {
+			border = p.AccentLine
+		}
+	} else if !el.IsDisabled() {
 		switch {
 		case el.Pressed():
 			bg = press
@@ -308,11 +410,17 @@ func actionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SV
 			bg = hover
 		}
 	}
-	borderW := float32(0)
 	if border.A > 0 {
 		borderW = 1
 	}
-	glassTint, visibleAtRest := buttonGlassStyle(p, variant)
+	return bg, ink, border, glassTint, borderW, weight, visibleAtRest
+}
+
+func actionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SVG, label string, touch bool, onClick func(), animateLabel bool) ui.Element {
+	radius := PillRadius(p, RadiusM)
+	el := ui.ButtonBase(ctx).Height(ControlHeight(touch)).Shrink(0).Padding(0, 12).Gap(7).
+		Radius(radius).AlignItems(ui.Center).Justify(ui.Center).Label(label).OnClick(onClick)
+	bg, ink, border, glassTint, borderW, weight, visibleAtRest := resolveButtonStyle(el, p, variant, false)
 	return ControlMotion(el).Children(func() {
 		GlassPillControl(ctx.Key("bg"), el, p, radius, glassTint, visibleAtRest, bg, borderW, border, 0.96)
 		if icon != nil {
@@ -328,11 +436,7 @@ func actionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SV
 }
 
 func IconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, size float32, active bool, onClick func()) ui.Element {
-	radius := min(RadiusM, max(RadiusS, size/3))
-	if p.LiquidGlass {
-		radius = RadiusFull
-	}
-	return iconActionButton(ctx, p, icon, label, size, radius, active, onClick)
+	return iconActionButton(ctx, p, icon, label, size, PillRadius(p, min(RadiusM, max(RadiusS, size/3))), active, onClick)
 }
 
 // RoundIconActionButton renders an icon-only action button with circular pill corners.
@@ -359,11 +463,7 @@ func iconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, si
 	}
 	return ControlMotion(el).Children(func() {
 		GlassPillControl(ctx.Key("bg"), el, p, radius, glassTint, visibleAtRest, bg, 0, ui.Transparent, 0.94)
-		pop := float32(0)
-		if !el.IsDisabled() && el.Pressed() {
-			pop = 1
-		}
-		GlassIconPop(ctx, ui.Icon(ctx, icon).FontSize(16).TextColor(el.AnimateColor("icon-fg", fg, MotionFast)), p, pop)
+		GlassIconPopOnPress(ctx, el, ui.Icon(ctx, icon).FontSize(16).TextColor(el.AnimateColor("icon-fg", fg, MotionFast)), p)
 	})
 }
 
@@ -415,15 +515,10 @@ func Segmented(ctx *ui.Context, p Palette, selected *int, labels []string, touch
 	if touch {
 		trackH = 30
 	}
-	trackRadius := RadiusM
+	trackRadius := PillRadius(p, RadiusM)
 	trackBg := p.Track
 	if p.LiquidGlass {
-		trackRadius = RadiusFull
-		if p.Dark {
-			trackBg = ui.RGBA(255, 255, 255, 0.08)
-		} else {
-			trackBg = ui.RGBA(15, 23, 42, 0.06)
-		}
+		trackBg = glassNeutral(p.Dark, 0.06, 0.08)
 	}
 	track := parts.Track.Height(trackH).Shrink(0).Padding(3).Gap(2).
 		Radius(trackRadius).Background(trackBg).Transition(LocaleSizeTransition)
@@ -463,10 +558,7 @@ func ToastViewport(ctx *ui.Context, p Palette, bottom float32, centered bool) {
 			notice := toasts[index]
 			parts := ui.ToastBase(ctx, notice)
 			PopupMotion(parts.Root)
-			toastRadius := RadiusL
-			if p.LiquidGlass {
-				toastRadius = RadiusXL
-			}
+			toastRadius := GlassRadius(p, RadiusL, RadiusXL)
 			GlassFloating(ctx, parts.Root.Width(340).MaxWidthPercent(94).Row().AlignItems(ui.Center).Gap(10).
 				Padding(10, 12, 10, 14), p, toastRadius, 0.1, ui.Color{}, true, p.Surface, p.Line).
 				Shadow(0, 8, 24, 0, p.Shadow)

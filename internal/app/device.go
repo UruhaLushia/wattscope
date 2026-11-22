@@ -29,19 +29,14 @@ func meterOptionRow(ctx *ui.Context, p kit.Palette, meter device.Info, active, c
 	row := ui.ButtonBase(ctx.Key(meter.ID)).FillWidth().MinHeight(rowH).Padding(padY, 6).Gap(10).
 		Radius(kit.RadiusS).AlignItems(ui.Center).Justify(ui.Start).
 		Label(meter.Name + " · " + identity).OnClick(onClick)
-	bg := ui.Transparent
-	if row.Pressed() {
-		bg = p.Press
-	} else if row.Hovered() || row.FocusVisible() {
-		bg = p.Hover
-	}
+	bg := kit.InteractiveBg(row, p)
 	kit.ControlMotion(row).Background(row.AnimateColor("m-row", bg, kit.MotionFast))
 	row.Children(func() {
 		bgIcon, fgIcon := p.Inset, p.Muted
 		if active {
 			bgIcon, fgIcon = p.AccentSoft, p.AccentText
 		}
-		kit.IconBadge(ctx, p, kit.IconCpu, badgeSize, bgIcon, fgIcon)
+		kit.IconBadge(ctx, kit.IconCpu, badgeSize, bgIcon, fgIcon)
 		ui.Column(ctx).Grow(1).MinWidth(0).Gap(1).Children(func() {
 			ui.Text(ctx, meter.Name).FontSize(13).FontWeight(650).SingleLine()
 			if identity != "" {
@@ -78,12 +73,21 @@ func (d *dashboard) deviceSwitcherPopover(ctx *ui.Context, p kit.Palette, msgs l
 	_, height := ctx.Size()
 	topInset, _, bottomInset, _ := ctx.SafeArea()
 	maxH := max(140, min(height-topInset-bottomInset-84, max(220, height*0.65)))
-	kit.Popover(ctx, p, anchor, &d.deviceMenuOpen, 0.92, 0, func(panel ui.Element) {
+	kit.Popover(ctx, p, anchor, &d.deviceMenuOpen, func(panel ui.Element) {
 		panel.Width(288).MaxWidthPercent(92).MaxHeight(maxH).Padding(12).Gap(8)
 		panel.Children(func() {
 			d.deviceSwitcherContent(ctx, p, msgs, touch)
 		})
 	})
+}
+
+func (d *dashboard) connectButton(ctx *ui.Context, p kit.Palette, msgs locales.Messages, key string, snap backend.Snapshot, reconnectOnStreaming, touch bool, onClick func()) ui.Element {
+	connectLabel := msgs.GuiConnect()
+	if snap.State == backend.Streaming && reconnectOnStreaming {
+		connectLabel = msgs.GuiReconnect()
+	}
+	return kit.ActionButton(ctx.Key(key), p, kit.VariantPrimary, kit.IconPlay, connectLabel, touch, onClick).
+		Disabled(d.busy || snap.State == backend.Connecting)
 }
 
 func (d *dashboard) deviceSwitcherContent(ctx *ui.Context, p kit.Palette, msgs locales.Messages, touch bool) {
@@ -118,14 +122,10 @@ func (d *dashboard) deviceSwitcherContent(ctx *ui.Context, p kit.Palette, msgs l
 	ui.Scroll(ctx.Key("dev-pop-scroll")).Scrollbars(false).MaxHeight(260).MinHeight(0).FillWidth().Children(buildList)
 	kit.Divider(ctx, p)
 	ui.Row(ctx).FillWidth().Gap(8).Justify(ui.End).Children(func() {
-		connectLabel := msgs.GuiConnect()
-		if snap.State == backend.Streaming {
-			connectLabel = msgs.GuiReconnect()
-		}
-		btn := kit.ActionButton(ctx.Key("pop-connect"), p, kit.VariantPrimary, kit.IconPlay, connectLabel, touch, func() {
+		btn := d.connectButton(ctx, p, msgs, "pop-connect", snap, true, touch, func() {
 			d.deviceMenuOpen = false
 			d.connect()
-		}).Disabled(d.busy || snap.State == backend.Connecting)
+		})
 		if touch {
 			btn.FillWidth()
 		} else {
@@ -141,18 +141,7 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 	if title == "" {
 		title = msgs.GuiNoMeter()
 	}
-	status, detail, statusColor := dashboardStatus(p, msgs, snap, d.err)
-	statusBadgeTone := kit.TonePlain
-	switch statusColor {
-	case p.Green:
-		statusBadgeTone = kit.ToneSuccess
-	case p.Warning:
-		statusBadgeTone = kit.ToneWarning
-	case p.Red:
-		statusBadgeTone = kit.ToneDanger
-	case p.AccentText:
-		statusBadgeTone = kit.ToneAccent
-	}
+	status, detail, statusBadgeTone := dashboardStatus(msgs, snap, d.err)
 	sub := strings.Trim(info.Driver+" · "+info.Transport, " ·")
 	if info.Simulated {
 		sub = ""
@@ -161,7 +150,7 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 	kit.NarrowColumn(ctx, func() {
 		kit.Card(ctx, p).Gap(12).Children(func() {
 			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(12).Children(func() {
-				kit.IconBadge(ctx, p, kit.IconCpu, 44, p.AccentSoft, p.AccentText)
+				kit.IconBadge(ctx, kit.IconCpu, 44, p.AccentSoft, p.AccentText)
 				ui.Column(ctx).Grow(1).Basis(180).MinWidth(140).Gap(3).Children(func() {
 					ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(8).Children(func() {
 						ui.Text(ctx, title).FontSize(16).FontWeight(700)
@@ -183,13 +172,7 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 						d.goPage(pageSettings)
 					})
 				}
-				connectLabel := msgs.GuiConnect()
-				if snap.State == backend.Streaming && !info.Simulated {
-					connectLabel = msgs.GuiReconnect()
-				}
-				conn := kit.ActionButton(ctx.Key("connect"), p, kit.VariantPrimary, kit.IconPlay, connectLabel, touch, func() {
-					d.connect()
-				}).Disabled(d.busy || snap.State == backend.Connecting)
+				conn := d.connectButton(ctx, p, msgs, "connect", snap, !snap.Device.Simulated, touch, d.connect)
 				scan := kit.ActionButton(ctx.Key("scan"), p, kit.VariantSecondary, kit.IconRefresh, msgs.GuiFindMeters(), touch, func() {
 					d.scanMeters(msgs, false)
 				}).Disabled(d.busy)
@@ -212,27 +195,14 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 		}
 		if info.Serial != "" || pathRow != "" || (snap.Error != "" && snap.Error != detail) {
 			kit.FormGroup(ctx, p, msgs.GuiInfo(), nil, func() {
-				ui.Column(ctx).FillWidth().Children(func() {
-					hasRow := false
-					addRow := func(label, val string) {
-						if val == "" {
-							return
-						}
-						if hasRow {
-							kit.Divider(ctx, p)
-						}
-						kit.KVRow(ctx, p, label, val, d.mobile, nil)
-						hasRow = true
+				items := [2]kit.KVItem{{Label: msgs.SerialHeading(), Value: info.Serial}, {Label: msgs.Interface(), Value: pathRow}}
+				kit.KVList(ctx, p, items[:], d.mobile)
+				if snap.Error != "" && snap.Error != detail {
+					if info.Serial != "" || pathRow != "" {
+						kit.Divider(ctx, p)
 					}
-					addRow(msgs.SerialHeading(), info.Serial)
-					addRow(msgs.Interface(), pathRow)
-					if snap.Error != "" && snap.Error != detail {
-						if hasRow {
-							kit.Divider(ctx, p)
-						}
-						ui.Text(ctx, snap.Error).FillWidth().Padding(8, 0).FontSize(12).TextColor(p.Warning).Wrap()
-					}
-				})
+					ui.Text(ctx, snap.Error).FillWidth().Padding(8, 0).FontSize(12).TextColor(p.Warning).Wrap()
+				}
 			})
 		}
 
@@ -335,7 +305,7 @@ func (d *dashboard) connectionLogPage(ctx *ui.Context, p kit.Palette, msgs local
 					trigger.Height(28)
 				}
 			})
-			card := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(0).Padding(0, 16), p, kit.RadiusL, 0.25, p.Surface, p.LineSoft)
+			card := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(0).Padding(0, 16), p, kit.RadiusL, p.Surface, p.LineSoft)
 			if len(entries) > 0 {
 				card.Grow(1)
 			}
@@ -434,8 +404,7 @@ func (d *dashboard) connectionLogRow(ctx *ui.Context, p kit.Palette, msgs locale
 			ui.Text(ctx, text.timestamp).FontSize(11).FontFeatures("tnum").TextColor(p.Muted).SingleLine()
 			ui.Spacer(ctx)
 			copyBtn := kit.IconActionButton(ctx.Key("copy"), p, kit.IconCopy, msgs.LogCopyEntry(), copySize, false, func() {
-				ctx.Services().WriteClipboard(text.clipboardText())
-				d.notify(msgs.GuiCopied(), "success")
+				d.copyText(ctx, msgs, text.clipboardText())
 			})
 			if !touch && !copyBtn.Hovered() && !copyBtn.Pressed() && !copyBtn.FocusVisible() {
 				copyBtn.Opacity(0.58)
@@ -501,38 +470,34 @@ func hasTelemetry(s *device.Sample) bool {
 }
 
 func (d *dashboard) deviceTelemetry(ctx *ui.Context, p kit.Palette, msgs locales.Messages, sample *device.Sample) {
-	hasRow := false
-	nextRow := func(label, value string) {
-		if hasRow {
-			kit.Divider(ctx, p)
-		}
-		kit.KVRow(ctx, p, label, value, d.mobile, nil)
-		hasRow = true
+	var items [7]kit.KVItem
+	n := 0
+	add := func(label, value string) {
+		items[n] = kit.KVItem{Label: label, Value: value}
+		n++
 	}
 	if value, ok := optional(sample.WattHours); ok {
-		nextRow(msgs.GuiMeterEnergy(), fmt.Sprintf("%.4f Wh", value))
+		add(msgs.GuiMeterEnergy(), fmt.Sprintf("%.4f Wh", value))
 	}
 	if value, ok := optional(sample.AmpHours); ok {
-		nextRow(msgs.GuiMeterCharge(), fmt.Sprintf("%.4f Ah", value))
+		add(msgs.GuiMeterCharge(), fmt.Sprintf("%.4f Ah", value))
 	}
 	if value, ok := optional(sample.RecordMinCurrent); ok {
-		nextRow(msgs.GuiMinCurrent(), fmt.Sprintf("%.3f mA", value*1000))
+		add(msgs.GuiMinCurrent(), fmt.Sprintf("%.3f mA", value*1000))
 	}
 	if sample.Group != nil {
-		nextRow(msgs.GuiGroup(), strconv.FormatUint(uint64(*sample.Group), 10))
+		add(msgs.GuiGroup(), strconv.FormatUint(uint64(*sample.Group), 10))
 	}
 	if sample.Uptime != nil {
-		nextRow(msgs.GuiUptime(), formatDuration(float64(*sample.Uptime)))
+		add(msgs.GuiUptime(), formatDuration(float64(*sample.Uptime)))
 	}
 	if sample.RecordSeconds != nil {
-		nextRow(msgs.GuiTimer(), formatDuration(float64(*sample.RecordSeconds)))
+		add(msgs.GuiTimer(), formatDuration(float64(*sample.RecordSeconds)))
 	}
-	switch displayedCurrentDirection(sample) {
-	case device.CurrentPlugToReceptacle:
-		nextRow(msgs.GuiDirection(), msgs.GuiPlugToReceptacle())
-	case device.CurrentReceptacleToPlug:
-		nextRow(msgs.GuiDirection(), msgs.GuiReceptacleToPlug())
+	if dir := displayedCurrentDirectionLabel(msgs, sample); dir != "" {
+		add(msgs.GuiDirection(), dir)
 	}
+	kit.KVList(ctx, p, items[:n], d.mobile)
 }
 
 func (d *dashboard) scanMeters(msgs locales.Messages, silent bool) {

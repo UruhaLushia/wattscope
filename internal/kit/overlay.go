@@ -211,10 +211,7 @@ func IconMenuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *
 }
 
 func menuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.SVG, size float32, variant ButtonVariant, touch bool, items []MenuItem, iconOnly bool) ui.Element {
-	btnRadius := RadiusM
-	if p.LiquidGlass {
-		btnRadius = RadiusFull
-	}
+	btnRadius := PillRadius(p, RadiusM)
 	menu := ui.MenuBase(ctx, open)
 	trigger := menu.Trigger.Shrink(0).Radius(btnRadius).AlignItems(ui.Center).Justify(ui.Center).Label(label)
 	if iconOnly {
@@ -226,28 +223,10 @@ func menuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.S
 		}
 	}
 
-	bg, hover, press, ink, border, weight := buttonColors(p, variant)
-	glassTint, visibleAtRest := buttonGlassStyle(p, variant)
+	bg, ink, border, glassTint, borderW, weight, visibleAtRest := resolveButtonStyle(trigger, p, variant, menu.Open())
 	chevColor := p.Muted
 	if menu.Open() && variant != VariantPrimary {
-		bg = p.AccentSoft
-		ink = p.AccentText
 		chevColor = ink
-		glassTint, visibleAtRest = GlassAccentTint(p, 0.28, 0.32), true
-		if border.A > 0 {
-			border = p.AccentLine
-		}
-	} else if !trigger.IsDisabled() {
-		switch {
-		case trigger.Pressed():
-			bg = press
-		case trigger.Hovered() || trigger.FocusVisible():
-			bg = hover
-		}
-	}
-	borderW := float32(0)
-	if border.A > 0 {
-		borderW = 1
 	}
 	ControlMotion(trigger).Children(func() {
 		GlassPillControl(ctx.Key("bg"), trigger, p, btnRadius, glassTint, visibleAtRest, bg, borderW, border, 0.96)
@@ -297,10 +276,7 @@ func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, valu
 		chipWrap := ui.Box(ctx.Key("slot")).Shrink(0).Transition(LocaleSizeTransition)
 		chipOpacity := chipWrap.AnimateTo("koc-a", targetAlpha, chipAnim)
 		chipWrap.Opacity(min(chipOpacity, targetAlpha)).Children(func() {
-			chipRadius := RadiusM + 2
-			if p.LiquidGlass {
-				chipRadius = RadiusFull
-			}
+			chipRadius := PillRadius(p, RadiusM+2)
 			trigger = ui.ButtonBase(ctx.Key("chip")).Shrink(0).Padding(6, 10).Gap(5).Radius(chipRadius).
 				AlignItems(ui.Center).Label(label + " · " + value).Expanded(*open)
 
@@ -322,12 +298,7 @@ func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, valu
 				*open = !*open
 			})
 
-			chipBg := ui.Transparent
-			if trigger.Pressed() {
-				chipBg = p.Press
-			} else if trigger.Hovered() || trigger.FocusVisible() {
-				chipBg = p.Hover
-			}
+			chipBg := InteractiveBg(trigger, p)
 			ControlMotion(trigger).Children(func() {
 				GlassPillControl(ctx.Key("bg"), trigger, p, chipRadius, ui.Color{}, p.LiquidGlass, chipBg, 0, ui.Transparent, 0.96)
 				AnimatedLabel(ctx, value).FontSize(valueSize).FontWeight(550).TextColor(p.Muted).SingleLine()
@@ -338,7 +309,7 @@ func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, valu
 	optionMenuPopup(ctx, p, trigger, open, padY, items)
 }
 
-func Popover(ctx *ui.Context, p Palette, anchor ui.Element, open *bool, originX, originY float32, build func(panel ui.Element)) {
+func Popover(ctx *ui.Context, p Palette, anchor ui.Element, open *bool, build func(panel ui.Element)) {
 	ui.PopoverBase(ctx, anchor, open, func(panel ui.Element) {
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0)
 		PopupMotion(panel)
@@ -358,10 +329,7 @@ func Dialog(ctx *ui.Context, p Palette, open *bool, maxWidth, maxHeight float32,
 		if width < 480 {
 			pad = 16
 		}
-		dialogRadius := RadiusL
-		if p.LiquidGlass {
-			dialogRadius = RadiusXL
-		}
+		dialogRadius := GlassRadius(p, RadiusL, RadiusXL)
 		GlassFloating(ctx, ModalMotion(panel).Width(panelWidth).MaxHeight(panelHeight).Padding(pad).Gap(14),
 			p, dialogRadius, 0.15, ui.Color{}, false, p.Surface, p.Line).
 			Shadow(0, 14, 36, 0, p.Shadow).
@@ -381,7 +349,7 @@ func BottomSheet(ctx *ui.Context, p Palette, open *bool, maxHeightFrac float32, 
 			Radius(RadiusL+6, RadiusL+6, 0, 0).
 			Shadow(0, -8, 28, 0, p.Shadow)
 		if p.LiquidGlass {
-			GlassSurface(panel, p, 0.15, p.Surface, ui.Transparent)
+			GlassSurface(panel, p.Surface, ui.Transparent)
 		} else {
 			panel.Background(p.Surface).BorderWidth(1, 1, 0, 1).BorderColor(p.LineSoft)
 		}

@@ -105,7 +105,6 @@ type navLensConfig struct {
 	keyPrefix  string
 	style      navLensStyle
 	tabPressed bool
-	restHidden bool
 	forceJump  bool
 	expand     func(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32)
 }
@@ -122,6 +121,17 @@ type navGlassLens struct {
 func (l navGlassLens) box(ctx *ui.Context, radius float32, z int) ui.Element {
 	return ui.Box(ctx).Absolute().Left(l.bounds.X).Top(l.bounds.Y).
 		Width(l.bounds.W).Height(l.bounds.H).ZIndex(z).Radius(radius).PassThrough()
+}
+
+func (l navGlassLens) coverAt(axis navScrubAxis, center, falloff float32) (cover, dist float32) {
+	mid, ext := l.bounds.X+l.bounds.W*0.5, l.bounds.W
+	if axis == navAxisVertical {
+		mid, ext = l.bounds.Y+l.bounds.H*0.5, l.bounds.H
+	}
+	half := max(ext*0.5, 1)
+	dist = abs32(center - mid)
+	u := clamp32(1-dist/(half*falloff), 0, 1)
+	return u * u * (3 - 2*u), dist
 }
 
 func navMainCoord(axis navScrubAxis, x, y float32) float32 {
@@ -330,7 +340,7 @@ func (s *navScrubState) animateGlassLens(ctx *ui.Context, host ui.Element, cfg n
 		inFlight = abs32(curMain-targetMain) > 3 || abs32(curExt-targetExt) > 3
 		var liftTarget float32
 		switch {
-		case s.active || (!cfg.restHidden && cfg.tabPressed):
+		case s.active || cfg.tabPressed:
 			liftTarget = 1
 		case inFlight:
 			liftTarget = cfg.style.liftFlight
@@ -391,7 +401,7 @@ func navSolidScrubPose(axis navScrubAxis, active bool, lastMain, stripMain, maxN
 
 func navSolidPillFeedback(active, pressed bool, lastMain, stripMain float32, baseBg, textColor ui.Color, activeMix, pressMix float32) (bg ui.Color, pose ui.Pose, pillAnim, poseAnim ui.Animation) {
 	bg = baseBg
-	pillAnim = MotionCapsulePill
+	pillAnim = MotionNav
 	poseAnim = MotionNav
 	switch {
 	case active:
@@ -409,6 +419,18 @@ func navSolidPillFeedback(active, pressed bool, lastMain, stripMain float32, bas
 		poseAnim = MotionFast
 	}
 	return bg, pose, pillAnim, poseAnim
+}
+
+func renderNavSolidPill(ctx *ui.Context, host ui.Element, key any, rect ui.Rect, radius float32, colorKey string, bg ui.Color, pose ui.Pose, moveAnim, poseAnim ui.Animation, animateLayout, shadow bool, shadowBlur float32, shadowColor ui.Color) {
+	pill := ui.Box(ctx.Key(key)).Absolute().Left(rect.X).Top(rect.Y).Width(rect.W).Height(rect.H).
+		ZIndex(0).Radius(radius).TransformOrigin(0.5, 0.5).AnimatePose(pose, poseAnim).
+		Background(host.AnimateColor(colorKey, bg, MotionFast)).PassThrough()
+	if animateLayout {
+		pill.Transition(ui.ElementTransition{Position: true, Size: true, Animation: &moveAnim})
+	}
+	if shadow && shadowColor.A > 0 {
+		pill.Shadow(0, 1, shadowBlur, 0, shadowColor)
+	}
 }
 
 func navLensShadow(el ui.Element, dark bool, amount float32, standard bool) {

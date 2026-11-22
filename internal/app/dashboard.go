@@ -29,6 +29,16 @@ type chartWindow struct {
 	bufEnd    float64
 }
 
+func (cw chartWindow) contains(t float64) bool {
+	return t >= cw.winStart-1e-6 && t <= cw.winEnd+1e-6
+}
+
+func (d *dashboard) clampViewWindow(bufStart, bufEnd, window float64) chartWindow {
+	winEnd := clampOrder(d.viewEnd, min(bufEnd, bufStart+window), bufEnd)
+	d.viewEnd = winEnd
+	return chartWindowAt(bufStart, bufEnd, window, winEnd)
+}
+
 func chartWindowAt(bufStart, bufEnd, windowSec, end float64) chartWindow {
 	return chartWindow{
 		windowSec: windowSec,
@@ -70,10 +80,6 @@ func (d *dashboard) sampledChartHistory(live backend.Snapshot, query chartHistor
 	return live
 }
 
-func clampFloat(v, lo, hi float64) float64 {
-	return max(lo, min(hi, v))
-}
-
 func (d *dashboard) maxWindowFor(sessionSpan float64) float64 {
 	return max(defaultWindowSec, sessionSpan)
 }
@@ -90,7 +96,7 @@ func (d *dashboard) effectiveWindowFor(sessionSpan float64) float64 {
 		return max(minWindowSec, sessionSpan)
 	}
 	if d.windowSec > 0 {
-		return clampFloat(d.windowSec, minWindowSec, d.maxWindowFor(sessionSpan))
+		return clampOrder(d.windowSec, minWindowSec, d.maxWindowFor(sessionSpan))
 	}
 	return defaultWindowSec
 }
@@ -101,9 +107,7 @@ func (d *dashboard) resumeLive() {
 	d.hasViewEnd = false
 	d.hasCursor = false
 	d.hasHover = false
-	d.dragMode = chartDragNone
-	d.dragMoved = false
-	d.dragClicks = 0
+	d.resetChartDrag()
 	d.displayAt = time.Time{}
 }
 
@@ -113,7 +117,7 @@ func (d *dashboard) resetChartView() {
 	d.chartStats = chartStatsCache{}
 	d.chartGeometry = chartGeometry{}
 	d.chartCanvasKey = chartPlotCanvasKey{}
-	d.chartTickMetrics = chartTickMetricsCache{}
+	d.chartTickMetrics = [2]chartTickMetricsCache{}
 	d.fullSession = true
 	d.windowSec = defaultWindowSec
 }
@@ -279,30 +283,19 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 }
 
 func (d *dashboard) draw(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snapshot backend.Snapshot) {
-	width, height := ctx.Size()
-	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
-	landscape := d.isLandscape(ctx)
-	position := navigationPlacement(d.mobile, landscape, d.settings.Navigation)
-	if landscape {
-		width -= leftInset + rightInset
-		if position == navigationSide {
-			width -= d.sidebarWidthFor(ctx)
-		}
-		width -= 24
-		height -= topInset + bottomInset + mobileHeaderHeight + 16
-	} else {
-		if position == navigationSide {
-			width -= d.sidebarWidthFor(ctx)
-		}
-		width -= 4 * workspacePadding
-		if position == navigationBottom {
-			height -= topInset + kit.BottomNavReserveFor(bottomInset, true, d.bottomBarStyle()) + mobileHeaderHeight + 16
-		} else {
-			height -= headerHeight
-		}
+	layout := d.computeWorkspaceLayout(ctx, p)
+	if page := normalizeWorkspacePage(d.page, layout.portraitMobile); page != d.page {
+		d.page = page
+		d.activePage.Store(int32(page))
 	}
+	var sidebarW float32
+	if layout.position == navigationSide {
+		sidebarW = d.sidebarWidthFor(ctx)
+	}
+	width, height := layout.contentSize(sidebarW)
 
-	status, notice, tone := dashboardStatus(p, msgs, snapshot, d.err)
+	status, notice, toneKind := dashboardStatus(msgs, snapshot, d.err)
+	_, tone := kit.BadgeColors(p, toneKind)
 	name := snapshot.Device.Name
 	switch {
 	case snapshot.Device.Simulated:
@@ -311,64 +304,42 @@ func (d *dashboard) draw(ctx *ui.Context, p kit.Palette, msgs locales.Messages, 
 		name = msgs.GuiNoMeter()
 	}
 
-	overviewPage := workspacePage{
-		label: msgs.GuiOverview(),
-		icon:  kit.IconActivity,
+	pages := [7]workspacePage{
+		pageOverview:      {label: msgs.GuiOverview(), icon: kit.IconActivity},
+		pagePD:            {label: msgs.PagePd(), icon: kit.IconUSB},
+		pageRecords:       {label: msgs.GuiRecords(), icon: kit.IconFileText},
+		pageDevice:        {label: msgs.GuiDevice(), icon: kit.IconCpu},
+		pageSettings:      {label: msgs.GuiSettings(), icon: kit.IconSliders},
+		pageMore:          {label: msgs.GuiMore(), icon: kit.IconMore},
+		pageConnectionLog: {label: msgs.GuiConnectionLog(), icon: kit.IconFileText},
 	}
-	if landscape {
-		overviewPage.fixed = func() { d.overview(ctx, p, msgs, snapshot, width, height, notice) }
-	} else {
-		overviewPage.content = func() { d.overview(ctx, p, msgs, snapshot, width, height, notice) }
-	}
-
-	var pdHeaderExtra func()
-	if pdHeaderShowsSummary(landscape, position) {
-		winW, _ := ctx.Size()
-		pdHeaderExtra = func() {
-			data := d.packetSnapshot()
-			visible := d.packets.visiblePackets(msgs, data.Packets)
-			summary, capsText := d.packets.summaryState(data.Packets)
-			splitDetail := pdUsesSplitDetail(d.mobile, landscape, winW)
-			d.pdSummaryPill(ctx, p, msgs, data.Packets, visible, summary, capsText, splitDetail, 26)
+	switch d.page {
+	case pageOverview:
+		renderOverview := func() { d.overview(ctx, p, msgs, snapshot, width, height, notice) }
+		if layout.landscape {
+			pages[pageOverview].fixed = renderOverview
+		} else {
+			pages[pageOverview].content = renderOverview
 		}
+	case pagePD:
+		pdSnap := d.preparePDFrame(msgs, layout.landscape, layout.width)
+		pages[pagePD].list = func(bottomPadding float32) { d.pdPage(ctx, p, msgs, snapshot, pdSnap, layout.position, bottomPadding) }
+		pages[pagePD].overlay = func() { d.packetDialog(ctx, p, msgs) }
+		if pdHeaderShowsSummary(layout.landscape, layout.position) {
+			pages[pagePD].headerExtra = func() { d.pdSummaryPill(ctx, p, msgs, pdSnap, 26) }
+		}
+	case pageRecords:
+		pages[pageRecords].content = func() { d.recordsPage(ctx, p, msgs, snapshot) }
+	case pageDevice:
+		pages[pageDevice].content = func() { d.devicePage(ctx, p, msgs, snapshot) }
+	case pageSettings:
+		pages[pageSettings].content = func() { d.settingsPage(ctx, p, msgs) }
+	case pageMore:
+		pages[pageMore].content = func() { d.morePage(ctx, p, msgs) }
+	case pageConnectionLog:
+		pages[pageConnectionLog].list = func(bottomPadding float32) { d.connectionLogPage(ctx, p, msgs, bottomPadding) }
 	}
-
-	pages := [...]workspacePage{
-		pageOverview: overviewPage,
-		pagePD: {
-			label:       msgs.PagePd(),
-			icon:        kit.IconUSB,
-			list:        func(bottomPadding float32) { d.pdPage(ctx, p, msgs, snapshot, position, bottomPadding) },
-			overlay:     func() { d.packetDialog(ctx, p, msgs) },
-			headerExtra: pdHeaderExtra,
-		},
-		pageRecords: {
-			label:   msgs.GuiRecords(),
-			icon:    kit.IconFileText,
-			content: func() { d.recordsPage(ctx, p, msgs, snapshot) },
-		},
-		pageDevice: {
-			label:   msgs.GuiDevice(),
-			icon:    kit.IconCpu,
-			content: func() { d.devicePage(ctx, p, msgs, snapshot) },
-		},
-		pageSettings: {
-			label:   msgs.GuiSettings(),
-			icon:    kit.IconSliders,
-			content: func() { d.settingsPage(ctx, p, msgs) },
-		},
-		pageMore: {
-			label:   msgs.GuiMore(),
-			icon:    kit.IconMore,
-			content: func() { d.morePage(ctx, p, msgs) },
-		},
-		pageConnectionLog: {
-			label: msgs.GuiConnectionLog(),
-			icon:  kit.IconFileText,
-			list:  func(bottomPadding float32) { d.connectionLogPage(ctx, p, msgs, bottomPadding) },
-		},
-	}
-	d.workspace(ctx, p, msgs, pages[:], position, name, status, tone)
+	d.workspace(ctx, p, msgs, layout, pages[:], name, status, tone)
 }
 
 type channelStat struct {
@@ -417,13 +388,11 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 			}
 			sessionSpan := max(0, bufEnd-bufStart)
 			window := d.effectiveWindowFor(sessionSpan)
-			winEnd := bufEnd
 			if d.hasViewEnd {
-				minEnd := min(bufEnd, bufStart+window)
-				winEnd = clampFloat(d.viewEnd, minEnd, bufEnd)
-				d.viewEnd = winEnd
+				cw = d.clampViewWindow(bufStart, bufEnd, window)
+			} else {
+				cw = chartWindowAt(bufStart, bufEnd, window, bufEnd)
 			}
-			cw = chartWindowAt(bufStart, bufEnd, window, winEnd)
 			startIdx := sort.Search(len(full), func(i int) bool { return full[i].Elapsed >= cw.winStart })
 			endIdx := sort.Search(len(full), func(i int) bool { return full[i].Elapsed > cw.winEnd })
 			if startIdx <= endIdx {
@@ -442,7 +411,7 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 			}
 		}
 		if len(snapshot.History) > 0 {
-			if d.hasCursor && d.cursorAt >= cw.winStart-1e-6 && d.cursorAt <= cw.winEnd+1e-6 {
+			if d.hasCursor && cw.contains(d.cursorAt) {
 				chartSample = closestSample(snapshot.History, d.cursorAt)
 			} else {
 				chartSample = &snapshot.History[len(snapshot.History)-1]
@@ -464,12 +433,8 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 		}
 		window := d.effectiveWindowFor(sessionSpan)
 		if d.hasViewEnd && d.service != nil && live.HistoryCount > 0 {
-			bufStart, bufEnd := live.HistoryStart, live.HistoryEnd
-			minEnd := min(bufEnd, bufStart+window)
-			winEnd := clampFloat(d.viewEnd, minEnd, bufEnd)
-			d.viewEnd = winEnd
-			cw = chartWindowAt(bufStart, bufEnd, window, winEnd)
-			snapshot = d.sampledChartHistory(live, chartHistoryQuery{start: cw.winStart, end: winEnd, ranged: true})
+			cw = d.clampViewWindow(live.HistoryStart, live.HistoryEnd, window)
+			snapshot = d.sampledChartHistory(live, chartHistoryQuery{start: cw.winStart, end: cw.winEnd, ranged: true})
 			if snapshot.HistoryCount > 0 {
 				cw.bufStart = snapshot.HistoryStart
 				cw.bufEnd = snapshot.HistoryEnd
@@ -478,7 +443,7 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 			if d.hasCursor {
 				if t1 := d.service.ClosestSample(d.cursorAt); t1 != nil {
 					readoutSample = t1
-					if t1.Elapsed >= cw.winStart-1e-6 && t1.Elapsed <= cw.winEnd+1e-6 {
+					if cw.contains(t1.Elapsed) {
 						chartSample = t1
 					}
 				}
@@ -533,28 +498,28 @@ func (d *dashboard) overview(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 	})
 }
 
-func dashboardStatus(p kit.Palette, msgs locales.Messages, snap backend.Snapshot, err error) (string, string, ui.Color) {
+func dashboardStatus(msgs locales.Messages, snap backend.Snapshot, err error) (string, string, kit.BadgeTone) {
 	switch {
 	case err != nil:
-		return msgs.GuiOffline(), err.Error(), p.Red
+		return msgs.GuiOffline(), err.Error(), kit.ToneDanger
 	case snap.ErrorKind == "permission":
-		return msgs.AccessRequired(), "", p.Warning
+		return msgs.AccessRequired(), "", kit.ToneWarning
 	case snap.ErrorKind == "missing":
-		return msgs.GuiOffline(), "", p.Muted
+		return msgs.GuiOffline(), "", kit.TonePlain
 	case snap.ErrorKind == "selection":
-		return msgs.GuiOffline(), "", p.Warning
+		return msgs.GuiOffline(), "", kit.ToneWarning
 	case snap.ErrorKind == "timeout":
-		return msgs.GuiOffline(), msgs.LogErrorTimeout(), p.Warning
+		return msgs.GuiOffline(), msgs.LogErrorTimeout(), kit.ToneWarning
 	case snap.ErrorKind != "" && snap.ErrorKind != "report":
-		return msgs.GuiOffline(), snap.Error, p.Warning
+		return msgs.GuiOffline(), snap.Error, kit.ToneWarning
 	case snap.State == backend.Streaming:
-		return "", "", p.Green
+		return "", "", kit.ToneSuccess
 	case snap.State == backend.Connecting:
-		return msgs.Connecting(), "", p.Warning
+		return msgs.Connecting(), "", kit.ToneWarning
 	case snap.State == backend.Waiting:
-		return msgs.Waiting(), "", p.Warning
+		return msgs.Waiting(), "", kit.ToneWarning
 	default:
-		return msgs.GuiOffline(), "", p.Muted
+		return msgs.GuiOffline(), "", kit.TonePlain
 	}
 }
 
@@ -572,7 +537,7 @@ func metricSummaryText(msgs locales.Messages, channel measurement, stat channelS
 		msgs.GuiMax(), channel.decimals, stat.high)
 }
 
-func metricCellColors(p kit.Palette, tone ui.Color, active, pressed, hovered, focused bool) (bg, border, labelColor, tint ui.Color, borderW float32) {
+func metricCellColors(p kit.Palette, tone ui.Color, active, pressed, hovered, focused bool) (bg, border, labelColor ui.Color, borderW float32) {
 	activeMix, pressMix, activeBorderAlpha := float32(.09), float32(.13), float32(.50)
 	if p.Dark {
 		activeMix, pressMix, activeBorderAlpha = .15, .20, .46
@@ -587,7 +552,6 @@ func metricCellColors(p kit.Palette, tone ui.Color, active, pressed, hovered, fo
 		border = tone.Alpha(activeBorderAlpha)
 		borderW = 1.25
 		labelColor = tone
-		tint = tone.Alpha(0.14)
 	case pressed:
 		bg = p.SurfaceHi.Mix(tone, .09)
 		border = tone.Alpha(.38)
@@ -597,13 +561,12 @@ func metricCellColors(p kit.Palette, tone ui.Color, active, pressed, hovered, fo
 		border = p.Line
 		labelColor = p.Text
 	}
-	return bg, border, labelColor, tint, borderW
+	return bg, border, labelColor, borderW
 }
 
 type metricCellStyle struct {
 	wide          bool
 	inlineSummary bool
-	scrollSafe    bool
 	padY, padX    float32
 	gap           float32
 	dotSize       float32
@@ -622,6 +585,29 @@ func metricLabelRow(ctx *ui.Context, dotColor, labelColor ui.Color, dotSize, gap
 	})
 }
 
+func (d *dashboard) metricButtonBase(ctx *ui.Context, label, value, unit string, index int, active bool, radius float32) ui.Element {
+	return ui.ButtonBase(ctx.Key(index)).Label(label + " " + value + " " + unit).
+		Role(ui.RoleTab).AccessSelected(active).Background(ui.Transparent).Radius(radius).MinWidth(0).
+		OnClick(func() { d.selectChartChannel(index) })
+}
+
+func metricReadingContent(ctx *ui.Context, p kit.Palette, dotColor, labelColor ui.Color, dotSize, dotGap, labelSize float32, label, value, unit string, valueSize, unitSize, readingGap float32, tone ui.Color, summary string, summarySize float32, inlineSummary bool) {
+	if inlineSummary {
+		ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(dotGap).Justify(ui.SpaceBetween).Children(func() {
+			metricLabelRow(ctx, dotColor, labelColor, dotSize, dotGap, labelSize, label).Shrink(0)
+			if summary != "" {
+				ui.Text(ctx, summary).FontFeatures("tnum").FontSize(summarySize).TextColor(p.Muted).MinWidth(0).SingleLine()
+			}
+		})
+	} else {
+		metricLabelRow(ctx, dotColor, labelColor, dotSize, dotGap, labelSize, label)
+	}
+	readingWithUnit(ctx, p, value, unit, valueSize, unitSize, readingGap, tone)
+	if !inlineSummary && summary != "" {
+		ui.Text(ctx, summary).FontFeatures("tnum").FontSize(summarySize).TextColor(p.Muted).SingleLine()
+	}
+}
+
 func (d *dashboard) metricCell(ctx *ui.Context, p kit.Palette, msgs locales.Messages, sample *device.Sample, metricStats [3]channelStat, index int, style metricCellStyle) {
 	channel := channels[index]
 	label := channel.name(msgs)
@@ -630,57 +616,39 @@ func (d *dashboard) metricCell(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 	active := d.channel == index
 	summary := metricSummaryText(msgs, channel, metricStats[index], true)
 
-	btn := ui.ButtonBase(ctx.Key(index)).Label(label+" "+value+" "+channel.unit).
-		Role(ui.RoleTab).AccessSelected(active).Background(ui.Transparent).Radius(kit.RadiusM).MinWidth(0).
-		Column().AlignItems(ui.Start).Padding(style.padY, style.padX).Gap(style.gap).
-		OnClick(func() { d.selectChartChannel(index) })
+	btn := d.metricButtonBase(ctx, label, value, channel.unit, index, active, kit.RadiusM).
+		Column().AlignItems(ui.Start).Padding(style.padY, style.padX).Gap(style.gap)
 	if style.wide {
 		btn.FillWidth()
 	} else {
 		btn.Grow(1).Basis(0)
 	}
 
-	bg, border, labelColor, cellTint, borderW := metricCellColors(p, tone, active, btn.Pressed(), btn.Hovered(), btn.FocusVisible())
+	bg, border, labelColor, borderW := metricCellColors(p, tone, active, btn.Pressed(), btn.Hovered(), btn.FocusVisible())
 	dotColor := tone.Alpha(.60)
 	if active {
 		dotColor = tone
 	}
 
 	btn.Children(func() {
-		if style.scrollSafe {
-			bgBox := ui.Box(ctx.Key("bg")).Absolute().Fill().ZIndex(-1).Radius(kit.RadiusM).PassThrough()
-			bgBox.Background(bgBox.AnimateColor("mc-bg", bg, kit.MotionFast))
-			if borderW > 0 {
-				bgBox.Border(borderW, bgBox.AnimateColor("mc-bd", border, kit.MotionFast))
-			}
-		} else {
-			kit.GlassPillControl(ctx.Key("bg"), btn, p, kit.RadiusM, cellTint, true, bg, borderW, border, 0.985)
+		bgBox := ui.Box(ctx.Key("bg")).Absolute().Fill().ZIndex(-1).Radius(kit.RadiusM).PassThrough()
+		bgBox.Background(bgBox.AnimateColor("mc-bg", bg, kit.MotionFast))
+		if borderW > 0 {
+			bgBox.Border(borderW, bgBox.AnimateColor("mc-bd", border, kit.MotionFast))
 		}
-		if style.inlineSummary {
-			ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(style.dotGap).Justify(ui.SpaceBetween).Children(func() {
-				metricLabelRow(ctx, dotColor, labelColor, style.dotSize, style.dotGap, style.labelSize, label).Shrink(0)
-				if summary != "" {
-					ui.Text(ctx, summary).FontFeatures("tnum").FontSize(style.summarySize).TextColor(p.Muted).MinWidth(0).SingleLine()
-				}
-			})
-		} else {
-			metricLabelRow(ctx, dotColor, labelColor, style.dotSize, style.dotGap, style.labelSize, label)
-		}
-		readingWithUnit(ctx, p, value, channel.unit, style.valueSize, style.unitSize, style.readingGap, tone)
-		if !style.inlineSummary && summary != "" {
-			ui.Text(ctx, summary).FontFeatures("tnum").FontSize(style.summarySize).TextColor(p.Muted).SingleLine()
-		}
+		metricReadingContent(ctx, p, dotColor, labelColor, style.dotSize, style.dotGap, style.labelSize,
+			label, value, channel.unit, style.valueSize, style.unitSize, style.readingGap, tone, summary, style.summarySize, style.inlineSummary)
 	})
 }
 
 func (d *dashboard) mobileMetricsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, sample *device.Sample, metricStats [3]channelStat, fontSize float32) {
 	wideStyle := metricCellStyle{
-		wide: true, inlineSummary: true, scrollSafe: true,
+		wide: true, inlineSummary: true,
 		padY: 13, padX: 14, gap: 6, dotSize: 6.5, dotGap: 6,
 		labelSize: 12, summarySize: 11, valueSize: min(27, max(24, fontSize+4)), unitSize: 12, readingGap: 5,
 	}
 	narrowStyle := metricCellStyle{
-		wide: false, inlineSummary: false, scrollSafe: true,
+		wide: false, inlineSummary: false,
 		padY: 11, padX: 13, gap: 3, dotSize: 6.5, dotGap: 6,
 		labelSize: 12, summarySize: 11, valueSize: max(19, fontSize-4), unitSize: 12, readingGap: 5,
 	}
@@ -695,15 +663,11 @@ func (d *dashboard) mobileMetricsCard(ctx *ui.Context, p kit.Palette, msgs local
 
 func (d *dashboard) landscapeMetricsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, sample *device.Sample, metricStats [3]channelStat) {
 	style := metricCellStyle{
-		wide: true, inlineSummary: true, scrollSafe: true,
+		wide: true, inlineSummary: true,
 		padY: 6, padX: 10, gap: 1, dotSize: 6, dotGap: 5,
 		labelSize: 11.5, summarySize: 10, valueSize: 18.5, unitSize: 11, readingGap: 4,
 	}
-	card := kit.StaticCard(ctx, p).Radius(kit.RadiusL).Padding(5).Gap(3)
-	if !d.snapshotOnly {
-		card.Cache()
-	}
-	card.Children(func() {
+	d.cachedStaticCard(ctx, p).Radius(kit.RadiusL).Padding(5).Gap(3).Children(func() {
 		for index := range 3 {
 			d.metricCell(ctx, p, msgs, sample, metricStats, index, style)
 		}
@@ -715,10 +679,7 @@ func (d *dashboard) metricTab(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 	value := channel.format(sample)
 	active := d.channel == index
 
-	tab := ui.ButtonBase(ctx.Key(index)).Label(label + " " + value + " " + channel.unit).
-		Role(ui.RoleTab).AccessSelected(active).Background(ui.Transparent).Radius(kit.RadiusL).MinWidth(0).
-		OnClick(func() { d.selectChartChannel(index) })
-
+	tab := d.metricButtonBase(ctx, label, value, channel.unit, index, active, kit.RadiusL)
 	if stacked {
 		tab.FillWidth().MinHeight(56).Padding(12, 16).Gap(10).AlignItems(ui.Center).Justify(ui.SpaceBetween)
 	} else {
@@ -738,7 +699,7 @@ func (d *dashboard) metricTab(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		labelColor = p.Text
 	}
 	if p.LiquidGlass && !active {
-		kit.ApplyCardShadow(kit.GlassSurface(kit.CardMotion(tab).Radius(kit.RadiusL), p, 0.25, bg, border), p)
+		kit.ApplyCardShadow(kit.GlassSurface(kit.CardMotion(tab).Radius(kit.RadiusL), bg, border), p)
 	} else {
 		cardBg := bg
 		if p.LiquidGlass && active {
@@ -765,19 +726,11 @@ func (d *dashboard) metricTab(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 					ui.Text(ctx, summary).FontFeatures("tnum").FontSize(11).TextColor(p.Muted).SingleLine()
 				}
 			})
-			reading(ctx, p, value, channel.unit, fontSize, tone).Shrink(0)
+			readingWithUnit(ctx, p, value, channel.unit, fontSize, 12, 5, tone).Shrink(0)
 			return
 		}
-		metricLabelRow(ctx, dotColor, labelColor, 6, 6, 12, label)
-		reading(ctx, p, value, channel.unit, fontSize, tone)
-		if summary != "" {
-			ui.Text(ctx, summary).FontFeatures("tnum").FontSize(11).TextColor(p.Muted).SingleLine()
-		}
+		metricReadingContent(ctx, p, dotColor, labelColor, 6, 6, 12, label, value, channel.unit, fontSize, 12, 5, tone, summary, 11, false)
 	})
-}
-
-func reading(ctx *ui.Context, p kit.Palette, value, unit string, fontSize float32, tone ui.Color) ui.Element {
-	return readingWithUnit(ctx, p, value, unit, fontSize, 12, 5, tone)
 }
 
 func readingWithUnit(ctx *ui.Context, p kit.Palette, value, unit string, fontSize, unitSize, gap float32, tone ui.Color) ui.Element {

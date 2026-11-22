@@ -60,7 +60,7 @@ type dashboard struct {
 	chartCanvas      *ui.Canvas
 	chartCanvasKey   chartPlotCanvasKey
 	chartPixelPts    [][2]float32
-	chartTickMetrics chartTickMetricsCache
+	chartTickMetrics [2]chartTickMetricsCache
 	headerPlanCache  desktopHeaderPlanCache
 	windowSec        float64
 	fullSession      bool
@@ -239,42 +239,19 @@ func (d *dashboard) closeAllMenus() {
 	}
 }
 
+var (
+	mobilePageOrder  = [7]int{pageOverview: 0, pagePD: 1, pageRecords: 2, pageMore: 3, pageDevice: 4, pageConnectionLog: 5, pageSettings: 6}
+	desktopPageOrder = [7]int{pageOverview: 0, pagePD: 1, pageRecords: 2, pageDevice: 3, pageConnectionLog: 4, pageSettings: 5, pageMore: 6}
+)
+
 func (d *dashboard) pageOrder(page int) int {
-	if d.mobile {
-		switch page {
-		case pageOverview:
-			return 0
-		case pagePD:
-			return 1
-		case pageRecords:
-			return 2
-		case pageMore:
-			return 3
-		case pageDevice:
-			return 4
-		case pageConnectionLog:
-			return 5
-		case pageSettings:
-			return 6
-		}
-	}
-	switch page {
-	case pageOverview:
+	if page < 0 || page >= len(desktopPageOrder) {
 		return 0
-	case pagePD:
-		return 1
-	case pageRecords:
-		return 2
-	case pageDevice:
-		return 3
-	case pageConnectionLog:
-		return 4
-	case pageSettings:
-		return 5
-	case pageMore:
-		return 6
 	}
-	return page
+	if d.mobile {
+		return mobilePageOrder[page]
+	}
+	return desktopPageOrder[page]
 }
 
 func (d *dashboard) goPage(page int) {

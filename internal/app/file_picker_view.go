@@ -188,14 +188,9 @@ func (v *filePickerViewState) browser(ctx *ui.Context, p kit.Palette, msgs local
 					row := ui.ButtonBase(ctx.Key(location.Path)).FillWidth().Height(32).Padding(0, 10).Gap(8).
 						Radius(kit.RadiusS).AlignItems(ui.Center).Justify(ui.Start).Label(location.Name).
 						Disabled(data.Saving).OnClick(func() { actions.Navigate(location.Path) })
-					bg := ui.Transparent
-					switch {
-					case active:
+					bg := kit.InteractiveBg(row, p)
+					if active {
 						bg = p.AccentSoft
-					case row.Pressed():
-						bg = p.Press
-					case row.Hovered() || row.FocusVisible():
-						bg = p.Hover
 					}
 					kit.ControlMotion(row).Background(row.AnimateColor("loc-bg", bg, kit.MotionFast)).Children(func() {
 						icon := kit.IconFolder

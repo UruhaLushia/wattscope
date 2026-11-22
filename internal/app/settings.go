@@ -231,6 +231,12 @@ func optionMenuItems(options []settingOption, current string, apply func(string)
 	return items
 }
 
+func switchSettingRow(ctx *ui.Context, p kit.Palette, key string, icon *ui.SVG, label string, value *bool, onChange func()) {
+	kit.IconSettingRow(ctx, p, icon, label, "", func() {
+		ui.Switch(ctx.Key(key), value).Label(label).OnChange(onChange)
+	})
+}
+
 func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages) {
 	touch := d.touchUI()
 	themes := themeOptions(msgs)
@@ -275,12 +281,8 @@ func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Me
 				})
 			} else {
 				kit.Divider(ctx, p)
-				curStyle := bottomBarCapsule
-				if d.settings.BottomBarStyle == bottomBarStandard {
-					curStyle = bottomBarStandard
-				}
 				kit.IconSettingRow(ctx, p, kit.IconBottomBar, msgs.GuiBottomBarStyle(), "", func() {
-					segmentedChoice(ctx.Key("bottom-bar-style"), p, curStyle, []settingOption{
+					segmentedChoice(ctx.Key("bottom-bar-style"), p, d.settings.BottomBarStyle, []settingOption{
 						{value: bottomBarCapsule, label: msgs.GuiBottomBarCapsule()},
 						{value: bottomBarStandard, label: msgs.GuiBottomBarStandard()},
 					}, touch, func(value string) {
@@ -290,10 +292,7 @@ func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Me
 				})
 			}
 			kit.Divider(ctx, p)
-			kit.IconSettingRow(ctx, p, kit.IconLayers, msgs.GuiLiquidGlass(), "", func() {
-				ui.Switch(ctx.Key("liquid-glass"), &d.settings.LiquidGlass).
-					Label(msgs.GuiLiquidGlass()).OnChange(d.saveSettings)
-			})
+			switchSettingRow(ctx, p, "liquid-glass", kit.IconLayers, msgs.GuiLiquidGlass(), &d.settings.LiquidGlass, d.saveSettings)
 		})
 
 		kit.FormGroup(ctx, p, msgs.GuiGeneral(), nil, func() {
@@ -305,10 +304,7 @@ func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Me
 				}))
 
 			kit.Divider(ctx, p)
-			kit.IconSettingRow(ctx, p, kit.IconActivity, msgs.GuiSmoothChart(), "", func() {
-				ui.Switch(ctx.Key("smooth-chart"), &d.settings.SmoothChart).
-					Label(msgs.GuiSmoothChart()).OnChange(d.saveSettings)
-			})
+			switchSettingRow(ctx, p, "smooth-chart", kit.IconActivity, msgs.GuiSmoothChart(), &d.settings.SmoothChart, d.saveSettings)
 		})
 		d.islandSettings(ctx, p, msgs, touch)
 		d.meterAccessSettings(ctx, p, msgs, touch)

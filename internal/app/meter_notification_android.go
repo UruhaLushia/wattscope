@@ -36,13 +36,10 @@ func (d *dashboard) islandSettings(ctx *ui.Context, p kit.Palette, msgs locales.
 		{value: islandLeftOff, label: msgs.GuiOff()},
 	}
 	kit.FormGroup(ctx, p, "", nil, func() {
-		kit.IconSettingRow(ctx, p, kit.IconLayers, msgs.GuiSuperIsland(), "", func() {
-			ui.Switch(ctx.Key("island-enabled"), &d.settings.IslandEnabled).
-				Label(msgs.GuiSuperIsland()).OnChange(func() {
-				*d.menuOpen("island-left") = false
-				d.syncIslandDisplay()
-				d.saveSettings()
-			})
+		switchSettingRow(ctx, p, "island-enabled", kit.IconLayers, msgs.GuiSuperIsland(), &d.settings.IslandEnabled, func() {
+			*d.menuOpen("island-left") = false
+			d.syncIslandDisplay()
+			d.saveSettings()
 		})
 		if !d.settings.IslandEnabled {
 			return

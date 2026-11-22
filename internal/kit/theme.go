@@ -29,40 +29,38 @@ var AccentPresets = []string{
 }
 
 type Palette struct {
-	Dark           bool
-	LiquidGlass    bool
-	Window         ui.Color // top bar, sidebar and bottom bar
-	Canvas         ui.Color // page background
-	Track          ui.Color // segmented and navigation track
-	TrackOn        ui.Color // selected segment/tab accent pill on a track
-	TrackOnInk     ui.Color // foreground ink over TrackOn
-	CardShadow     ui.Color
-	Inset          ui.Color
-	Surface        ui.Color
-	SurfaceHi      ui.Color
-	Line           ui.Color
-	LineSoft       ui.Color
-	Text           ui.Color
-	Muted          ui.Color
-	Faint          ui.Color
-	Hover          ui.Color
-	Press          ui.Color
-	Accent         ui.Color
-	AccentHi       ui.Color
-	AccentSoft     ui.Color
-	AccentLine     ui.Color
-	AccentInk      ui.Color
-	AccentText     ui.Color
-	Green          ui.Color
-	GreenSoft      ui.Color
-	Red            ui.Color
-	RedSoft        ui.Color
-	Warning        ui.Color
-	WarningSoft    ui.Color
-	Shadow         ui.Color
-	Backdrop       ui.Color
-	BackdropStrong ui.Color
-	Scrollbar      ui.Color
+	Dark        bool
+	LiquidGlass bool
+	Canvas      ui.Color // page background
+	Track       ui.Color // segmented and navigation track
+	TrackOn     ui.Color // selected segment/tab accent pill on a track
+	TrackOnInk  ui.Color // foreground ink over TrackOn
+	CardShadow  ui.Color
+	Inset       ui.Color
+	Surface     ui.Color
+	SurfaceHi   ui.Color
+	Line        ui.Color
+	LineSoft    ui.Color
+	Text        ui.Color
+	Muted       ui.Color
+	Faint       ui.Color
+	Hover       ui.Color
+	Press       ui.Color
+	Accent      ui.Color
+	AccentHi    ui.Color
+	AccentSoft  ui.Color
+	AccentLine  ui.Color
+	AccentInk   ui.Color
+	AccentText  ui.Color
+	Green       ui.Color
+	GreenSoft   ui.Color
+	Red         ui.Color
+	RedSoft     ui.Color
+	Warning     ui.Color
+	WarningSoft ui.Color
+	Shadow      ui.Color
+	Backdrop    ui.Color
+	Scrollbar   ui.Color
 }
 
 type themeCacheKey struct {
@@ -138,16 +136,14 @@ func ResolveTheme(dark bool, accentHex string) (*ui.Theme, Palette) {
 
 func buildPalette(dark bool, accent ui.Color) Palette {
 	p := Palette{
-		Dark:           dark,
-		Accent:         accent,
-		AccentHi:       accent.Mix(ui.Hex("#ffffff"), .14),
-		AccentLine:     accent.Alpha(.38),
-		Backdrop:       ui.RGBA(8, 10, 14, .38),
-		BackdropStrong: ui.RGBA(8, 10, 14, .58),
+		Dark:       dark,
+		Accent:     accent,
+		AccentHi:   accent.Mix(ui.Hex("#ffffff"), .14),
+		AccentLine: accent.Alpha(.38),
+		Backdrop:   ui.RGBA(8, 10, 14, .38),
 	}
 	p.AccentHi.A = accent.A
 	if dark {
-		p.Window = ui.Hex("#111319").Mix(accent, .02)
 		p.Canvas = ui.Hex("#0b0c10").Mix(accent, .015)
 		p.Inset = ui.Hex("#11141b").Mix(accent, .045)
 		p.Surface = ui.Hex("#151820").Mix(accent, .025)
@@ -169,7 +165,6 @@ func buildPalette(dark bool, accent ui.Color) Palette {
 		p.Scrollbar = ui.RGBA(255, 255, 255, .14)
 		p.AccentSoft = accent.Alpha(.20)
 	} else {
-		p.Window = ui.Hex("#ffffff")
 		p.Canvas = ui.Hex("#f6f8fb").Mix(accent, .02)
 		p.Inset = ui.Hex("#f4f7fb").Mix(accent, .06)
 		p.Surface = ui.Hex("#ffffff")
@@ -251,11 +246,6 @@ func accentText(accent, surface, text ui.Color) ui.Color {
 	return text
 }
 
-func CompactWidth(ctx *ui.Context) bool {
-	w, _ := ctx.Size()
-	return w < 760
-}
-
 func NarrowWidth(ctx *ui.Context) bool {
 	w, _ := ctx.Size()
 	return w < 520
@@ -266,11 +256,4 @@ func ControlHeight(touch bool) float32 {
 		return 38
 	}
 	return 32
-}
-
-func TabHeight(touch bool) float32 {
-	if touch {
-		return 34
-	}
-	return 28
 }

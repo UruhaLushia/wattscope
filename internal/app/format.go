@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/UruhaLushia/wattscope/internal/device"
+	"github.com/UruhaLushia/wattscope/locales"
+	"github.com/egoist/mygo/ui"
 )
 
 func displayedCurrentDirection(sample *device.Sample) device.CurrentDirection {
@@ -13,6 +15,26 @@ func displayedCurrentDirection(sample *device.Sample) device.CurrentDirection {
 		return sample.CurrentDirection
 	}
 	return ""
+}
+
+func displayedCurrentDirectionLabel(msgs locales.Messages, sample *device.Sample) string {
+	switch displayedCurrentDirection(sample) {
+	case device.CurrentPlugToReceptacle:
+		return msgs.GuiPlugToReceptacle()
+	case device.CurrentReceptacleToPlug:
+		return msgs.GuiReceptacleToPlug()
+	default:
+		return ""
+	}
+}
+
+func (d *dashboard) copyText(ctx *ui.Context, msgs locales.Messages, text string) {
+	ctx.Services().WriteClipboard(text)
+	d.notify(msgs.GuiCopied(), "success")
+}
+
+func clampOrder[T ~int | ~float32 | ~float64](v, lo, hi T) T {
+	return max(lo, min(hi, v))
 }
 
 func (d *dashboard) touchUI() bool {
