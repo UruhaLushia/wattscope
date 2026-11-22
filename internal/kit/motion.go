@@ -19,6 +19,7 @@ const (
 	motionPageDur        = 235 * time.Millisecond
 	motionUnfoldDur      = 280 * time.Millisecond
 	rotateWindowDur      = 380 * time.Millisecond
+	navLayoutSwitchDur   = 360 * time.Millisecond
 )
 
 var (
@@ -116,11 +117,24 @@ var (
 	}
 )
 
+type frameLayoutState struct {
+	initialized              bool
+	w, h                     float32
+	top, right, bottom, left float32
+	until                    time.Time
+	rotateUntil              time.Time
+	rotateGen                uint64
+	navSidebarInit           bool
+	navSidebar               bool
+	navSwitchUntil           time.Time
+}
+
 type frameMotionState struct {
 	scaleReflow          bool
 	staticSnapshot       bool
 	orientationRotating  bool
 	orientationRotateGen uint64
+	layout               *frameLayoutState
 }
 
 var (
@@ -154,6 +168,40 @@ func isStaticSnapshot(ctx *ui.Context) bool {
 
 func isScaleReflow(ctx *ui.Context) bool {
 	return readFrameMotionState(ctx).scaleReflow
+}
+
+func trackDesktopNavLayoutSwitch(ctx *ui.Context, sidebar bool) bool {
+	if ctx == nil || isStaticSnapshot(ctx) {
+		return false
+	}
+	frameStatesMu.Lock()
+	st := frameStates[ctx.Services()]
+	if st == nil || st.layout == nil {
+		frameStatesMu.Unlock()
+		return false
+	}
+	ls := st.layout
+	if !ls.navSidebarInit {
+		ls.navSidebarInit, ls.navSidebar = true, sidebar
+		frameStatesMu.Unlock()
+		return false
+	}
+	now := ctx.Now()
+	if ls.navSidebar != sidebar {
+		ls.navSidebar = sidebar
+		ls.navSwitchUntil = now.Add(navLayoutSwitchDur)
+		frameStatesMu.Unlock()
+		ctx.After(navLayoutSwitchDur)
+		return true
+	}
+	if now.Before(ls.navSwitchUntil) {
+		rem := ls.navSwitchUntil.Sub(now)
+		frameStatesMu.Unlock()
+		ctx.After(rem)
+		return true
+	}
+	frameStatesMu.Unlock()
+	return false
 }
 
 // BeginStaticSnapshot suppresses shared Match keys and entry/layout transitions
@@ -262,18 +310,10 @@ func ApplyRotateEnterPose(ctx *ui.Context, el ui.Element, key any, start ui.Pose
 // desktop window resizes or same-orientation safe-area inset updates.
 func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	ui.Overlay(ctx, func() {})
-	type frameState struct {
-		initialized              bool
-		w, h                     float32
-		top, right, bottom, left float32
-		until                    time.Time
-		rotateUntil              time.Time
-		rotateGen                uint64
-	}
 	w, h := ctx.Size()
 	top, right, bottom, left := ctx.SafeArea()
-	state := ui.Local(ui.Box(ctx).Absolute().Size(0, 0).PassThrough(), "frame-layout", func() frameState {
-		return frameState{}
+	state := ui.Local(ui.Box(ctx).Absolute().Size(0, 0).PassThrough(), "frame-layout", func() frameLayoutState {
+		return frameLayoutState{}
 	})
 	now := ctx.Now()
 	insetSnap := false
@@ -315,6 +355,7 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 		scaleReflow:          scaleReflow,
 		orientationRotating:  orientationRotating,
 		orientationRotateGen: state.rotateGen,
+		layout:               state,
 	}
 	frameStatesMu.Unlock()
 	if scaleReflow {

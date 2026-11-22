@@ -87,6 +87,7 @@ func bottomNavDockGap(bottomInset float32) float32 {
 
 type navPanelMatchKey struct{}
 type navToggleMatchKey struct{}
+type navSelectionMatchKey struct{}
 type navTabMatchKey struct {
 	index int
 }
@@ -184,6 +185,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 	if compactSidebar {
 		sidePad, sideGap = 6, 2
 	}
+	sideInnerW := railW - 2*sidePad
 
 	if opts.Sidebar {
 		sideRadius := RadiusL + 2
@@ -195,20 +197,15 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 		}
 		bar.Column().Width(railW).Shrink(0).
 			Margin(sideMargin, 0, sideMargin, sideMargin).
-			Padding(sidePad - 1).Gap(sideGap)
+			Padding(sidePad - 1).Gap(sideGap).AlignItems(ui.Start)
 		navBarChrome(ctx, bar, p, sideRadius, 0.22, p.Surface, p.LineSoft, true)
-		if opts.IconsOnly {
-			bar.AlignItems(ui.Center)
-		} else {
-			bar.AlignItems(ui.Start)
-		}
 	} else {
 		topRadius := RadiusM
 		if p.LiquidGlass || opts.Touch {
 			// Interpolate from the visible corner radius during layout changes.
 			topRadius = topBarH / 2
 		}
-		bar.Row().Height(topBarH).Shrink(0).AlignItems(ui.Center).
+		bar.Row().Height(topBarH).Shrink(0).AlignItems(ui.Start).
 			Padding(2).Gap(2)
 		navBarChrome(ctx, bar, p, topRadius, 0, p.Track, p.LineSoft, false)
 		if opts.Touch {
@@ -220,18 +217,18 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 
 	bar.Children(func() {
 		if opts.OnToggle != nil {
-			desktopNavToggle(ctx, p, opts, compactSidebar, topCtrlH)
+			desktopNavToggle(ctx, p, opts, compactSidebar, topCtrlH, sideInnerW)
 		}
 
 		axis, stripGap := navAxisHorizontal, float32(2)
 		var tabsStrip ui.Element
 		if opts.Sidebar {
 			axis, stripGap = navAxisVertical, sideGap
-			tabsStrip = ui.Column(ctx.Key("dnav-strip")).Gap(stripGap)
+			tabsStrip = ui.Column(ctx.Key("dnav-strip")).Width(sideInnerW).Gap(stripGap)
 			if opts.IconsOnly {
 				tabsStrip.AlignItems(ui.Center).Shrink(0)
 			} else {
-				tabsStrip.FillWidth().AlignItems(ui.Start)
+				tabsStrip.AlignItems(ui.Start)
 			}
 			tabsStrip.Draggable(nil, ui.DraggableOptions{Axis: ui.Vertical, Bounds: &ui.Rect{}, Rigid: true})
 		} else {
@@ -270,7 +267,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 					if opts.IconsOnly {
 						tab.Size(sideTabH, sideTabH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
 					} else {
-						tab.FillWidth().Height(sideTabH).Padding(0, 10)
+						tab.Width(sideInnerW).Height(sideTabH).Padding(0, 10)
 					}
 				} else {
 					if opts.IconsOnly {
@@ -282,9 +279,17 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				tabEls = append(tabEls, tab)
 			}
 
+			layoutSwitching := trackDesktopNavLayoutSwitch(ctx, opts.Sidebar)
 			mode := desktopNavMode(opts, p.LiquidGlass, compactSidebar)
 			modeChanged := !st.hasPrev || st.lastMode != mode || st.lastCount != len(items)
-			stripMain, stripCross, crossOff := resolveDesktopNavSlots(ctx, st.slots, tabEls, items, opts, stripBounds, stripGap, sideTabH, topCtrlH, railW-2*sidePad, modeChanged)
+			if modeChanged || layoutSwitching {
+				st.hasMeasured = false
+			}
+			stripMain, stripCross, crossOff, measured := resolveDesktopNavSlots(
+				ctx, st.slots, tabEls, items, opts, stripBounds, stripGap, sideTabH, topCtrlH, sideInnerW, modeChanged || layoutSwitching,
+			)
+			firstMeasure := measured && !st.hasMeasured
+			jumpPill := modeChanged || layoutSwitching || firstMeasure
 
 			displayIndex, _ := st.stepTabs(ctx, tabsStrip, tabEls, axis, stripGap, st.slots, p.LiquidGlass, true, selected, items)
 
@@ -309,23 +314,39 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				lens = st.animateGlassLens(ctx, tabsStrip, navLensConfig{
 					axis: axis, target: target, mode: mode, count: len(items), keyPrefix: "dnav",
 					style: navLensDesktopStyle, tabPressed: tabEls[displayIndex].Pressed(),
-					forceJump: modeChanged,
+					forceJump: jumpPill,
 					expand: func(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32) {
 						return desktopNavLensExpand(axis, mainExt, crossExt, elastic, stretch)
 					},
 				})
-				renderNavGlassRestingPill(ctx, tabsStrip, selKey, lens, tabRadius, "dnav-pill-bg", glassNavPillBg(p), reduceTransparency, !opts.Sidebar, p.CardShadow)
+				pill := renderNavGlassRestingPill(ctx, tabsStrip, selKey, lens, tabRadius, "dnav-pill-bg", glassNavPillBg(p), reduceTransparency, !opts.Sidebar, p.CardShadow)
+				if layoutSwitching {
+					pill.Transition(navMatchTransition(ctx, navSelectionMatchKey{}))
+				} else if !lens.inFlight && !st.active && !isStaticSnapshot(ctx) {
+					pill.Transition(ui.ElementTransition{Colors: true, Match: navSelectionMatchKey{}, Fly: true})
+				}
 			} else {
 				st.hasPrev, st.lastMode, st.lastCount = true, mode, len(items)
 				pillBg, pillPose, pillAnim, pillPoseAnim := navSolidPillFeedback(
 					st.active, tabEls[displayIndex].Pressed(), lastMain, stripMain,
 					p.TrackOn, p.Text, 0.08, 0.10,
 				)
-				renderNavSolidPill(ctx, tabsStrip, selKey, target, tabRadius, "dnav-pill-bg",
+				var selectionMatch any
+				if !layoutSwitching {
+					selectionMatch = navSelectionMatchKey{}
+				}
+				pill := renderNavSolidPill(ctx, tabsStrip, selKey, target, tabRadius, "dnav-pill-bg",
 					pillBg, pillPose, pillAnim, pillPoseAnim,
-					!modeChanged && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
+					!jumpPill && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
+					selectionMatch,
 					!opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
 				)
+				if layoutSwitching {
+					pill.Transition(navMatchTransition(ctx, navSelectionMatchKey{}))
+				}
+			}
+			if measured && !layoutSwitching {
+				st.hasMeasured = true
 			}
 
 			lensMoving := st.active || lens.inFlight
@@ -408,9 +429,9 @@ func resolveDesktopNavSlots(
 	opts DesktopNavOptions,
 	stripBounds ui.Rect,
 	stripGap, sideTabH, topCtrlH, sideFullW float32,
-	modeChanged bool,
-) (stripMain, stripCross, crossOff float32) {
-	if !modeChanged && stripBounds.W > 0 && stripBounds.H > 0 {
+	skipMeasure bool,
+) (stripMain, stripCross, crossOff float32, measured bool) {
+	if !skipMeasure && stripBounds.W > 0 && stripBounds.H > 0 {
 		allValid := true
 		for i, tab := range tabEls {
 			tb := tab.LayoutBounds()
@@ -427,9 +448,9 @@ func resolveDesktopNavSlots(
 		if allValid {
 			tb0 := tabEls[0].LayoutBounds()
 			if opts.Sidebar {
-				return stripBounds.H, tb0.W, tb0.X - stripBounds.X
+				return stripBounds.H, tb0.W, tb0.X - stripBounds.X, true
 			}
-			return stripBounds.W, tb0.H, tb0.Y - stripBounds.Y
+			return stripBounds.W, tb0.H, tb0.Y - stripBounds.Y, true
 		}
 	}
 
@@ -443,10 +464,13 @@ func resolveDesktopNavSlots(
 			}
 		}
 		cross := sideTabH
+		crossOff := float32(0)
 		if !opts.IconsOnly {
 			cross = sideFullW
+		} else {
+			crossOff = max(0, (sideFullW-sideTabH)/2)
 		}
-		return y, cross, 0
+		return y, cross, crossOff, false
 	}
 
 	x := float32(0)
@@ -465,7 +489,7 @@ func resolveDesktopNavSlots(
 			x += stripGap
 		}
 	}
-	return x, topCtrlH, 0
+	return x, topCtrlH, 0, false
 }
 
 func desktopNavLensExpand(axis navScrubAxis, mainExtent, crossExtent, elastic, stretch float32) (dx, dy, padCross float32) {
@@ -480,7 +504,7 @@ func desktopNavLensExpand(axis navScrubAxis, mainExtent, crossExtent, elastic, s
 	return mainEx, crossEx, crossEx
 }
 
-func desktopNavToggle(ctx *ui.Context, p Palette, opts DesktopNavOptions, compactSidebar bool, topCtrlH float32) {
+func desktopNavToggle(ctx *ui.Context, p Palette, opts DesktopNavOptions, compactSidebar bool, topCtrlH, sideInnerW float32) {
 	toggleIcon, toggleSize := IconSidebar, topCtrlH
 	toggleRadius := RadiusS
 	if p.LiquidGlass || opts.Touch {
@@ -513,7 +537,7 @@ func desktopNavToggle(ctx *ui.Context, p Palette, opts DesktopNavOptions, compac
 			marginBot = 2
 		}
 		if opts.IconsOnly {
-			toggle.Margin(0, 0, marginBot, 0)
+			toggle.Margin(0, 0, marginBot, max(0, (sideInnerW-toggleSize)/2))
 		} else {
 			toggle.Margin(0, 0, marginBot, 5)
 		}
@@ -849,7 +873,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				)
 				renderNavSolidPill(ctx, bar, selKey, ui.Rect{X: pillLeft, Y: barPad, W: pillW, H: tabHeight},
 					RadiusFull, "mnb-pill-bg", pillBg, pillPose, pillAnim, pillPoseAnim,
-					true, !standard && !tabEls[displayIndex].Pressed(), 3, p.CardShadow,
+					true, nil, !standard && !tabEls[displayIndex].Pressed(), 3, p.CardShadow,
 				)
 			}
 

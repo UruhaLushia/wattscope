@@ -39,6 +39,7 @@ type navScrubState struct {
 	prevMain      float32
 	lastTime      time.Time
 	hasPrev       bool
+	hasMeasured   bool
 	lastMode      uint8
 	lastCount     int
 }
@@ -468,16 +469,19 @@ func navSolidPillFeedback(active, pressed bool, lastMain, stripMain float32, bas
 	return bg, pose, pillAnim, poseAnim
 }
 
-func renderNavSolidPill(ctx *ui.Context, host ui.Element, key any, rect ui.Rect, radius float32, colorKey string, bg ui.Color, pose ui.Pose, moveAnim, poseAnim ui.Animation, animateLayout, shadow bool, shadowBlur float32, shadowColor ui.Color) {
+func renderNavSolidPill(ctx *ui.Context, host ui.Element, key any, rect ui.Rect, radius float32, colorKey string, bg ui.Color, pose ui.Pose, moveAnim, poseAnim ui.Animation, animateLayout bool, matchKey any, shadow bool, shadowBlur float32, shadowColor ui.Color) ui.Element {
 	pill := rectBox(ctx.Key(key), rect, radius, 0).
 		TransformOrigin(0.5, 0.5).AnimatePose(pose, poseAnim).
 		Background(host.AnimateColor(colorKey, bg, motionGlassMorph))
 	if animateLayout {
-		pill.Transition(ui.ElementTransition{Position: true, Size: true, Animation: &moveAnim})
+		pill.Transition(ui.ElementTransition{Position: true, Size: true, Animation: &moveAnim, Match: matchKey})
+	} else if matchKey != nil && !isStaticSnapshot(ctx) {
+		pill.Transition(ui.ElementTransition{Colors: true, Match: matchKey, Fly: true})
 	}
 	if shadow && shadowColor.A > 0 {
 		pill.Shadow(0, 1, shadowBlur, 0, shadowColor)
 	}
+	return pill
 }
 
 func navLensShadow(el ui.Element, dark bool, amount float32, standard bool) {
@@ -570,7 +574,7 @@ func navGlassBlend(active, scrubbing bool, cover, lensAlpha float32) float32 {
 	}
 }
 
-func renderNavGlassRestingPill(ctx *ui.Context, host ui.Element, key any, lens navGlassLens, radius float32, colorKey string, pillBg ui.Color, reduceTransparency, showShadow bool, shadowColor ui.Color) {
+func renderNavGlassRestingPill(ctx *ui.Context, host ui.Element, key any, lens navGlassLens, radius float32, colorKey string, pillBg ui.Color, reduceTransparency, showShadow bool, shadowColor ui.Color) ui.Element {
 	bg := host.AnimateColor(colorKey, pillBg, motionGlassMorph)
 	if !reduceTransparency {
 		u := clamp32(1-1.25*lens.alpha, 0, 1)
@@ -582,6 +586,7 @@ func renderNavGlassRestingPill(ctx *ui.Context, host ui.Element, key any, lens n
 			pill.Shadow(0, 1, 2, 0, scaleAlpha(shadowColor, fade))
 		}
 	}
+	return pill
 }
 
 func renderNavGlassDroplet(ctx *ui.Context, key any, axis navScrubAxis, lens navGlassLens, baseRadius float32, dark bool) {
@@ -659,7 +664,7 @@ func resolveNavTabVisual(o navTabVisualOpts) navTabVisual {
 	return v
 }
 
-func resolveCompactSlots(ctx *ui.Context, slots []navSlot, itemEls []ui.Element, cfg compactGlassTrackConfig, hostBounds ui.Rect, modeChanged bool) (stripMain, stripCross, crossOff float32) {
+func resolveCompactSlots(ctx *ui.Context, slots []navSlot, itemEls []ui.Element, cfg compactGlassTrackConfig, hostBounds ui.Rect, modeChanged bool) (stripMain, stripCross, crossOff float32, measured bool) {
 	if !modeChanged && hostBounds.W > 0 && hostBounds.H > 0 && len(itemEls) > 0 {
 		allValid := true
 		for i, el := range itemEls {
@@ -672,7 +677,7 @@ func resolveCompactSlots(ctx *ui.Context, slots []navSlot, itemEls []ui.Element,
 		}
 		if allValid {
 			b0 := itemEls[0].LayoutBounds()
-			return hostBounds.W, b0.H, b0.Y - hostBounds.Y
+			return hostBounds.W, b0.H, b0.Y - hostBounds.Y, true
 		}
 	}
 	x := cfg.pad
@@ -690,7 +695,7 @@ func resolveCompactSlots(ctx *ui.Context, slots []navSlot, itemEls []ui.Element,
 			x += cfg.gap
 		}
 	}
-	return x + cfg.pad, cfg.height, cfg.pad
+	return x + cfg.pad, cfg.height, cfg.pad, false
 }
 
 type compactTrackScrubState struct {
@@ -736,7 +741,12 @@ func renderCompactGlassTrack(ctx *ui.Context, host ui.Element, p Palette, cfg co
 		}
 
 		modeChanged := !st.hasPrev || st.lastMode != cfg.mode || st.lastCount != cfg.count
-		stripMain, stripCross, crossOff := resolveCompactSlots(ctx, slots, els, cfg, hostBounds, modeChanged)
+		if modeChanged {
+			st.hasMeasured = false
+		}
+		stripMain, stripCross, crossOff, measured := resolveCompactSlots(ctx, slots, els, cfg, hostBounds, modeChanged)
+		firstMeasure := measured && !st.hasMeasured
+		jumpPill := modeChanged || firstMeasure
 
 		prevSel := *cfg.selected
 		displayIndex, _, committed, commitIdx := st.applyNavScrub(ctx, host, els, navAxisHorizontal, cfg.gap, slots, p.LiquidGlass, cfg.requireArm, cfg.selected)
@@ -756,7 +766,7 @@ func renderCompactGlassTrack(ctx *ui.Context, host ui.Element, p Palette, cfg co
 			lens = st.animateGlassLens(ctx, host, navLensConfig{
 				axis: navAxisHorizontal, target: target, mode: cfg.mode, count: cfg.count, keyPrefix: cfg.keyPrefix,
 				style: navLensCompactStyle, tabPressed: els[displayIndex].Pressed(),
-				forceJump: modeChanged, expand: compactNavLensExpand,
+				forceJump: jumpPill, expand: compactNavLensExpand,
 			})
 			renderNavGlassRestingPill(ctx, host, cfg.keyPrefix+"-pill", lens, cfg.radius, cfg.keyPrefix+"-pill-bg", cfg.restBg, reduceTransparency, cfg.shadow, p.CardShadow)
 		} else {
@@ -766,9 +776,13 @@ func renderCompactGlassTrack(ctx *ui.Context, host ui.Element, p Palette, cfg co
 			)
 			renderNavSolidPill(ctx, host, cfg.keyPrefix+"-pill", target, cfg.radius, cfg.keyPrefix+"-pill-bg",
 				pillBg, pillPose, pillAnim, pillPoseAnim,
-				!modeChanged && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
+				!jumpPill && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
+				nil,
 				cfg.shadow && !els[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
 			)
+		}
+		if measured {
+			st.hasMeasured = true
 		}
 
 		lensMoving := st.active || lens.inFlight

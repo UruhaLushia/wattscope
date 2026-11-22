@@ -368,3 +368,180 @@ func TestSectionAndInlineMotionAndFormGroup(t *testing.T) {
 		t.Fatalf("static snapshot should skip SectionMotion/InlineMotion without modifying element")
 	}
 }
+
+func TestDesktopNavLayoutSwitchNoJitter(t *testing.T) {
+	items := []NavTab{
+		{Label: "Overview"},
+		{Label: "PD"},
+		{Label: "Records"},
+		{Label: "Device"},
+	}
+	selected := 0
+	var liquidGlass bool
+	opts := DesktopNavOptions{
+		TabPad: 10, TabGap: 5,
+		ToggleLabel: "Toggle layout",
+		OnToggle:    func() {},
+	}
+	var switching bool
+
+	tt := ui.NewTester(func(ctx *ui.Context) {
+		defer BeginFrame(ctx, false)()
+		_, p := ResolveTheme(false, DefaultAccentHex)
+		p.LiquidGlass = liquidGlass
+		DesktopNav(ctx, p, "Navigation", &selected, items, opts)
+		switching = trackDesktopNavLayoutSwitch(ctx, opts.Sidebar)
+	}, 480, 540)
+
+	assertSidebarMonotonic := func(wantW float32, prev []float32) {
+		t.Helper()
+		for i, item := range items {
+			info, ok := tt.AccessByRole(ui.RoleTab, item.Label)
+			if !ok {
+				t.Fatalf("missing sidebar tab %q", item.Label)
+			}
+			// Must never stretch toward TopBar's ~354px FillWidth during transition.
+			if info.Bounds.W > wantW+16 {
+				t.Fatalf("sidebar tab %q stretched abnormally: w=%v (want <= %v)", item.Label, info.Bounds.W, wantW+16)
+			}
+			if prev != nil {
+				if info.Bounds.W+0.5 < prev[i] {
+					t.Fatalf("sidebar tab %q width regressed/oscillated: %v -> %v", item.Label, prev[i], info.Bounds.W)
+				}
+				prev[i] = info.Bounds.W
+			}
+		}
+	}
+	assertSidebarSettled := func(wantW float32) {
+		t.Helper()
+		for _, item := range items {
+			info, ok := tt.AccessByRole(ui.RoleTab, item.Label)
+			if !ok {
+				t.Fatalf("missing settled sidebar tab %q", item.Label)
+			}
+			if abs32(info.Bounds.W-wantW) > 0.01 {
+				t.Fatalf("settled sidebar tab %q width = %v, want %v", item.Label, info.Bounds.W, wantW)
+			}
+		}
+	}
+	assertTopBarNoVerticalDrift := func(prevRelY []float32, settled bool) {
+		t.Helper()
+		bar, ok := tt.AccessByRole(ui.RoleTabList, "Navigation")
+		if !ok {
+			t.Fatal("missing Navigation tablist")
+		}
+		wantH := DesktopNavTopControlHeight(false)
+		for i, item := range items {
+			info, ok := tt.AccessByRole(ui.RoleTab, item.Label)
+			if !ok {
+				t.Fatalf("missing topbar tab %q", item.Label)
+			}
+			relY := info.Bounds.Y - bar.Bounds.Y
+			if prevRelY != nil {
+				if prevRelY[i] != 0 && relY > prevRelY[i]+0.5 {
+					t.Fatalf("topbar tab %q drifted downward: %v -> %v", item.Label, prevRelY[i], relY)
+				}
+				prevRelY[i] = relY
+			}
+			if settled {
+				if abs32(relY-3) > 0.01 {
+					t.Fatalf("settled topbar tab %q relY = %v, want 3", item.Label, relY)
+				}
+				if abs32(info.Bounds.H-wantH) > 0.01 {
+					t.Fatalf("settled topbar tab %q height = %v, want %v", item.Label, info.Bounds.H, wantH)
+				}
+			}
+		}
+	}
+
+	// Verify Solid TopBar <-> Sidebar (full + IconsOnly) over the full 360ms transition window.
+	tt.Frame()
+	tt.Advance(50 * time.Millisecond)
+
+	// TopBar -> Full Sidebar
+	opts.Sidebar, opts.IconsOnly = true, false
+	tt.Frame()
+	if !switching {
+		t.Fatal("expected trackDesktopNavLayoutSwitch=true immediately on Sidebar switch")
+	}
+	prevW := make([]float32, len(items))
+	for _, step := range []time.Duration{16 * time.Millisecond, 60 * time.Millisecond, 120 * time.Millisecond} {
+		tt.Advance(step)
+		if !switching {
+			t.Fatal("expected switching=true inside 360ms window")
+		}
+		assertSidebarMonotonic(DesktopSidebarWidth-16, prevW)
+	}
+	tt.Advance(250 * time.Millisecond)
+	if switching {
+		t.Fatal("expected switching=false after 360ms window")
+	}
+	tt.Advance(300 * time.Millisecond)
+	assertSidebarSettled(DesktopSidebarWidth - 16)
+
+	// Full Sidebar -> TopBar
+	opts.Sidebar, opts.IconsOnly = false, false
+	tt.Frame()
+	if !switching {
+		t.Fatal("expected switching=true on TopBar switch")
+	}
+	prevRelY := make([]float32, len(items))
+	for _, step := range []time.Duration{16 * time.Millisecond, 60 * time.Millisecond, 120 * time.Millisecond} {
+		tt.Advance(step)
+		assertTopBarNoVerticalDrift(prevRelY, false)
+	}
+	tt.Advance(250 * time.Millisecond)
+	if switching {
+		t.Fatal("expected switching=false after TopBar settle")
+	}
+	tt.Advance(300 * time.Millisecond)
+	assertTopBarNoVerticalDrift(nil, true)
+
+	// TopBar -> Compact IconsOnly Sidebar
+	opts.Sidebar, opts.IconsOnly = true, true
+	tt.Frame()
+	if !switching {
+		t.Fatal("expected switching=true on IconsOnly Sidebar switch")
+	}
+	tt.Advance(60 * time.Millisecond)
+	assertSidebarMonotonic(90, nil)
+	tt.Advance(350 * time.Millisecond)
+	if switching {
+		t.Fatal("expected switching=false after IconsOnly settle")
+	}
+	tt.Advance(300 * time.Millisecond)
+	assertSidebarSettled(36)
+
+	// Verify LiquidGlass TopBar -> Sidebar switch keeps switching=true, monotonic bounds,
+	// and avoids spurious droplet flight/optics (keeping CPU shader frames minimal for speed).
+	opts.Sidebar, opts.IconsOnly = false, false
+	tt.Frame()
+	tt.Advance(450 * time.Millisecond)
+	liquidGlass = true
+	tt.Frame()
+	opts.Sidebar = true
+	tt.Frame()
+	if !switching {
+		t.Fatal("LiquidGlass: expected switching=true on Sidebar switch")
+	}
+	assertSidebarMonotonic(DesktopSidebarWidth-16, nil)
+
+	// Verify forceJump suppresses spurious LiquidGlass lens flight/optics during layout transitions.
+	var lensDuringSwitch navGlassLens
+	st := &navScrubState{hasPrev: true, lastMode: 4, lastCount: 4}
+	lensTester := ui.NewTester(func(ctx *ui.Context) {
+		host := ui.Box(ctx.Key("lens-host")).Size(200, 40)
+		lensDuringSwitch = st.animateGlassLens(ctx, host, navLensConfig{
+			axis: navAxisHorizontal, target: ui.Rect{X: 10, Y: 2, W: 70, H: 26},
+			mode: 5, count: 4, keyPrefix: "dnav", style: navLensDesktopStyle,
+			forceJump: true,
+			expand: func(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32) {
+				return desktopNavLensExpand(navAxisHorizontal, mainExt, crossExt, elastic, stretch)
+			},
+		})
+	}, 240, 80)
+	lensTester.Frame()
+	if lensDuringSwitch.inFlight || lensDuringSwitch.optics {
+		t.Fatalf("expected forceJump to suppress lens flight/optics, got %+v", lensDuringSwitch)
+	}
+}
