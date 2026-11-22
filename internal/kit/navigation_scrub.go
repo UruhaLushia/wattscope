@@ -469,19 +469,21 @@ func navSolidPillFeedback(active, pressed bool, lastMain, stripMain float32, bas
 	return bg, pose, pillAnim, poseAnim
 }
 
-func renderNavSolidPill(ctx *ui.Context, host ui.Element, key any, rect ui.Rect, radius float32, colorKey string, bg ui.Color, pose ui.Pose, moveAnim, poseAnim ui.Animation, animateLayout bool, matchKey any, shadow bool, shadowBlur float32, shadowColor ui.Color) ui.Element {
+func renderNavSolidPill(ctx *ui.Context, host ui.Element, key any, rect ui.Rect, radius float32, colorKey string, bg ui.Color, pose ui.Pose, moveAnim, poseAnim ui.Animation, animateLayout bool, shadow bool, shadowBlur float32, shadowColor ui.Color) {
+	renderNavSolidPillColor(ctx, key, rect, radius, host.AnimateColor(colorKey, bg, motionGlassMorph),
+		pose, moveAnim, poseAnim, animateLayout, shadow, shadowBlur, shadowColor)
+}
+
+func renderNavSolidPillColor(ctx *ui.Context, key any, rect ui.Rect, radius float32, bg ui.Color, pose ui.Pose, moveAnim, poseAnim ui.Animation, animateLayout bool, shadow bool, shadowBlur float32, shadowColor ui.Color) {
 	pill := rectBox(ctx.Key(key), rect, radius, 0).
 		TransformOrigin(0.5, 0.5).AnimatePose(pose, poseAnim).
-		Background(host.AnimateColor(colorKey, bg, motionGlassMorph))
+		Background(bg)
 	if animateLayout {
-		pill.Transition(ui.ElementTransition{Position: true, Size: true, Animation: &moveAnim, Match: matchKey})
-	} else if matchKey != nil && !isStaticSnapshot(ctx) {
-		pill.Transition(ui.ElementTransition{Colors: true, Match: matchKey, Fly: true})
+		pill.Transition(ui.ElementTransition{Position: true, Size: true, Animation: &moveAnim})
 	}
 	if shadow && shadowColor.A > 0 {
 		pill.Shadow(0, 1, shadowBlur, 0, shadowColor)
 	}
-	return pill
 }
 
 func navLensShadow(el ui.Element, dark bool, amount float32, standard bool) {
@@ -574,8 +576,11 @@ func navGlassBlend(active, scrubbing bool, cover, lensAlpha float32) float32 {
 	}
 }
 
-func renderNavGlassRestingPill(ctx *ui.Context, host ui.Element, key any, lens navGlassLens, radius float32, colorKey string, pillBg ui.Color, reduceTransparency, showShadow bool, shadowColor ui.Color) ui.Element {
-	bg := host.AnimateColor(colorKey, pillBg, motionGlassMorph)
+func renderNavGlassRestingPill(ctx *ui.Context, host ui.Element, key any, lens navGlassLens, radius float32, colorKey string, pillBg ui.Color, reduceTransparency, showShadow bool, shadowColor ui.Color) {
+	renderNavGlassRestingPillColor(ctx, key, lens, radius, host.AnimateColor(colorKey, pillBg, motionGlassMorph), reduceTransparency, showShadow, shadowColor)
+}
+
+func renderNavGlassRestingPillColor(ctx *ui.Context, key any, lens navGlassLens, radius float32, bg ui.Color, reduceTransparency, showShadow bool, shadowColor ui.Color) {
 	if !reduceTransparency {
 		u := clamp32(1-1.25*lens.alpha, 0, 1)
 		bg = scaleAlpha(bg, u*u*(3-2*u))
@@ -586,7 +591,6 @@ func renderNavGlassRestingPill(ctx *ui.Context, host ui.Element, key any, lens n
 			pill.Shadow(0, 1, 2, 0, scaleAlpha(shadowColor, fade))
 		}
 	}
-	return pill
 }
 
 func renderNavGlassDroplet(ctx *ui.Context, key any, axis navScrubAxis, lens navGlassLens, baseRadius float32, dark bool) {
@@ -777,7 +781,6 @@ func renderCompactGlassTrack(ctx *ui.Context, host ui.Element, p Palette, cfg co
 			renderNavSolidPill(ctx, host, cfg.keyPrefix+"-pill", target, cfg.radius, cfg.keyPrefix+"-pill-bg",
 				pillBg, pillPose, pillAnim, pillPoseAnim,
 				!jumpPill && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
-				nil,
 				cfg.shadow && !els[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
 			)
 		}

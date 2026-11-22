@@ -19,7 +19,7 @@ const (
 	motionPageDur        = 235 * time.Millisecond
 	motionUnfoldDur      = 280 * time.Millisecond
 	rotateWindowDur      = 380 * time.Millisecond
-	navLayoutSwitchDur   = 360 * time.Millisecond
+	navLayoutSwitchDur   = 520 * time.Millisecond
 )
 
 var (

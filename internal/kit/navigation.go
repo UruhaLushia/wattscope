@@ -87,7 +87,6 @@ func bottomNavDockGap(bottomInset float32) float32 {
 
 type navPanelMatchKey struct{}
 type navToggleMatchKey struct{}
-type navSelectionMatchKey struct{}
 type navTabMatchKey struct {
 	index int
 }
@@ -139,7 +138,10 @@ type DesktopNavOptions struct {
 
 type desktopNavScrubState struct {
 	navScrubState
-	slots []navSlot
+	slots          []navSlot
+	pillIndex      int
+	pillInit       bool
+	pillSlideUntil time.Time
 }
 
 // DesktopNav renders desktop navigation as either a floating header capsule or
@@ -261,8 +263,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			for index, entry := range items {
 				tab := tabs.Tab(index).Label(entry.Label).
 					Radius(tabRadius).AlignItems(ui.Center).Gap(opts.TabGap).
-					Background(ui.Transparent).
-					Transition(navMatchTransition(ctx, navTabMatchKey{index: index}))
+					Background(ui.Transparent)
 				if opts.Sidebar {
 					if opts.IconsOnly {
 						tab.Size(sideTabH, sideTabH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
@@ -282,14 +283,14 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			layoutSwitching := trackDesktopNavLayoutSwitch(ctx, opts.Sidebar)
 			mode := desktopNavMode(opts, p.LiquidGlass, compactSidebar)
 			modeChanged := !st.hasPrev || st.lastMode != mode || st.lastCount != len(items)
-			if modeChanged || layoutSwitching {
+			if !isStaticSnapshot(ctx) && (modeChanged || layoutSwitching) {
 				st.hasMeasured = false
 			}
 			stripMain, stripCross, crossOff, measured := resolveDesktopNavSlots(
 				ctx, st.slots, tabEls, items, opts, stripBounds, stripGap, sideTabH, topCtrlH, sideInnerW, modeChanged || layoutSwitching,
 			)
 			firstMeasure := measured && !st.hasMeasured
-			jumpPill := modeChanged || layoutSwitching || firstMeasure
+			jumpPill := modeChanged || firstMeasure
 
 			displayIndex, _ := st.stepTabs(ctx, tabsStrip, tabEls, axis, stripGap, st.slots, p.LiquidGlass, true, selected, items)
 
@@ -309,43 +310,66 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			if opts.Sidebar {
 				target = ui.Rect{X: crossOff, Y: pillStart, W: stripCross, H: pillExtent}
 			}
+			now := ctx.Now()
+			var pillColor ui.Color
+			pillOwnsPaint := false
 			var lens navGlassLens
 			if p.LiquidGlass {
+				pillColor = tabsStrip.AnimateColor("dnav-pill-bg", glassNavPillBg(p), motionGlassMorph)
 				lens = st.animateGlassLens(ctx, tabsStrip, navLensConfig{
 					axis: axis, target: target, mode: mode, count: len(items), keyPrefix: "dnav",
 					style: navLensDesktopStyle, tabPressed: tabEls[displayIndex].Pressed(),
-					forceJump: jumpPill,
+					forceJump: modeChanged || layoutSwitching || firstMeasure,
 					expand: func(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32) {
 						return desktopNavLensExpand(axis, mainExt, crossExt, elastic, stretch)
 					},
 				})
-				pill := renderNavGlassRestingPill(ctx, tabsStrip, selKey, lens, tabRadius, "dnav-pill-bg", glassNavPillBg(p), reduceTransparency, !opts.Sidebar, p.CardShadow)
-				if layoutSwitching {
-					pill.Transition(navMatchTransition(ctx, navSelectionMatchKey{}))
-				} else if !lens.inFlight && !st.active && !isStaticSnapshot(ctx) {
-					pill.Transition(ui.ElementTransition{Colors: true, Match: navSelectionMatchKey{}, Fly: true})
+				pillOwnsPaint = !layoutSwitching && !isStaticSnapshot(ctx) &&
+					(lens.inFlight || lens.alpha > 0.005 || st.active || tabEls[displayIndex].Pressed())
+				if pillOwnsPaint {
+					renderNavGlassRestingPillColor(ctx, selKey, lens, tabRadius, pillColor, reduceTransparency, !opts.Sidebar, p.CardShadow)
 				}
 			} else {
-				st.hasPrev, st.lastMode, st.lastCount = true, mode, len(items)
+				if !isStaticSnapshot(ctx) {
+					st.hasPrev, st.lastMode, st.lastCount = true, mode, len(items)
+				}
 				pillBg, pillPose, pillAnim, pillPoseAnim := navSolidPillFeedback(
 					st.active, tabEls[displayIndex].Pressed(), lastMain, stripMain,
 					p.TrackOn, p.Text, 0.08, 0.10,
 				)
-				var selectionMatch any
-				if !layoutSwitching {
-					selectionMatch = navSelectionMatchKey{}
+				pillColor = tabsStrip.AnimateColor("dnav-pill-bg", pillBg, motionGlassMorph)
+				if !isStaticSnapshot(ctx) {
+					if !st.pillInit || modeChanged || layoutSwitching {
+						st.pillInit = true
+						st.pillIndex = displayIndex
+						st.pillSlideUntil = time.Time{}
+					} else if displayIndex != st.pillIndex {
+						st.pillIndex = displayIndex
+						st.pillSlideUntil = now.Add(motionNavDur + 20*time.Millisecond)
+					}
+					if !layoutSwitching && (st.active || tabEls[displayIndex].Pressed()) {
+						st.pillSlideUntil = now.Add(motionNavDur + 20*time.Millisecond)
+					}
 				}
-				pill := renderNavSolidPill(ctx, tabsStrip, selKey, target, tabRadius, "dnav-pill-bg",
-					pillBg, pillPose, pillAnim, pillPoseAnim,
-					!jumpPill && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
-					selectionMatch,
-					!opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
+				sliding := !st.pillSlideUntil.IsZero() && now.Before(st.pillSlideUntil)
+				if sliding && !isStaticSnapshot(ctx) {
+					ctx.After(st.pillSlideUntil.Sub(now))
+				} else if !sliding && !isStaticSnapshot(ctx) {
+					st.pillSlideUntil = time.Time{}
+				}
+				pillOwnsPaint = !layoutSwitching && !isStaticSnapshot(ctx) &&
+					(sliding || st.active || tabEls[displayIndex].Pressed())
+				renderBg := pillColor
+				if !pillOwnsPaint {
+					renderBg = ui.Transparent
+				}
+				renderNavSolidPillColor(ctx, selKey, target, tabRadius,
+					renderBg, pillPose, pillAnim, pillPoseAnim,
+					!jumpPill && !layoutSwitching && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
+					pillOwnsPaint && !opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
 				)
-				if layoutSwitching {
-					pill.Transition(navMatchTransition(ctx, navSelectionMatchKey{}))
-				}
 			}
-			if measured && !layoutSwitching {
+			if measured && !layoutSwitching && !isStaticSnapshot(ctx) {
 				st.hasMeasured = true
 			}
 
@@ -361,10 +385,19 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			if glassOptics {
 				z = 2
 			}
+			// At rest and across layout Fly switches the active tab owns the pill fill so it never lifts above tab text.
 			for index, item := range items {
 				entry := item
 				active := index == displayIndex
-				tab := tabEls[index].ZIndex(z).OnClick(navTabClick(&st.navScrubState, entry.OnSelect))
+				tab := tabEls[index].ZIndex(z).
+					Transition(navMatchTransition(ctx, navTabMatchKey{index: index})).
+					OnClick(navTabClick(&st.navScrubState, entry.OnSelect))
+				if active && !pillOwnsPaint {
+					tab.Background(pillColor)
+					if !opts.Sidebar && p.CardShadow.A > 0 {
+						tab.Shadow(0, 1, 2, 0, p.CardShadow)
+					}
+				}
 
 				cover, _ := lens.coverAt(axis, st.slots[index].start+st.slots[index].extent*0.5, 0.85)
 				vis := resolveNavTabVisual(navTabVisualOpts{
@@ -384,12 +417,20 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 						if opts.Sidebar {
 							iconSize = 17
 						}
+						iconColor := vis.fg
+						if !layoutSwitching {
+							iconColor = tab.AnimateColor("tab-fg", vis.fg, vis.colorAnim)
+						}
 						glassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(iconSize).
-							TextColor(tab.AnimateColor("tab-fg", vis.fg, vis.colorAnim)), p, vis.iconPop)
+							TextColor(iconColor), p, vis.iconPop)
 					}
 					if !opts.IconsOnly {
+						textColor := vis.fg
+						if !layoutSwitching {
+							textColor = tab.AnimateColor("tab-text", vis.fg, vis.colorAnim)
+						}
 						AnimatedLabel(ctx, entry.Label).FontSize(13).FontWeight(vis.weight).SingleLine().Shrink(0).
-							TextColor(tab.AnimateColor("tab-text", vis.fg, vis.colorAnim))
+							TextColor(textColor)
 					}
 				})
 			}
@@ -873,7 +914,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				)
 				renderNavSolidPill(ctx, bar, selKey, ui.Rect{X: pillLeft, Y: barPad, W: pillW, H: tabHeight},
 					RadiusFull, "mnb-pill-bg", pillBg, pillPose, pillAnim, pillPoseAnim,
-					true, nil, !standard && !tabEls[displayIndex].Pressed(), 3, p.CardShadow,
+					true, !standard && !tabEls[displayIndex].Pressed(), 3, p.CardShadow,
 				)
 			}
 
