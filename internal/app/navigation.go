@@ -219,6 +219,8 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		mobileTitle := pages[d.page].label
 		if layout.portraitMobile && d.page == pageDevice {
 			mobileTitle = msgs.GuiDeviceInfo()
+		} else if layout.landscape && d.page == pageConnectionLog {
+			mobileTitle = msgs.GuiDevice()
 		}
 		var headerExtra func()
 		if !layout.portraitMobile && layout.position == navigationSide {
@@ -330,6 +332,9 @@ func computePageInsets(layout workspaceLayout, page workspacePage, contentFloati
 			padY, padX, in.gap = 12, 14, 12
 		case layout.landscape:
 			padY, padX, in.gap = 10, 12, 10
+			if contentFloatingTop == 0 {
+				padY = 6
+			}
 		}
 		padBottom = padY + 6
 		switch {

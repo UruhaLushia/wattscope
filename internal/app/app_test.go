@@ -845,3 +845,18 @@ func TestSnapshotForRevealIsolatesListState(t *testing.T) {
 		}
 	})
 }
+
+func TestComputePageInsetsLandscapeSubnav(t *testing.T) {
+	layout := workspaceLayout{landscape: true, position: navigationSide}
+	subnavPage := computePageInsets(layout, workspacePage{}, 0)
+	if subnavPage.top != 6 || subnavPage.start != 12 || subnavPage.end != 12 || subnavPage.bottom != 8 {
+		t.Fatalf("landscape subnav non-list insets = %+v, want top=6 start=12 end=12 bottom=8", subnavPage)
+	}
+	floatingPage := computePageInsets(layout, workspacePage{}, 50)
+	if floatingPage.top != 60 {
+		t.Fatalf("landscape floating non-list top = %v, want 60", floatingPage.top)
+	}
+	listPage := computePageInsets(layout, workspacePage{list: func(float32) {}}, 0)
+	if listPage.top != 4 {
+		t.Fatalf("landscape list top = %v, want 4", listPage.top)
+	}

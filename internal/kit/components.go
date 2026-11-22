@@ -138,9 +138,18 @@ func SettingRow(ctx *ui.Context, p Palette, label, hint string, control func()) 
 	IconSettingRow(ctx, p, nil, label, hint, control)
 }
 
+// SettingRowCompact renders a compact labeled setting row for dense landscape layouts.
+func SettingRowCompact(ctx *ui.Context, p Palette, label, hint string, control func()) {
+	iconSettingRow(ctx, p, nil, label, hint, 36, 5, control)
+}
+
 // IconSettingRow renders a SettingRow with a leading SVG icon.
 func IconSettingRow(ctx *ui.Context, p Palette, icon *ui.SVG, label, hint string, control func()) {
-	row := ui.Row(ctx).FillWidth().Wrap().MinHeight(52).Padding(10, 0).Gap(12).
+	iconSettingRow(ctx, p, icon, label, hint, 52, 10, control)
+}
+
+func iconSettingRow(ctx *ui.Context, p Palette, icon *ui.SVG, label, hint string, minH, padY float32, control func()) {
+	row := ui.Row(ctx).FillWidth().Wrap().MinHeight(minH).Padding(padY, 0).Gap(12).
 		AlignItems(ui.Center).AlignContent(ui.Center).Justify(ui.SpaceBetween).
 		Transition(localeSizeTransition)
 	row.Children(func() {
@@ -159,35 +168,13 @@ func IconSettingRow(ctx *ui.Context, p Palette, icon *ui.SVG, label, hint string
 	})
 }
 
-func kvRow(ctx *ui.Context, p Palette, label, value string, mobile bool, trailing func()) {
-	if value == "" && trailing == nil {
-		return
-	}
-	minH, padY := float32(42), float32(8)
-	if mobile {
-		minH, padY = 46, 10
-	}
-	ui.Row(ctx).FillWidth().MinHeight(minH).Padding(padY, 0).Gap(16).
-		AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-		ui.Text(ctx, label).FontSize(13).FontWeight(500).TextColor(p.Muted).Shrink(0)
-		if value != "" {
-			ui.Text(ctx, value).FontSize(13).FontWeight(550).FontFeatures("tnum").
-				Grow(1).MinWidth(0).Wrap().TextAlign(ui.End).Selectable()
-		}
-		if trailing != nil {
-			trailing()
-		}
-	})
-}
-
 // KVItem defines a single label-value pair for KVList.
 type KVItem struct {
 	Label string
 	Value string
 }
 
-// KVList renders non-empty key-value items separated by dividers.
-func KVList(ctx *ui.Context, p Palette, items []KVItem, mobile bool) {
+func renderKVList(ctx *ui.Context, p Palette, items []KVItem, minH, padY float32) {
 	first := true
 	for _, item := range items {
 		if item.Value == "" {
@@ -197,8 +184,27 @@ func KVList(ctx *ui.Context, p Palette, items []KVItem, mobile bool) {
 			Divider(ctx, p)
 		}
 		first = false
-		kvRow(ctx, p, item.Label, item.Value, mobile, nil)
+		ui.Row(ctx).FillWidth().MinHeight(minH).Padding(padY, 0).Gap(16).
+			AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+			ui.Text(ctx, item.Label).FontSize(13).FontWeight(500).TextColor(p.Muted).Shrink(0)
+			ui.Text(ctx, item.Value).FontSize(13).FontWeight(550).FontFeatures("tnum").
+				Grow(1).MinWidth(0).Wrap().TextAlign(ui.End).Selectable()
+		})
 	}
+}
+
+// KVList renders non-empty key-value items separated by dividers.
+func KVList(ctx *ui.Context, p Palette, items []KVItem, mobile bool) {
+	minH, padY := float32(42), float32(8)
+	if mobile {
+		minH, padY = 46, 10
+	}
+	renderKVList(ctx, p, items, minH, padY)
+}
+
+// KVListCompact renders non-empty key-value items with tighter row height for dense landscape layouts.
+func KVListCompact(ctx *ui.Context, p Palette, items []KVItem) {
+	renderKVList(ctx, p, items, 36, 6)
 }
 
 // ActionBar builds a wrapping horizontal row for toolbar action controls.
