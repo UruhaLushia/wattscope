@@ -22,7 +22,7 @@ var (
 	lastClickValid bool
 )
 
-func RecordClickOrigin(el ui.Element) {
+func recordClickOrigin(el ui.Element) {
 	b := el.LayoutBounds()
 	if b.W <= 0 || b.H <= 0 {
 		return
@@ -33,17 +33,20 @@ func RecordClickOrigin(el ui.Element) {
 	clickOriginMu.Unlock()
 }
 
+// ThemeRevealOrigin records the viewport point from which a theme reveal wave expands.
 type ThemeRevealOrigin struct {
 	point ui.Point
 	valid bool
 }
 
+// CaptureThemeRevealOrigin returns el's center as a reveal origin and clears any previously recorded click origin so menu/toggle reveals do not clash.
 func CaptureThemeRevealOrigin(el ui.Element) ThemeRevealOrigin {
 	TakeThemeRevealOrigin()
 	b := el.LayoutBounds()
 	return ThemeRevealOrigin{point: ui.Point{X: b.X + b.W/2, Y: b.Y + b.H/2}, valid: b.W > 0 && b.H > 0}
 }
 
+// TakeThemeRevealOrigin returns and clears the last recorded click origin for theme transitions triggered from menus.
 func TakeThemeRevealOrigin() ThemeRevealOrigin {
 	clickOriginMu.Lock()
 	defer clickOriginMu.Unlock()
@@ -52,10 +55,12 @@ func TakeThemeRevealOrigin() ThemeRevealOrigin {
 	return origin
 }
 
+// ThemeReveal manages concentric tile reveal waves across theme transitions.
 type ThemeReveal struct {
 	waves []themeRevealWave
 }
 
+// Start begins a new theme reveal wave toward dark from origin.
 func (r *ThemeReveal) Start(ctx *ui.Context, dark bool, origin ThemeRevealOrigin) {
 	if ctx.Preferences().ReduceMotion {
 		r.waves = nil

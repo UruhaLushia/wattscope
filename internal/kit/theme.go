@@ -1,3 +1,4 @@
+// Package kit provides WattScope's shared UI theme, motion, glass, and component primitives.
 package kit
 
 import (
@@ -9,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// Corner radius tokens and default accent hex used across kit surfaces and controls.
 const (
 	RadiusS    float32 = 8
 	RadiusM    float32 = 11
@@ -19,6 +21,7 @@ const (
 	DefaultAccentHex = "#3e63dd"
 )
 
+// AccentPresets lists curated accent hex colors offered in appearance settings.
 var AccentPresets = []string{
 	"#3e63dd", // Indigo
 	"#0d9488", // Teal
@@ -28,6 +31,7 @@ var AccentPresets = []string{
 	"#30a46c", // Green
 }
 
+// Palette holds the semantic colors and material flags for the active theme.
 type Palette struct {
 	Dark        bool
 	LiquidGlass bool
@@ -84,6 +88,7 @@ func parseAccentHex(value string) ui.Color {
 	return ui.Hex(value)
 }
 
+// HexColor formats c as a #rrggbb or #rrggbbaa hex string.
 func HexColor(c ui.Color) string {
 	if c.A != 255 {
 		return fmt.Sprintf("#%02x%02x%02x%02x", c.R, c.G, c.B, c.A)
@@ -91,6 +96,8 @@ func HexColor(c ui.Color) string {
 	return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B)
 }
 
+// ResolveTheme returns the cached *ui.Theme and computed Palette for dark mode and accentHex.
+// The returned *ui.Theme comes from an internal shared cache and must not be mutated by callers.
 func ResolveTheme(dark bool, accentHex string) (*ui.Theme, Palette) {
 	accent := parseAccentHex(accentHex)
 	key := themeCacheKey{dark: dark, accent: accent}
@@ -246,11 +253,13 @@ func accentText(accent, surface, text ui.Color) ui.Color {
 	return text
 }
 
+// NarrowWidth reports whether the viewport width of ctx is narrower than 520dp.
 func NarrowWidth(ctx *ui.Context) bool {
 	w, _ := ctx.Size()
 	return w < 520
 }
 
+// ControlHeight returns the standard interactive control height for touch or pointer input.
 func ControlHeight(touch bool) float32 {
 	if touch {
 		return 38

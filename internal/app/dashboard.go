@@ -699,7 +699,11 @@ func (d *dashboard) metricTab(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		labelColor = p.Text
 	}
 	if p.LiquidGlass && !active {
-		kit.ApplyCardShadow(kit.GlassSurface(kit.CardMotion(tab).Radius(kit.RadiusL), bg, border), p)
+		tabEl := kit.CardMotion(tab).Radius(kit.RadiusL).Background(bg)
+		if border.A > 0 {
+			tabEl.Border(1, border)
+		}
+		kit.ApplyCardShadow(tabEl, p)
 	} else {
 		cardBg := bg
 		if p.LiquidGlass && active {

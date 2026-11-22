@@ -8,82 +8,85 @@ import (
 )
 
 const (
-	MotionFastDur        = 120 * time.Millisecond
-	MotionNavDur         = 175 * time.Millisecond
-	MotionMoveDur        = 220 * time.Millisecond
-	MotionPopupOpenDur   = 180 * time.Millisecond
-	MotionPopupCloseDur  = 100 * time.Millisecond
-	MotionOptionCloseDur = 125 * time.Millisecond
-	MotionPopupDur       = 230 * time.Millisecond
-	MotionSheetDur       = 260 * time.Millisecond
-	MotionPageDur        = 180 * time.Millisecond
-	MotionUnfoldDur      = 280 * time.Millisecond
+	motionFastDur        = 120 * time.Millisecond
+	motionNavDur         = 175 * time.Millisecond
+	motionMoveDur        = 220 * time.Millisecond
+	motionPopupOpenDur   = 180 * time.Millisecond
+	motionPopupCloseDur  = 100 * time.Millisecond
+	motionOptionCloseDur = 125 * time.Millisecond
+	motionPopupDur       = 230 * time.Millisecond
+	motionSheetDur       = 260 * time.Millisecond
+	motionPageDur        = 180 * time.Millisecond
+	motionUnfoldDur      = 280 * time.Millisecond
 	rotateWindowDur      = 380 * time.Millisecond
 )
 
 var (
-	EaseStandard   = ui.CubicBezier(0.2, 0, 0, 1)
-	EaseAccelerate = ui.CubicBezier(0.4, 0, 1, 1)
+	easeStandard   = ui.CubicBezier(0.2, 0, 0, 1)
+	easeAccelerate = ui.CubicBezier(0.4, 0, 1, 1)
 
-	MotionFast         = ui.Animation{Duration: MotionFastDur, Ease: ui.EaseOut}
-	MotionNav          = ui.Animation{Duration: MotionNavDur, Ease: EaseStandard}
-	MotionChipOut      = ui.Animation{Duration: time.Nanosecond}
-	MotionChipIn       = ui.Animation{Delay: MotionOptionCloseDur, Duration: 75 * time.Millisecond, Ease: EaseStandard}
-	MotionCapsuleIn    = ui.Animation{Duration: 120 * time.Millisecond, Ease: ui.EaseOut}
-	MotionCapsuleDrag  = ui.Animation{Duration: 22 * time.Millisecond, Ease: ui.EaseOut}
-	MotionMove         = ui.Animation{Duration: MotionMoveDur, Ease: ui.EaseOut}
-	MotionLocale       = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.04}}
-	MotionPage         = ui.Animation{Duration: MotionPageDur, Ease: EaseStandard}
-	MotionRail         = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.14}}
-	MotionGlassPress   = ui.Animation{Spring: ui.SpringOptions{Duration: 115 * time.Millisecond, Bounce: 0.24}}
-	MotionGlassRelease = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0.28}}
-	MotionGlassScrub   = ui.Animation{Spring: ui.SpringOptions{Duration: 180 * time.Millisecond, Bounce: 0.22}}
-	MotionNavPanel     = ui.Animation{Spring: ui.SpringOptions{Duration: 340 * time.Millisecond, Bounce: 0.14}}
+	// MotionFast is the short micro-interaction animation for hover, press, and color fades.
+	MotionFast         = ui.Animation{Duration: motionFastDur, Ease: ui.EaseOut}
+	motionNav          = ui.Animation{Duration: motionNavDur, Ease: easeStandard}
+	motionChipOut      = ui.Animation{Duration: time.Nanosecond}
+	motionChipIn       = ui.Animation{Delay: motionOptionCloseDur, Duration: 75 * time.Millisecond, Ease: easeStandard}
+	motionCapsuleIn    = ui.Animation{Duration: 120 * time.Millisecond, Ease: ui.EaseOut}
+	motionCapsuleDrag  = ui.Animation{Duration: 22 * time.Millisecond, Ease: ui.EaseOut}
+	motionMove         = ui.Animation{Duration: motionMoveDur, Ease: ui.EaseOut}
+	motionLocale       = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.04}}
+	motionPage         = ui.Animation{Duration: motionPageDur, Ease: easeStandard}
+	motionRail         = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.14}}
+	motionGlassPress   = ui.Animation{Spring: ui.SpringOptions{Duration: 115 * time.Millisecond, Bounce: 0.24}}
+	motionGlassRelease = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0.28}}
+	motionGlassScrub   = ui.Animation{Spring: ui.SpringOptions{Duration: 180 * time.Millisecond, Bounce: 0.22}}
+	motionNavPanel     = ui.Animation{Spring: ui.SpringOptions{Duration: 340 * time.Millisecond, Bounce: 0.14}}
+	// MotionRotate is the spring animation used when elements transition across mobile orientations.
 	MotionRotate       = ui.Animation{Spring: ui.SpringOptions{Duration: 320 * time.Millisecond, Bounce: 0.04}}
-	MotionRotatePanel  = ui.Animation{Spring: ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.05}}
-	MotionSpring       = ui.Animation{Spring: ui.SpringOptions{Duration: MotionMoveDur, Bounce: 0.06}}
-	MotionOptionSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 230 * time.Millisecond, Bounce: 0.06}}
-	MotionPopup        = ui.Animation{Duration: MotionPopupOpenDur, Ease: EaseStandard}
-	MotionDialogPop    = ui.Animation{Spring: ui.SpringOptions{Duration: MotionPopupDur, Bounce: 0.06}}
-	MotionSheet        = ui.Animation{Spring: ui.SpringOptions{Duration: MotionSheetDur, Bounce: 0.04}}
+	motionRotatePanel  = ui.Animation{Spring: ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.05}}
+	motionSpring       = ui.Animation{Spring: ui.SpringOptions{Duration: motionMoveDur, Bounce: 0.06}}
+	motionOptionSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 230 * time.Millisecond, Bounce: 0.06}}
+	motionPopup        = ui.Animation{Duration: motionPopupOpenDur, Ease: easeStandard}
+	motionDialogPop    = ui.Animation{Spring: ui.SpringOptions{Duration: motionPopupDur, Bounce: 0.06}}
+	motionSheet        = ui.Animation{Spring: ui.SpringOptions{Duration: motionSheetDur, Bounce: 0.04}}
 
-	LocaleTextTransition = ui.ContentTransition{Morph: true, Animation: &MotionLocale}
-	LocaleSizeTransition = ui.ElementTransition{Position: true, Size: true, Animation: &MotionLocale}
+	localeTextTransition = ui.ContentTransition{Morph: true, Animation: &motionLocale}
+	localeSizeTransition = ui.ElementTransition{Position: true, Size: true, Animation: &motionLocale}
 
-	LayoutTransition      = ui.ElementTransition{Position: true, Size: true, Animation: &MotionMove}
+	layoutTransition = ui.ElementTransition{Position: true, Size: true, Animation: &motionMove}
+	// SideContentTransition animates content shifts beside a toggling navigation rail.
 	SideContentTransition = ui.ElementTransition{
 		Position:  true,
 		Size:      true,
-		Animation: &MotionNavPanel,
+		Animation: &motionNavPanel,
 	}
-	PopupTransition = ui.ElementTransition{
-		Duration:     MotionPopupOpenDur,
-		Ease:         EaseStandard,
-		ExitDuration: MotionPopupCloseDur,
-		ExitEase:     EaseAccelerate,
+	popupTransition = ui.ElementTransition{
+		Duration:     motionPopupOpenDur,
+		Ease:         easeStandard,
+		ExitDuration: motionPopupCloseDur,
+		ExitEase:     easeAccelerate,
 		Position:     true,
 		Enter:        &ui.Motion{Y: -2, Scale: 0.88, Flip: true},
 		Exit:         &ui.Motion{Y: -1, Scale: 0.92, Flip: true},
 	}
-	OptionPopupTransition = ui.ElementTransition{
-		Animation:    &MotionOptionSpring,
-		ExitDuration: MotionOptionCloseDur,
-		ExitEase:     EaseStandard,
+	optionPopupTransition = ui.ElementTransition{
+		Animation:    &motionOptionSpring,
+		ExitDuration: motionOptionCloseDur,
+		ExitEase:     easeStandard,
 		Enter:        &ui.Motion{Scale: 0.78, Opacity: 1},
 		Exit:         &ui.Motion{Scale: 0.88, Opacity: 0},
 	}
-	ModalTransition = ui.ElementTransition{
-		Position: true, Colors: true, Animation: &MotionDialogPop,
+	modalTransition = ui.ElementTransition{
+		Position: true, Colors: true, Animation: &motionDialogPop,
 		Enter: &ui.Motion{Y: 10, Scale: 0.94},
 		Exit:  &ui.Motion{Y: 6, Scale: 0.96},
 	}
-	SheetTransition = ui.ElementTransition{
-		Position: true, Colors: true, Animation: &MotionSheet,
+	sheetTransition = ui.ElementTransition{
+		Position: true, Colors: true, Animation: &motionSheet,
 		Enter: &ui.Motion{Y: 56},
 		Exit:  &ui.Motion{Y: 40},
 	}
-	BackdropTransition = ui.ElementTransition{
-		Animation: &MotionMove,
+	backdropTransition = ui.ElementTransition{
+		Animation: &motionMove,
 		Colors:    true,
 		Enter:     &ui.Motion{},
 		Exit:      &ui.Motion{},
@@ -122,13 +125,11 @@ func IsOrientationRotating(ctx *ui.Context) bool {
 	return readFrameMotionState(ctx).orientationRotating
 }
 
-// IsStaticSnapshot reports whether ctx is painting a static reveal snapshot.
-func IsStaticSnapshot(ctx *ui.Context) bool {
+func isStaticSnapshot(ctx *ui.Context) bool {
 	return readFrameMotionState(ctx).staticSnapshot
 }
 
-// IsScaleReflow reports whether ctx is suppressing layout transitions after a resize or inset change.
-func IsScaleReflow(ctx *ui.Context) bool {
+func isScaleReflow(ctx *ui.Context) bool {
 	return readFrameMotionState(ctx).scaleReflow
 }
 
@@ -160,20 +161,15 @@ func BeginStaticSnapshot(ctx *ui.Context) func() {
 	}
 }
 
-// GlassPressAnimation returns the spring for interactive Liquid Glass press or release.
-func GlassPressAnimation(pressed bool) ui.Animation {
+func glassPressAnimation(pressed bool) ui.Animation {
 	if pressed {
-		return MotionGlassPress
+		return motionGlassPress
 	}
-	return MotionGlassRelease
-}
-
-func PillMatchTransition(ctx *ui.Context, matchKey any) ui.ElementTransition {
-	return pillMatchTransition(ctx, matchKey, &MotionRail)
+	return motionGlassRelease
 }
 
 func pillMatchTransition(ctx *ui.Context, matchKey any, anim *ui.Animation) ui.ElementTransition {
-	if IsStaticSnapshot(ctx) {
+	if isStaticSnapshot(ctx) {
 		return ui.ElementTransition{}
 	}
 	return ui.ElementTransition{
@@ -184,7 +180,7 @@ func pillMatchTransition(ctx *ui.Context, matchKey any, anim *ui.Animation) ui.E
 
 // Desktop navigation shares one spring so its tabs and toggle stay with the panel.
 func navMatchTransition(ctx *ui.Context, matchKey any, shadows bool) ui.ElementTransition {
-	if IsStaticSnapshot(ctx) {
+	if isStaticSnapshot(ctx) {
 		return ui.ElementTransition{}
 	}
 	return ui.ElementTransition{
@@ -192,7 +188,7 @@ func navMatchTransition(ctx *ui.Context, matchKey any, shadows bool) ui.ElementT
 		Size:      true,
 		Colors:    true,
 		Shadows:   shadows,
-		Animation: &MotionNavPanel,
+		Animation: &motionNavPanel,
 		Match:     matchKey,
 		Fly:       true,
 	}
@@ -201,7 +197,7 @@ func navMatchTransition(ctx *ui.Context, matchKey any, shadows bool) ui.ElementT
 // NavRotateMatchTransition returns a matched-geometry transition for mobile
 // elements whose layout moves across portrait <-> landscape rotations while
 // snapping inset or same-orientation updates immediately.
-func NavRotateMatchTransition(ctx *ui.Context, matchKey any, shadows bool) ui.ElementTransition {
+func NavRotateMatchTransition(ctx *ui.Context, matchKey any) ui.ElementTransition {
 	fs := readFrameMotionState(ctx)
 	if fs.staticSnapshot {
 		return ui.ElementTransition{}
@@ -210,7 +206,7 @@ func NavRotateMatchTransition(ctx *ui.Context, matchKey any, shadows bool) ui.El
 		Position:  fs.orientationRotating,
 		Size:      fs.orientationRotating,
 		Colors:    true,
-		Shadows:   shadows,
+		Shadows:   false,
 		Animation: &MotionRotate,
 		Match:     matchKey,
 		Fly:       true,
@@ -248,13 +244,6 @@ func ApplyRotateEnterPose(ctx *ui.Context, el ui.Element, key any, start ui.Pose
 		ctx.After(time.Millisecond)
 	}
 	return el.AnimatePose(pose, anim)
-}
-
-func LayoutAnimation(ctx *ui.Context, animation ui.Animation) ui.Animation {
-	if IsScaleReflow(ctx) {
-		return ui.Animation{Duration: time.Nanosecond}
-	}
-	return animation
 }
 
 // BeginFrame prepares the overlay tree, enables matched orientation transitions
@@ -296,7 +285,7 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 			case sameSideSettling:
 				// Preserve ongoing rotation springs if Android finishes bar/cutout sizing a frame later.
 			default:
-				state.until = now.Add(MotionUnfoldDur)
+				state.until = now.Add(motionUnfoldDur)
 				state.rotateUntil = time.Time{}
 			}
 		case mobile && (state.top != top || state.right != right || state.bottom != bottom || state.left != left):
@@ -330,6 +319,7 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	}
 }
 
+// NavigationPageMotion attaches a directional entrance transition for page switches.
 func NavigationPageMotion(el ui.Element, horizontal bool, direction int) ui.Element {
 	if direction == 0 {
 		direction = 1
@@ -341,47 +331,50 @@ func NavigationPageMotion(el ui.Element, horizontal bool, direction int) ui.Elem
 		enter.Y = float32(direction * 10)
 	}
 	return el.Transition(ui.ElementTransition{
-		Position: true, Animation: &MotionPage, Enter: enter,
+		Position: true, Animation: &motionPage, Enter: enter,
 	})
 }
 
+// AnimatedLabel renders a text element that morphs smoothly across locale changes.
 func AnimatedLabel(ctx *ui.Context, text string) ui.Element {
-	return ui.Text(ctx, text).ContentTransition(LocaleTextTransition)
+	return ui.Text(ctx, text).ContentTransition(localeTextTransition)
 }
 
+// ControlMotion attaches layout transitions to text-bearing interactive controls.
 func ControlMotion(el ui.Element) ui.Element {
 	// Avoid Pose{Scale} on text-bearing controls so mygo glyph rasterization does not re-bucket fonts mid-press.
-	return el.Transition(LayoutTransition)
+	return el.Transition(layoutTransition)
 }
 
+// CardMotion applies a subtle hover lift animation to interactive cards.
 func CardMotion(el ui.Element) ui.Element {
 	pose := ui.Pose{}
 	if el.Hovered() && !el.IsDisabled() && !el.Pressed() {
 		pose.Y = -1
 	}
-	return el.TransformOrigin(0.5, 0.5).AnimatePose(pose, MotionSpring)
+	return el.TransformOrigin(0.5, 0.5).AnimatePose(pose, motionSpring)
 }
 
-func PopupMotion(el ui.Element) ui.Element {
-	return el.AttachedOrigin().Transition(PopupTransition)
+func popupMotion(el ui.Element) {
+	el.AttachedOrigin().Transition(popupTransition)
 }
 
-func OptionMenuMotion(el ui.Element) ui.Element {
-	return el.AttachedOrigin().Transition(OptionPopupTransition)
+func optionMenuMotion(el ui.Element) ui.Element {
+	return el.AttachedOrigin().Transition(optionPopupTransition)
 }
 
-func ModalMotion(el ui.Element) ui.Element {
-	return el.TransformOrigin(0.5, 0.5).Transition(ModalTransition)
+func modalMotion(el ui.Element) ui.Element {
+	return el.TransformOrigin(0.5, 0.5).Transition(modalTransition)
 }
 
-func SheetMotion(el ui.Element) ui.Element {
-	return el.TransformOrigin(0.5, 1).Transition(SheetTransition)
+func sheetMotion(el ui.Element) ui.Element {
+	return el.TransformOrigin(0.5, 1).Transition(sheetTransition)
 }
 
-func BackdropMotion(el ui.Element, p Palette) ui.Element {
+func backdropMotion(el ui.Element, p Palette) ui.Element {
 	bg := p.Backdrop
 	if p.LiquidGlass {
 		bg = ui.RGBA(8, 10, 14, .24)
 	}
-	return el.Background(bg).Transition(BackdropTransition)
+	return el.Background(bg).Transition(backdropTransition)
 }

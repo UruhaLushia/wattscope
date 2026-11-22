@@ -5,11 +5,12 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// CanvasBackdrop sets the themed page canvas background on el.
 func CanvasBackdrop(el ui.Element, p Palette) ui.Element {
 	return el.Background(p.Canvas)
 }
 
-func GlassSurface(el ui.Element, fallbackBg, fallbackBorder ui.Color) ui.Element {
+func glassSurface(el ui.Element, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	el.Background(fallbackBg)
 	if fallbackBorder.A > 0 {
 		el.Border(1, fallbackBorder)
@@ -17,62 +18,65 @@ func GlassSurface(el ui.Element, fallbackBg, fallbackBorder ui.Color) ui.Element
 	return el
 }
 
-func GlassPanel(el ui.Element, p Palette, radius float32, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	return ApplyCardShadow(GlassSurface(el.Radius(radius), fallbackBg, fallbackBorder), p)
+// GlassPanel styles el as a themed surface panel with rounded corners and card shadow.
+func GlassPanel(el ui.Element, p Palette, radius float32) ui.Element {
+	return ApplyCardShadow(glassSurface(el.Radius(radius), p.Surface, p.LineSoft), p)
 }
 
-func GlassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	return glassFloating(ctx, el, p, radius, clarity, tint, interactive, true, fallbackBg, fallbackBorder)
+func glassFloatingEl(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, interactive bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
+	return glassFloating(ctx, el, p, radius, clarity, interactive, true, fallbackBg, fallbackBorder)
 }
 
-func glassFloatingUnclipped(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	return glassFloating(ctx, el, p, radius, clarity, tint, false, false, fallbackBg, fallbackBorder)
+func glassFloatingUnclipped(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, fallbackBg, fallbackBorder ui.Color) ui.Element {
+	return glassFloating(ctx, el, p, radius, clarity, false, false, fallbackBg, fallbackBorder)
 }
 
-func glassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive, clip bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
+func glassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, interactive, clip bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	el.Radius(radius)
 	if clip && (!p.LiquidGlass || !interactive) {
 		el.Clip()
 	}
 	if p.LiquidGlass {
-		snap := IsStaticSnapshot(ctx)
-		base := glass.Glass{Tint: tint, Clarity: clarity}
+		snap := isStaticSnapshot(ctx)
+		base := glass.Glass{Clarity: clarity}
 		if interactive {
 			return el.Material(trackGlassInteraction(el, snap).material(base, snap))
 		}
 		return el.Material(staticGlass{base: base, staticSnapshot: snap})
 	}
-	return GlassSurface(el, fallbackBg, fallbackBorder)
+	return glassSurface(el, fallbackBg, fallbackBorder)
 }
 
-func GlassFloatingButton(ctx *ui.Context, el ui.Element, p Palette, radius float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
+// GlassFloatingButton attaches interactive Liquid Glass optics and press spring scaling onto floating button el.
+func GlassFloatingButton(ctx *ui.Context, el ui.Element, p Palette, radius float32, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	if !p.LiquidGlass {
-		return GlassFloating(ctx, el, p, radius, 0, tint, false, fallbackBg, fallbackBorder)
+		return glassFloatingEl(ctx, el, p, radius, 0, false, fallbackBg, fallbackBorder)
 	}
-	snap := IsStaticSnapshot(ctx)
+	snap := isStaticSnapshot(ctx)
 	state := trackGlassInteraction(el, snap)
 	if !snap {
-		anim := MotionGlassRelease
+		anim := motionGlassRelease
 		if el.Pressed() && !el.IsDisabled() {
-			anim = MotionGlassPress
+			anim = motionGlassPress
 		}
 		scale := 1 + 0.18*clamp32(state.elastic, -0.15, 1.25)
 		el.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: scale}, anim)
 	}
 	return el.Radius(radius).Material(interactiveGlass{
-		base:             glass.Glass{Tint: tint},
+		base:             glass.Glass{},
 		glassInteraction: state,
 		staticSnapshot:   snap,
 	})
 }
 
-func GlassBarChrome(el ui.Element, p Palette, fallbackBg, fallbackBorder ui.Color) ui.Element {
+// GlassBarChrome applies the non-glass header background and bottom border to el when LiquidGlass is disabled.
+func GlassBarChrome(el ui.Element, p Palette) ui.Element {
 	if p.LiquidGlass {
 		return el
 	}
-	el.Background(fallbackBg)
-	if fallbackBorder.A > 0 {
-		el.BorderWidth(0, 0, 1, 0).BorderColor(fallbackBorder)
+	el.Background(p.Surface)
+	if p.LineSoft.A > 0 {
+		el.BorderWidth(0, 0, 1, 0).BorderColor(p.LineSoft)
 	}
 	return el
 }
@@ -82,6 +86,7 @@ var glassScrollBlur = glass.Blur{
 	Mask:   &ui.LinearGradient{From: ui.RGB(0, 0, 0), To: ui.Transparent, Angle: 180},
 }
 
+// GlassScrollEdge renders a soft top backdrop-blur fade overlay under floating chrome.
 func GlassScrollEdge(ctx *ui.Context, p Palette, offset, height float32, zIndex int) {
 	if !p.LiquidGlass || height <= 0 {
 		return
@@ -105,6 +110,7 @@ func glassNeutral(dark bool, lightAlpha, darkAlpha float32) ui.Color {
 	return ui.RGBA(15, 23, 42, lightAlpha)
 }
 
+// GlassAccentTint returns a theme-appropriate translucent accent tint color.
 func GlassAccentTint(p Palette, lightAlpha, darkAlpha float32) ui.Color {
 	if p.Dark {
 		return p.Accent.Alpha(darkAlpha)

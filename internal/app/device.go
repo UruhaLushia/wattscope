@@ -73,7 +73,7 @@ func (d *dashboard) deviceSwitcherPopover(ctx *ui.Context, p kit.Palette, msgs l
 	_, height := ctx.Size()
 	topInset, _, bottomInset, _ := ctx.SafeArea()
 	maxH := max(140, min(height-topInset-bottomInset-84, max(220, height*0.65)))
-	kit.Popover(ctx, p, anchor, &d.deviceMenuOpen, func(panel ui.Element) {
+	kit.Popover(ctx, p, &d.deviceMenuOpen, anchor, func(panel ui.Element) {
 		panel.Width(288).MaxWidthPercent(92).MaxHeight(maxH).Padding(12).Gap(8)
 		panel.Children(func() {
 			d.deviceSwitcherContent(ctx, p, msgs, touch)
@@ -299,13 +299,19 @@ func (d *dashboard) connectionLogPage(ctx *ui.Context, p kit.Palette, msgs local
 					kit.Badge(ctx, p, msgs.GuiItemsCount(len(entries)), kit.TonePlain)
 				})
 				ui.Spacer(ctx)
-				trigger := kit.MenuButton(ctx.Key("log-level"), p, d.menuOpen("log-level"),
-					msgs.LogLevelFilter(msgs.DiagnosticLevel(d.logLevel)), kit.IconFilter, kit.VariantSecondary, touch, items)
+				trigger := kit.MenuButton(ctx.Key("log-level"), p, kit.MenuButtonOptions{
+					Open:    d.menuOpen("log-level"),
+					Variant: kit.VariantSecondary,
+					Icon:    kit.IconFilter,
+					Label:   msgs.LogLevelFilter(msgs.DiagnosticLevel(d.logLevel)),
+					Touch:   touch,
+					Items:   items,
+				})
 				if !touch {
 					trigger.Height(28)
 				}
 			})
-			card := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(0).Padding(0, 16), p, kit.RadiusL, p.Surface, p.LineSoft)
+			card := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(0).Padding(0, 16), p, kit.RadiusL)
 			if len(entries) > 0 {
 				card.Grow(1)
 			}
@@ -403,7 +409,7 @@ func (d *dashboard) connectionLogRow(ctx *ui.Context, p kit.Palette, msgs locale
 			}
 			ui.Text(ctx, text.timestamp).FontSize(11).FontFeatures("tnum").TextColor(p.Muted).SingleLine()
 			ui.Spacer(ctx)
-			copyBtn := kit.IconActionButton(ctx.Key("copy"), p, kit.IconCopy, msgs.LogCopyEntry(), copySize, false, func() {
+			copyBtn := kit.IconActionButton(ctx.Key("copy"), p, kit.IconCopy, msgs.LogCopyEntry(), copySize, func() {
 				d.copyText(ctx, msgs, text.clipboardText())
 			})
 			if !touch && !copyBtn.Hovered() && !copyBtn.Pressed() && !copyBtn.FocusVisible() {

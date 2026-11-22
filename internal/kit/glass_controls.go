@@ -35,7 +35,7 @@ func trackGlassInteraction(owner ui.Element, staticSnapshot bool) glassInteracti
 	if enabled && owner.Hovered() {
 		hoverTarget = 1
 	}
-	press := owner.Spring(glassPressKey{}, target, GlassPressAnimation(pressed).Spring)
+	press := owner.Spring(glassPressKey{}, target, glassPressAnimation(pressed).Spring)
 	return glassInteraction{
 		elastic: clamp32(press, -0.24, 1.38),
 		glow:    clamp32(press, 0, 1.38),
@@ -76,19 +76,17 @@ func (g staticGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32)
 	})
 }
 
-// GlassIconPop gives SVG icons inside Liquid Glass controls a spring pop on
-// press while keeping neighboring text labels unscaled for sharp glyphs.
-func GlassIconPop(ctx *ui.Context, iconEl ui.Element, p Palette, amount float32) ui.Element {
-	if !p.LiquidGlass || iconEl == (ui.Element{}) || IsStaticSnapshot(ctx) {
-		return iconEl
+func glassIconPop(ctx *ui.Context, iconEl ui.Element, p Palette, amount float32) {
+	if !p.LiquidGlass || iconEl == (ui.Element{}) || isStaticSnapshot(ctx) {
+		return
 	}
 	target := float32(1)
-	anim := MotionGlassRelease
+	anim := motionGlassRelease
 	if amount > 0 {
 		target = 1 + 0.14*clamp32(amount, 0, 1.25)
-		anim = MotionGlassPress
+		anim = motionGlassPress
 	}
-	return iconEl.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: target}, anim)
+	iconEl.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: target}, anim)
 }
 
 type dockGlass struct {
@@ -142,14 +140,33 @@ func (g interactiveGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]flo
 	})
 }
 
+// GlassPillOptions configures the backing pill surface and Liquid Glass lens for GlassPillControl.
+type GlassPillOptions struct {
+	Radius             float32
+	Tint               ui.Color
+	VisibleAtRest      bool
+	FallbackBackground ui.Color
+	BorderWidth        float32
+	FallbackBorder     ui.Color
+	PressScale         float32
+}
+
 // GlassPillControl attaches a press-expanding Liquid Glass pill backing onto owner.
-func GlassPillControl(ctx *ui.Context, owner ui.Element, p Palette, radius float32, tint ui.Color, visibleAtRest bool, fallbackBg ui.Color, borderW float32, fallbackBorder ui.Color, pressScale float32) {
+func GlassPillControl(ctx *ui.Context, owner ui.Element, p Palette, opts GlassPillOptions) {
+	radius := opts.Radius
+	tint := opts.Tint
+	visibleAtRest := opts.VisibleAtRest
+	fallbackBg := opts.FallbackBackground
+	borderW := opts.BorderWidth
+	fallbackBorder := opts.FallbackBorder
+	pressScale := opts.PressScale
+
 	if !p.LiquidGlass {
-		PillSurface(ctx, owner, radius, fallbackBg, borderW, fallbackBorder, pressScale)
+		pillSurface(ctx, owner, radius, fallbackBg, borderW, fallbackBorder, pressScale)
 		return
 	}
 
-	interaction := trackGlassInteraction(owner, IsStaticSnapshot(ctx))
+	interaction := trackGlassInteraction(owner, isStaticSnapshot(ctx))
 	elastic, glow, hover := interaction.elastic, interaction.glow, interaction.hover
 	surface := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).PassThrough()
 
@@ -178,6 +195,7 @@ func GlassPillControl(ctx *ui.Context, owner ui.Element, p Palette, radius float
 	if glassTint.A == 0 && fallbackBg.A > 0 {
 		glassTint = scaleAlpha(fallbackBg, 0.42)
 	}
+	touch := interaction.touch
 	surface.Children(func() {
 		attachLiquidLens(ctx, "glass-lens", radius, active, func(r ui.Rect) (float32, float32) {
 			if subtle {
@@ -193,17 +211,15 @@ func GlassPillControl(ctx *ui.Context, owner ui.Element, p Palette, radius float
 			Hover:      hover,
 			Zoom:       1 + 0.18*clamp32(glow, 0, 1.15),
 			ClearLens:  !subtle && glassTint.A == 0,
-			Touch:      interaction.touch,
+			Touch:      touch,
 		})
 	})
 }
 
-// GlassSelectionPill renders the active tab or segment indicator pill with
-// Liquid Glass bloom, bezel refraction, and touch-point highlight on press.
-func GlassSelectionPill(ctx *ui.Context, owner ui.Element, p Palette, radius float32, restBg ui.Color, matchKey any, showShadow bool) {
+func glassSelectionPill(ctx *ui.Context, owner ui.Element, p Palette, radius float32, restBg ui.Color, matchKey any, showShadow bool) {
 	if !p.LiquidGlass {
 		pillBg := restBg
-		pillPose, pillAnim := ui.Pose{}, MotionRail
+		pillPose, pillAnim := ui.Pose{}, motionRail
 		if owner.Pressed() {
 			pillBg = restBg.Mix(p.Text, 0.10)
 			pillPose.Scale = 0.96
@@ -212,21 +228,21 @@ func GlassSelectionPill(ctx *ui.Context, owner ui.Element, p Palette, radius flo
 		pill := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).
 			TransformOrigin(0.5, 0.5).AnimatePose(pillPose, pillAnim).
 			Background(owner.AnimateColor("sp-bg", pillBg, MotionFast)).PassThrough().
-			Transition(PillMatchTransition(ctx, matchKey))
+			Transition(pillMatchTransition(ctx, matchKey, &motionRail))
 		if showShadow && p.CardShadow.A > 0 && !owner.Pressed() {
 			pill.Shadow(0, 1, 2, 0, p.CardShadow)
 		}
 		return
 	}
 
-	interaction := trackGlassInteraction(owner, IsStaticSnapshot(ctx))
+	interaction := trackGlassInteraction(owner, isStaticSnapshot(ctx))
 	elastic, glow, hover := interaction.elastic, interaction.glow, interaction.hover
 	lensMix := clamp32(glow, 0, 1)
 	bg := scaleAlpha(restBg, 1-0.68*lensMix)
 
 	pill := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).
 		Background(owner.AnimateColor("sp-bg", bg, MotionFast)).PassThrough().
-		Transition(pillMatchTransition(ctx, matchKey, &MotionGlassScrub))
+		Transition(pillMatchTransition(ctx, matchKey, &motionGlassScrub))
 
 	if showShadow && p.CardShadow.A > 0 && lensMix < 0.5 {
 		pill.Shadow(0, 1, 2, 0, scaleAlpha(p.CardShadow, 1-lensMix))

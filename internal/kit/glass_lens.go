@@ -29,7 +29,7 @@ func expandGlass(box ui.Rect, dx, dy float32) ui.Rect {
 // attachLiquidLens renders an edge-refracting, backdrop-transparent lens box.
 func attachLiquidLens(ctx *ui.Context, key string, radius, opacity float32, expand func(ui.Rect) (dx, dy float32), spec liquidLensSpec) {
 	a := clamp32(opacity, 0, 1)
-	if a <= 0.005 || IsStaticSnapshot(ctx) {
+	if a <= 0.005 || isStaticSnapshot(ctx) {
 		return
 	}
 	spec.Alpha = a

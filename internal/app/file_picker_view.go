@@ -114,11 +114,11 @@ func (v *filePickerViewState) draw(ctx *ui.Context, p kit.Palette, msgs locales.
 
 func (v *filePickerViewState) navigation(ctx *ui.Context, p kit.Palette, msgs locales.Messages, data *filePickerData, actions filePickerActions) {
 	ui.Row(ctx).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
-		kit.IconActionButton(ctx.Key("picker-back"), p, kit.IconArrowLeft, msgs.GuiBack(), 34, false, actions.Back).
+		kit.IconActionButton(ctx.Key("picker-back"), p, kit.IconArrowLeft, msgs.GuiBack(), 34, actions.Back).
 			Disabled(data.Saving || !data.CanBack)
-		kit.IconActionButton(ctx.Key("picker-forward"), p, kit.IconArrowRight, msgs.GuiForward(), 34, false, actions.Forward).
+		kit.IconActionButton(ctx.Key("picker-forward"), p, kit.IconArrowRight, msgs.GuiForward(), 34, actions.Forward).
 			Disabled(data.Saving || !data.CanForward)
-		kit.IconActionButton(ctx.Key("picker-up"), p, kit.IconArrowUp, msgs.GuiUp(), 34, false, func() {
+		kit.IconActionButton(ctx.Key("picker-up"), p, kit.IconArrowUp, msgs.GuiUp(), 34, func() {
 			actions.Navigate(filepath.Dir(data.Current))
 		}).Disabled(data.Saving || data.Current == "" || filepath.Dir(data.Current) == data.Current)
 
@@ -127,12 +127,12 @@ func (v *filePickerViewState) navigation(ctx *ui.Context, p kit.Palette, msgs lo
 				Height(34).Radius(kit.RadiusS).Grow(1).MinWidth(0).
 				Disabled(data.Saving).
 				OnSubmit(func() { actions.Navigate(v.address) })
-			kit.IconActionButton(ctx.Key("picker-go"), p, kit.IconArrowRight, msgs.GuiGo(), 34, false, func() {
+			kit.IconActionButton(ctx.Key("picker-go"), p, kit.IconArrowRight, msgs.GuiGo(), 34, func() {
 				actions.Navigate(v.address)
 			}).Disabled(data.Saving || strings.TrimSpace(v.address) == "")
 		} else {
 			v.breadcrumbs(ctx, p, data, actions)
-			kit.IconActionButton(ctx.Key("picker-edit-path"), p, kit.IconEdit, msgs.GuiEditPath(), 34, false, func() {
+			kit.IconActionButton(ctx.Key("picker-edit-path"), p, kit.IconEdit, msgs.GuiEditPath(), 34, func() {
 				v.editAddress(ctx, data)
 			}).Disabled(data.Saving)
 		}
@@ -313,7 +313,7 @@ func (v *filePickerViewState) footer(ctx *ui.Context, p kit.Palette, msgs locale
 				kit.ActionButton(ctx.Key("picker-create-folder"), p, kit.VariantSecondary, nil, msgs.GuiCreate(), false, func() {
 					actions.Create(v.newFolder)
 				}).Disabled(data.Loading || data.Saving || strings.TrimSpace(v.newFolder) == "")
-				kit.IconActionButton(ctx.Key("picker-cancel-folder"), p, kit.IconClose, msgs.GuiCancel(), 34, false, func() {
+				kit.IconActionButton(ctx.Key("picker-cancel-folder"), p, kit.IconClose, msgs.GuiCancel(), 34, func() {
 					v.creating = false
 					data.Error = ""
 				})

@@ -46,13 +46,18 @@ func (d *dashboard) islandSettings(ctx *ui.Context, p kit.Palette, msgs locales.
 		}
 		kit.Divider(ctx, p)
 		current := d.settings.IslandLeft
-		kit.OptionRow(ctx.Key("opt-island-left"), p, d.menuOpen("island-left"), kit.IconActivity,
-			msgs.GuiIslandLeft(), optionLabel(options, current), touch,
-			optionMenuItems(options, current, func(value string) {
+		kit.OptionRow(ctx.Key("opt-island-left"), p, kit.OptionRowOptions{
+			Open:  d.menuOpen("island-left"),
+			Icon:  kit.IconActivity,
+			Label: msgs.GuiIslandLeft(),
+			Value: optionLabel(options, current),
+			Touch: touch,
+			Items: optionMenuItems(options, current, func(value string) {
 				d.settings.IslandLeft = value
 				d.syncIslandDisplay()
 				d.saveSettings()
-			}))
+			}),
+		})
 	})
 }
 

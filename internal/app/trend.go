@@ -216,7 +216,7 @@ func (d *dashboard) chartCard(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		if fillHeight {
 			col.FillHeight().MinHeight(0)
 		}
-		c = kit.GlassPanel(col, p, kit.RadiusL, p.Surface, p.LineSoft).Grow(1).Basis(opts.basis).MinWidth(opts.minW)
+		c = kit.GlassPanel(col, p, kit.RadiusL).Grow(1).Basis(opts.basis).MinWidth(opts.minW)
 		if opts.landscape && d.mobile && !d.snapshotOnly {
 			kit.ApplyRotateEnterPose(ctx, c.TransformOrigin(0.5, 0.5), "rot-ov-chart", ui.Pose{X: 12, Scale: 0.965, Fade: 0.55}, kit.MotionRotate)
 		}
@@ -462,7 +462,7 @@ func (d *dashboard) sessionSummaryCard(ctx *ui.Context, p kit.Palette, msgs loca
 				ui.Spacer(ctx).MinWidth(0)
 				if stats.Samples > 0 {
 					if opts.cardW < 236 {
-						kit.IconActionButton(ctx.Key(opts.clearKey), p, kit.IconTrash, msgs.ActionClear(), 24, false, d.clearSession)
+						kit.IconActionButton(ctx.Key(opts.clearKey), p, kit.IconTrash, msgs.ActionClear(), 24, d.clearSession)
 					} else {
 						kit.ActionButton(ctx.Key(opts.clearKey), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), opts.touch, d.clearSession).
 							Height(24).Padding(0, 6)
@@ -505,7 +505,7 @@ func (d *dashboard) sessionSummaryCard(ctx *ui.Context, p kit.Palette, msgs loca
 				{Label: msgs.GuiDuration(), Value: durVal, Unit: durUnit},
 			}
 		}
-		kit.MetricSummaryRow(ctx, p, items[:], opts.compact, !opts.compact)
+		kit.MetricSummaryRow(ctx, p, items[:], kit.MetricSummaryOptions{Compact: opts.compact, Wrap: !opts.compact})
 	})
 }
 
@@ -562,11 +562,11 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 			switch {
 			case compactGrid && n > 2:
 				ui.Column(ctx).FillWidth().Gap(10).Children(func() {
-					kit.MetricSummaryRow(ctx, p, items[:2], false, false)
-					kit.MetricSummaryRow(ctx, p, items[2:n], false, false)
+					kit.MetricSummaryRow(ctx, p, items[:2], kit.MetricSummaryOptions{})
+					kit.MetricSummaryRow(ctx, p, items[2:n], kit.MetricSummaryOptions{})
 				})
 			case n > 0:
-				kit.MetricSummaryRow(ctx, p, items[:n], false, false)
+				kit.MetricSummaryRow(ctx, p, items[:n], kit.MetricSummaryOptions{})
 			}
 		} else if live.Device.Name != "" {
 			ui.Text(ctx, live.Device.Name).FontSize(12).TextColor(p.Muted)
@@ -802,7 +802,15 @@ func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.
 				chipTint = tone.Alpha(0.13)
 			}
 			kit.ControlMotion(chip).Children(func() {
-				kit.GlassPillControl(ctx.Key("bg"), chip, p, kit.RadiusFull, chipTint, primary || enabled, bg, 1, bd, 0.96)
+				kit.GlassPillControl(ctx.Key("bg"), chip, p, kit.GlassPillOptions{
+					Radius:             kit.RadiusFull,
+					Tint:               chipTint,
+					VisibleAtRest:      primary || enabled,
+					FallbackBackground: bg,
+					BorderWidth:        1,
+					FallbackBorder:     bd,
+					PressScale:         0.96,
+				})
 				kit.StatusDot(ctx, dot, 6)
 				ui.Text(ctx, label).FontSize(11).FontWeight(weight).TextColor(fg).SingleLine()
 			})

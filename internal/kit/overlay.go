@@ -7,6 +7,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// MenuItem describes one selectable entry inside MenuButton, OptionRow, or context menus.
 type MenuItem struct {
 	Value    string
 	Label    string
@@ -20,8 +21,8 @@ type MenuItem struct {
 	OnSelect func()
 }
 
-func SurfaceChrome(ctx *ui.Context, el ui.Element, p Palette, radius float32) ui.Element {
-	return GlassFloating(ctx, el, p, radius, 0.1, ui.Color{}, false, p.Surface, p.Line.Mix(p.Text, 0.08)).
+func surfaceChrome(ctx *ui.Context, el ui.Element, p Palette, radius float32) {
+	glassFloatingEl(ctx, el, p, radius, 0.1, false, p.Surface, p.Line.Mix(p.Text, 0.08)).
 		Shadow(0, 10, 28, 0, p.Shadow)
 }
 
@@ -31,7 +32,7 @@ func animatedChevron(ctx *ui.Context, open bool, color ui.Color, size float32) {
 		angle = 180
 	}
 	chev := ui.Box(ctx).Shrink(0).Center().TransformOrigin(0.5, 0.5)
-	progress := chev.AnimateTo("chev-rot", angle, MotionPopup)
+	progress := chev.AnimateTo("chev-rot", angle, motionPopup)
 	chev.Rotate(progress).Children(func() {
 		ui.Icon(ctx, IconChevronDown).FontSize(size).TextColor(color)
 	})
@@ -141,13 +142,13 @@ func styleMenuRow(ctx *ui.Context, p Palette, row ui.Element, entry MenuItem, fo
 	})
 }
 
-func MenuPopup(ctx *ui.Context, p Palette, menu ui.MenuParts, anchor ui.Element, touch bool, items []MenuItem) {
+func menuPopup(ctx *ui.Context, p Palette, menu ui.MenuParts, anchor ui.Element, touch bool, items []MenuItem) {
 	menu.Popup(func(panel ui.Element) {
 		panelW := adaptiveMenuWidth(ctx, items, touch, false)
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0).
 			Scrollbars(false).Width(panelW).Padding(6).Gap(2)
-		PopupMotion(panel)
-		SurfaceChrome(ctx, panel, p, RadiusXL)
+		popupMotion(panel)
+		surfaceChrome(ctx, panel, p, RadiusXL)
 
 		itemMinH, fontSize, padY, padX := menuItemMetrics(touch, false)
 		for i, item := range items {
@@ -167,7 +168,7 @@ func MenuPopup(ctx *ui.Context, p Palette, menu ui.MenuParts, anchor ui.Element,
 			}
 			styleMenuRow(ctx, p, row, entry, fontSize, itemMinH, padY, padX, row.Highlighted(), false)
 			if row.Clicked() && entry.OnSelect != nil {
-				RecordClickOrigin(row)
+				recordClickOrigin(row)
 				entry.OnSelect()
 			}
 		}
@@ -179,8 +180,8 @@ func optionMenuPopup(ctx *ui.Context, p Palette, trigger ui.Element, open *bool,
 		panelW := adaptiveMenuWidth(ctx, items, false, true)
 		panel.AttachTo(trigger, ui.AnchorTopEnd, ui.AnchorTopEnd).Margin(-topInset-3, -formGroupInset-3, 0, 0).
 			Scrollbars(false).Width(panelW).Padding(5, 6).Gap(1)
-		SurfaceChrome(ctx, panel, p, RadiusXL)
-		OptionMenuMotion(panel)
+		surfaceChrome(ctx, panel, p, RadiusXL)
+		optionMenuMotion(panel)
 
 		itemMinH, fontSize, padY, padX := menuItemMetrics(false, true)
 		for i, item := range items {
@@ -189,7 +190,7 @@ func optionMenuPopup(ctx *ui.Context, p Palette, trigger ui.Element, open *bool,
 			styleMenuRow(ctx, p, row, entry, fontSize, itemMinH, padY, padX, row.Hovered() || row.FocusVisible(), true)
 			row.OnClick(func() {
 				if entry.OnSelect != nil {
-					RecordClickOrigin(row)
+					recordClickOrigin(row)
 					entry.OnSelect()
 				}
 				if !entry.KeepOpen {
@@ -201,16 +202,36 @@ func optionMenuPopup(ctx *ui.Context, p Palette, trigger ui.Element, open *bool,
 	})
 }
 
-func MenuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.SVG, variant ButtonVariant, touch bool, items []MenuItem) ui.Element {
-	return menuButton(ctx, p, open, label, icon, 0, variant, touch, items, false)
+// MenuButtonOptions configures MenuButton trigger appearance, popup state, and items.
+type MenuButtonOptions struct {
+	Open     *bool
+	Variant  ButtonVariant
+	Icon     *ui.SVG
+	Label    string
+	Touch    bool
+	IconOnly bool
+	Size     float32
+	Items    []MenuItem
 }
 
-// IconMenuButton renders a compact square/pill icon-only menu trigger without text or chevron.
-func IconMenuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.SVG, size float32, variant ButtonVariant, touch bool, items []MenuItem) ui.Element {
-	return menuButton(ctx, p, open, label, icon, size, variant, touch, items, true)
-}
+// MenuButton renders a trigger button attached to an anchored dropdown MenuItem popup.
+func MenuButton(ctx *ui.Context, p Palette, opts MenuButtonOptions) ui.Element {
+	open := opts.Open
+	variant := opts.Variant
+	icon := opts.Icon
+	label := opts.Label
+	touch := opts.Touch
+	iconOnly := opts.IconOnly
+	size := opts.Size
+	items := opts.Items
+	if open == nil {
+		var scratch bool
+		open = &scratch
+	}
+	if iconOnly && size <= 0 {
+		size = ControlHeight(touch)
+	}
 
-func menuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.SVG, size float32, variant ButtonVariant, touch bool, items []MenuItem, iconOnly bool) ui.Element {
 	btnRadius := PillRadius(p, RadiusM)
 	menu := ui.MenuBase(ctx, open)
 	trigger := menu.Trigger.Shrink(0).Radius(btnRadius).AlignItems(ui.Center).Justify(ui.Center).Label(label)
@@ -228,8 +249,17 @@ func menuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.S
 	if menu.Open() && variant != VariantPrimary {
 		chevColor = ink
 	}
+	menuOpen := menu.Open()
 	ControlMotion(trigger).Children(func() {
-		GlassPillControl(ctx.Key("bg"), trigger, p, btnRadius, glassTint, visibleAtRest, bg, borderW, border, 0.96)
+		GlassPillControl(ctx.Key("bg"), trigger, p, GlassPillOptions{
+			Radius:             btnRadius,
+			Tint:               glassTint,
+			VisibleAtRest:      visibleAtRest,
+			FallbackBackground: bg,
+			BorderWidth:        borderW,
+			FallbackBorder:     border,
+			PressScale:         0.96,
+		})
 		if icon != nil {
 			iconSize := float32(14)
 			if iconOnly {
@@ -241,14 +271,32 @@ func menuButton(ctx *ui.Context, p Palette, open *bool, label string, icon *ui.S
 			if label != "" {
 				AnimatedLabel(ctx, label).FontSize(13).FontWeight(weight).TextColor(ink).SingleLine().Shrink(0)
 			}
-			animatedChevron(ctx, menu.Open(), chevColor, 14)
+			animatedChevron(ctx, menuOpen, chevColor, 14)
 		}
 	})
-	MenuPopup(ctx, p, menu, trigger, touch, items)
+	menuPopup(ctx, p, menu, trigger, touch, items)
 	return trigger
 }
 
-func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, value string, touch bool, items []MenuItem) {
+// OptionRowOptions configures OptionRow label, current value chip, and popup choices.
+type OptionRowOptions struct {
+	Open  *bool
+	Icon  *ui.SVG
+	Label string
+	Value string
+	Touch bool
+	Items []MenuItem
+}
+
+// OptionRow renders a settings row with a clickable value chip that opens an option menu popup.
+func OptionRow(ctx *ui.Context, p Palette, opts OptionRowOptions) {
+	open := opts.Open
+	icon := opts.Icon
+	label := opts.Label
+	value := opts.Value
+	touch := opts.Touch
+	items := opts.Items
+
 	if open == nil {
 		var scratch bool
 		open = &scratch
@@ -258,7 +306,7 @@ func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, valu
 		minH, padY, labelSize, valueSize = 52, 10, 14, 14
 	}
 	row := ui.Row(ctx).FillWidth().MinHeight(minH).Padding(padY, 0).Gap(12).
-		AlignItems(ui.Center).Justify(ui.SpaceBetween).Transition(LocaleSizeTransition)
+		AlignItems(ui.Center).Justify(ui.SpaceBetween).Transition(localeSizeTransition)
 
 	var trigger ui.Element
 	row.Children(func() {
@@ -269,11 +317,11 @@ func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, valu
 			AnimatedLabel(ctx, label).FontSize(labelSize).FontWeight(550).SingleLine()
 		})
 
-		targetAlpha, chipAnim := float32(1), MotionChipIn
+		targetAlpha, chipAnim := float32(1), motionChipIn
 		if *open {
-			targetAlpha, chipAnim = 0, MotionChipOut
+			targetAlpha, chipAnim = 0, motionChipOut
 		}
-		chipWrap := ui.Box(ctx.Key("slot")).Shrink(0).Transition(LocaleSizeTransition)
+		chipWrap := ui.Box(ctx.Key("slot")).Shrink(0).Transition(localeSizeTransition)
 		chipOpacity := chipWrap.AnimateTo("koc-a", targetAlpha, chipAnim)
 		chipWrap.Opacity(min(chipOpacity, targetAlpha)).Children(func() {
 			chipRadius := PillRadius(p, RadiusM+2)
@@ -300,7 +348,13 @@ func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, valu
 
 			chipBg := InteractiveBg(trigger, p)
 			ControlMotion(trigger).Children(func() {
-				GlassPillControl(ctx.Key("bg"), trigger, p, chipRadius, ui.Color{}, p.LiquidGlass, chipBg, 0, ui.Transparent, 0.96)
+				GlassPillControl(ctx.Key("bg"), trigger, p, GlassPillOptions{
+					Radius:             chipRadius,
+					VisibleAtRest:      p.LiquidGlass,
+					FallbackBackground: chipBg,
+					FallbackBorder:     ui.Transparent,
+					PressScale:         0.96,
+				})
 				AnimatedLabel(ctx, value).FontSize(valueSize).FontWeight(550).TextColor(p.Muted).SingleLine()
 				ui.Icon(ctx, IconChevronsUpDown).FontSize(13).TextColor(p.Muted).Shrink(0)
 			})
@@ -309,47 +363,50 @@ func OptionRow(ctx *ui.Context, p Palette, open *bool, icon *ui.SVG, label, valu
 	optionMenuPopup(ctx, p, trigger, open, padY, items)
 }
 
-func Popover(ctx *ui.Context, p Palette, anchor ui.Element, open *bool, build func(panel ui.Element)) {
+// Popover displays an anchored floating popup surface controlled by open.
+func Popover(ctx *ui.Context, p Palette, open *bool, anchor ui.Element, build func(panel ui.Element)) {
 	ui.PopoverBase(ctx, anchor, open, func(panel ui.Element) {
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0)
-		PopupMotion(panel)
-		SurfaceChrome(ctx, panel, p, RadiusL)
+		popupMotion(panel)
+		surfaceChrome(ctx, panel, p, RadiusL)
 		build(panel)
 	})
 }
 
+// Dialog displays a centered modal dialog bounded by maxWidth and maxHeight when *open is true.
 func Dialog(ctx *ui.Context, p Palette, open *bool, maxWidth, maxHeight float32, content func()) {
 	width, height := ctx.Size()
 	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
 	ui.DialogBase(ctx, open, func(back, panel ui.Element) {
-		BackdropMotion(back, p)
+		backdropMotion(back, p)
 		panelWidth := min(max(240, width-leftInset-rightInset-32), maxWidth)
 		panelHeight := min(max(200, height-topInset-bottomInset-40), maxHeight)
 		pad := float32(20)
 		if width < 480 {
 			pad = 16
 		}
-		dialogRadius := GlassRadius(p, RadiusL, RadiusXL)
-		GlassFloating(ctx, ModalMotion(panel).Width(panelWidth).MaxHeight(panelHeight).Padding(pad).Gap(14),
-			p, dialogRadius, 0.15, ui.Color{}, false, p.Surface, p.Line).
+		dialogRadius := glassRadius(p, RadiusL, RadiusXL)
+		glassFloatingEl(ctx, modalMotion(panel).Width(panelWidth).MaxHeight(panelHeight).Padding(pad).Gap(14),
+			p, dialogRadius, 0.15, false, p.Surface, p.Line).
 			Shadow(0, 14, 36, 0, p.Shadow).
 			Children(content)
 	})
 }
 
+// BottomSheet displays a swipe-dismissible bottom modal sheet up to maxHeightFrac of available height.
 func BottomSheet(ctx *ui.Context, p Palette, open *bool, maxHeightFrac float32, closeLabel string, content func()) {
 	_, height := ctx.Size()
 	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
 	ui.DialogBase(ctx, open, func(back, panel ui.Element) {
-		BackdropMotion(back, p).AlignItems(ui.Stretch).Justify(ui.End)
+		backdropMotion(back, p).AlignItems(ui.Stretch).Justify(ui.End)
 		availH := max(160, height-topInset-24)
 		maxH := min(availH, max(260, availH*maxHeightFrac))
-		SheetMotion(panel).FillWidth().MaxHeight(maxH).
+		sheetMotion(panel).FillWidth().MaxHeight(maxH).
 			Padding(0, rightInset+16, max(16, bottomInset+8), leftInset+16).Gap(10).
 			Radius(RadiusL+6, RadiusL+6, 0, 0).
 			Shadow(0, -8, 28, 0, p.Shadow)
 		if p.LiquidGlass {
-			GlassSurface(panel, p.Surface, ui.Transparent)
+			glassSurface(panel, p.Surface, ui.Transparent)
 		} else {
 			panel.Background(p.Surface).BorderWidth(1, 1, 0, 1).BorderColor(p.LineSoft)
 		}
@@ -362,10 +419,10 @@ func BottomSheet(ctx *ui.Context, p Palette, open *bool, maxHeightFrac float32, 
 				OnClick(closeSheet).Children(func() {
 				ui.Box(ctx).Width(36).Height(4).Radius(RadiusFull).Background(p.Line)
 			})
-			animation := MotionSheet
+			animation := motionSheet
 			if _, delta, held := handle.Dragged(); held {
 				*offset += delta
-				animation = MotionChipOut
+				animation = motionChipOut
 			} else if _, speed, ended := handle.DragEnded(); ended && (*offset >= 72 || *offset >= 18 && speed > 480) {
 				closeSheet()
 			} else {

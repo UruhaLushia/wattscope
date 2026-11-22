@@ -79,19 +79,19 @@ type navLensStyle struct {
 var (
 	navLensDesktopStyle = navLensStyle{
 		activePos: ui.SpringOptions{Duration: 45 * time.Millisecond, Bounce: 0.04},
-		idlePos:   MotionGlassScrub.Spring, extSpring: MotionGlassScrub.Spring,
-		liftOn: GlassPressAnimation(true).Spring, liftOff: GlassPressAnimation(false).Spring,
+		idlePos:   motionGlassScrub.Spring, extSpring: motionGlassScrub.Spring,
+		liftOn: glassPressAnimation(true).Spring, liftOff: glassPressAnimation(false).Spring,
 		stretchDiv: 1100, stretchMax: 0.20, liftFlight: 0.78,
 	}
 	navLensBottomCapsuleStyle = navLensStyle{
 		activePos: ui.SpringOptions{Duration: 155 * time.Millisecond, Bounce: 0.16},
-		idlePos:   MotionGlassScrub.Spring, extSpring: MotionGlassScrub.Spring,
-		liftOn: GlassPressAnimation(true).Spring, liftOff: GlassPressAnimation(false).Spring,
+		idlePos:   motionGlassScrub.Spring, extSpring: motionGlassScrub.Spring,
+		liftOn: glassPressAnimation(true).Spring, liftOff: glassPressAnimation(false).Spring,
 		stretchDiv: 750, stretchMax: 0.20, liftFlight: 0.76,
 	}
 	navLensBottomStandardStyle = navLensStyle{
 		activePos: ui.SpringOptions{Duration: 40 * time.Millisecond},
-		idlePos:   ui.SpringOptions{Duration: 190 * time.Millisecond, Bounce: 0.14}, extSpring: MotionGlassScrub.Spring,
+		idlePos:   ui.SpringOptions{Duration: 190 * time.Millisecond, Bounce: 0.14}, extSpring: motionGlassScrub.Spring,
 		liftOn: ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.16}, liftOff: ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.18},
 		stretchDiv: 1400, stretchMax: 0.10, liftFlight: 0.76,
 	}
@@ -318,7 +318,7 @@ func (s *navScrubState) animateGlassLens(ctx *ui.Context, host ui.Element, cfg n
 
 	var stretch, lift float32
 	var inFlight bool
-	if IsStaticSnapshot(ctx) || IsScaleReflow(ctx) || cfg.forceJump || !s.hasPrev || s.lastMode != cfg.mode || s.lastCount != cfg.count {
+	if isStaticSnapshot(ctx) || isScaleReflow(ctx) || cfg.forceJump || !s.hasPrev || s.lastMode != cfg.mode || s.lastCount != cfg.count {
 		host.Jump(cfg.keyPrefix+"-main", curMain)
 		host.Jump(cfg.keyPrefix+"-ext", curExt)
 		host.Jump(cfg.keyPrefix+"-stretch", 0)
@@ -380,7 +380,7 @@ func (s *navScrubState) animateGlassLens(ctx *ui.Context, host ui.Element, cfg n
 
 func navSolidScrubPose(axis navScrubAxis, active bool, lastMain, stripMain, maxNudge, rubberLimit float32) (ui.Pose, ui.Animation) {
 	if !active || stripMain <= 0 {
-		return ui.Pose{}, MotionNav
+		return ui.Pose{}, motionNav
 	}
 	var overscroll float32
 	switch {
@@ -396,18 +396,18 @@ func navSolidScrubPose(axis navScrubAxis, active bool, lastMain, stripMain, maxN
 	} else {
 		pose.X = nudge
 	}
-	return pose, MotionCapsuleDrag
+	return pose, motionCapsuleDrag
 }
 
 func navSolidPillFeedback(active, pressed bool, lastMain, stripMain float32, baseBg, textColor ui.Color, activeMix, pressMix float32) (bg ui.Color, pose ui.Pose, pillAnim, poseAnim ui.Animation) {
 	bg = baseBg
-	pillAnim = MotionNav
-	poseAnim = MotionNav
+	pillAnim = motionNav
+	poseAnim = motionNav
 	switch {
 	case active:
 		bg = baseBg.Mix(textColor, activeMix)
-		pillAnim = MotionCapsuleDrag
-		poseAnim = MotionCapsuleDrag
+		pillAnim = motionCapsuleDrag
+		poseAnim = motionCapsuleDrag
 		if stripMain > 0 {
 			align := clamp32((lastMain/stripMain)*2-1, -1, 1)
 			edge := clamp32((abs32(align)-0.72)/0.28, 0, 1)
@@ -450,7 +450,7 @@ func navLensShadow(el ui.Element, dark bool, amount float32, standard bool) {
 }
 
 func drawNavGlassLens(ctx *ui.Context, el ui.Element, radius float32, spec liquidLensSpec) {
-	if IsStaticSnapshot(ctx) || spec.Alpha <= 0.005 {
+	if isStaticSnapshot(ctx) || spec.Alpha <= 0.005 {
 		return
 	}
 	el.Draw(func(p *ui.Painter, box ui.Rect) {

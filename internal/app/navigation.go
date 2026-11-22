@@ -435,7 +435,7 @@ func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locale
 			kit.ControlMotion(pill)
 		}
 		if p.LiquidGlass {
-			kit.GlassFloatingButton(ctx, pill, p, kit.RadiusFull, ui.Color{}, pillBg, p.LineSoft)
+			kit.GlassFloatingButton(ctx, pill, p, kit.RadiusFull, pillBg, p.LineSoft)
 		} else {
 			pill.Background(pill.AnimateColor("pill-bg", pillBg, kit.MotionFast)).Border(1, p.LineSoft)
 		}
@@ -465,8 +465,8 @@ func floatingGlassIconButton(ctx *ui.Context, p kit.Palette, key string, size fl
 			onClick(btn)
 		}
 	})
-	kit.ControlMotion(kit.GlassFloatingButton(ctx, btn, p, kit.RadiusFull, ui.Color{}, p.Surface, p.LineSoft)).Children(func() {
-		kit.GlassIconPopOnPress(ctx, btn, ui.Icon(ctx, icon).FontSize(iconSize).TextColor(iconColor), p)
+	kit.ControlMotion(kit.GlassFloatingButton(ctx, btn, p, kit.RadiusFull, p.Surface, p.LineSoft)).Children(func() {
+		kit.GlassIconPopOnPress(ctx, p, btn, ui.Icon(ctx, icon).FontSize(iconSize).TextColor(iconColor))
 	})
 	return btn
 }
@@ -478,9 +478,9 @@ func headerIconButton(ctx *ui.Context, p kit.Palette, key string, glassSize, sol
 	var btn ui.Element
 	click := func() { onClick(btn) }
 	if roundSolid {
-		btn = kit.RoundIconActionButton(ctx.Key(key), p, icon, label, solidSize, false, click)
+		btn = kit.RoundIconActionButton(ctx.Key(key), p, icon, label, solidSize, click)
 	} else {
-		btn = kit.IconActionButton(ctx.Key(key), p, icon, label, solidSize, false, click)
+		btn = kit.IconActionButton(ctx.Key(key), p, icon, label, solidSize, click)
 	}
 	return btn
 }
@@ -505,7 +505,7 @@ func (d *dashboard) workspaceHeader(ctx *ui.Context, p kit.Palette, msgs locales
 	if p.LiquidGlass {
 		header.Absolute().Top(0).Left(0).Right(0).ZIndex(9)
 	}
-	kit.GlassBarChrome(header, p, p.Surface, p.LineSoft)
+	kit.GlassBarChrome(header, p)
 
 	var statusPill ui.Element
 	if layout.portraitMobile {
@@ -525,7 +525,7 @@ func (d *dashboard) workspaceHeader(ctx *ui.Context, p kit.Palette, msgs locales
 				title := kit.AnimatedLabel(ctx.Key(headerTitleKey{landscape: false}), pageTitle).FontSize(19).FontWeight(750).SingleLine().Shrink(1).MinWidth(0).
 					Role(ui.RoleHeading).Level(1)
 				if !d.snapshotOnly {
-					title.Transition(kit.NavRotateMatchTransition(ctx, navHeaderTitleMatchKey{}, false))
+					title.Transition(kit.NavRotateMatchTransition(ctx, navHeaderTitleMatchKey{}))
 				}
 				ui.Spacer(ctx).MinWidth(0)
 				statusPill = d.statusPillButton(ctx, p, msgs, name, status, tone, kit.NarrowWidth(ctx), false)
@@ -546,7 +546,7 @@ func (d *dashboard) workspaceHeader(ctx *ui.Context, p kit.Palette, msgs locales
 				title := kit.AnimatedLabel(ctx.Key(headerTitleKey{landscape: true}), pageTitle).FontSize(19).FontWeight(750).SingleLine().Shrink(0).MinWidth(0).
 					Role(ui.RoleHeading).Level(1)
 				if !d.snapshotOnly {
-					title.Transition(kit.NavRotateMatchTransition(ctx, navHeaderTitleMatchKey{}, false))
+					title.Transition(kit.NavRotateMatchTransition(ctx, navHeaderTitleMatchKey{}))
 				}
 			} else {
 				ui.Row(ctx).AlignItems(ui.Center).Gap(7).Shrink(0).Children(func() {
@@ -680,7 +680,12 @@ func (d *dashboard) morePage(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 					Radius(kit.RadiusM).AlignItems(ui.Center).Label(entry.label).OnClick(func() { d.goPage(entry.page) })
 				bg := kit.InteractiveBg(row, p)
 				kit.ControlMotion(row).Children(func() {
-					kit.GlassPillControl(ctx.Key("bg"), row, p, kit.RadiusM, ui.Color{}, false, bg, 0, ui.Transparent, 0.985)
+					kit.GlassPillControl(ctx.Key("bg"), row, p, kit.GlassPillOptions{
+						Radius:             kit.RadiusM,
+						FallbackBackground: bg,
+						FallbackBorder:     ui.Transparent,
+						PressScale:         0.985,
+					})
 					ui.Icon(ctx, entry.icon).FontSize(17).TextColor(p.Muted).Shrink(0)
 					kit.AnimatedLabel(ctx, entry.label).FontSize(14).FontWeight(550).Grow(1)
 					ui.Icon(ctx, kit.IconChevronR).FontSize(15).TextColor(p.Muted).Shrink(0)

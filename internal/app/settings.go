@@ -248,9 +248,14 @@ func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Me
 
 	kit.NarrowColumn(ctx, func() {
 		kit.FormGroup(ctx, p, msgs.GuiAppearance(), nil, func() {
-			kit.OptionRow(ctx.Key("opt-theme"), p, d.menuOpen("theme"), themeIcon, msgs.GuiTheme(),
-				optionLabel(themes, string(d.settings.Theme)), touch,
-				optionMenuItems(themes, string(d.settings.Theme), d.setTheme))
+			kit.OptionRow(ctx.Key("opt-theme"), p, kit.OptionRowOptions{
+				Open:  d.menuOpen("theme"),
+				Icon:  themeIcon,
+				Label: msgs.GuiTheme(),
+				Value: optionLabel(themes, string(d.settings.Theme)),
+				Touch: touch,
+				Items: optionMenuItems(themes, string(d.settings.Theme), d.setTheme),
+			})
 
 			kit.Divider(ctx, p)
 			kit.IconSettingRow(ctx, p, kit.IconPalette, msgs.GuiAccentColor(), "", func() {
@@ -296,12 +301,17 @@ func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Me
 		})
 
 		kit.FormGroup(ctx, p, msgs.GuiGeneral(), nil, func() {
-			kit.OptionRow(ctx.Key("opt-language"), p, d.menuOpen("language"), kit.IconGlobe, msgs.GuiLanguage(),
-				optionLabel(languages, d.language), touch,
-				optionMenuItems(languages, d.language, func(value string) {
+			kit.OptionRow(ctx.Key("opt-language"), p, kit.OptionRowOptions{
+				Open:  d.menuOpen("language"),
+				Icon:  kit.IconGlobe,
+				Label: msgs.GuiLanguage(),
+				Value: optionLabel(languages, d.language),
+				Touch: touch,
+				Items: optionMenuItems(languages, d.language, func(value string) {
 					d.language, d.settings.Language = value, value
 					d.saveSettings()
-				}))
+				}),
+			})
 
 			kit.Divider(ctx, p)
 			switchSettingRow(ctx, p, "smooth-chart", kit.IconActivity, msgs.GuiSmoothChart(), &d.settings.SmoothChart, d.saveSettings)

@@ -480,10 +480,25 @@ func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		menuOpen := d.menuOpen("pd-more")
 		if items := d.pdMoreMenuItems(msgs, snap, f, compact, landscape); len(items) > 0 {
 			if landscape {
-				kit.IconMenuButton(ctx.Key("more"), p, menuOpen, msgs.GuiMore(), kit.IconMore, btnH, kit.VariantSecondary, touch, items)
+				kit.MenuButton(ctx.Key("more"), p, kit.MenuButtonOptions{
+					Open:     menuOpen,
+					Variant:  kit.VariantSecondary,
+					Icon:     kit.IconMore,
+					Label:    msgs.GuiMore(),
+					Touch:    touch,
+					IconOnly: true,
+					Size:     btnH,
+					Items:    items,
+				})
 			} else {
-				moreBtn := kit.MenuButton(ctx.Key("more"), p, menuOpen, msgs.GuiMore(), kit.IconMore, kit.VariantSecondary, touch, items).
-					Height(btnH)
+				moreBtn := kit.MenuButton(ctx.Key("more"), p, kit.MenuButtonOptions{
+					Open:    menuOpen,
+					Variant: kit.VariantSecondary,
+					Icon:    kit.IconMore,
+					Label:   msgs.GuiMore(),
+					Touch:   touch,
+					Items:   items,
+				}).Height(btnH)
 				if compact {
 					moreBtn.Padding(0, 8)
 				}
@@ -504,7 +519,7 @@ func (d *dashboard) pdToolbar(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			ui.TextInput(ctx.Key("query"), &view.search).Grow(1).MinWidth(0).Height(searchH).
 				Placeholder(msgs.GuiSearchPackets()).Label(msgs.GuiSearchPackets())
 			if view.search != "" {
-				kit.IconActionButton(ctx.Key("clear-search"), p, kit.IconClose, msgs.ActionClear(), searchH, false, func() {
+				kit.IconActionButton(ctx.Key("clear-search"), p, kit.IconClose, msgs.ActionClear(), searchH, func() {
 					view.search = ""
 				})
 			}
@@ -591,7 +606,7 @@ func (d *dashboard) pdEmptyState(ctx *ui.Context, p kit.Palette, msgs locales.Me
 	case snap.CanCheckPDHost:
 		hint = strings.TrimRight(msgs.PdInstruction(), ".。")
 	}
-	box := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(140), p, kit.RadiusL, p.Surface, p.LineSoft).Center()
+	box := kit.GlassPanel(ui.Column(ctx).FillWidth().MinHeight(140), p, kit.RadiusL).Center()
 	if f.splitDetail || landscape {
 		box.Grow(1).MinHeight(0)
 		if landscape && bottomPadding > 0 {
@@ -763,7 +778,7 @@ func (d *dashboard) pdPacketRow(row ui.ListRow, p kit.Palette, msgs locales.Mess
 func (d *dashboard) pdPacketList(p kit.Palette, msgs locales.Messages, visible []pd.Packet, el ui.Element, touch, landscape, splitDetail bool) {
 	view := &d.packets
 	if splitDetail {
-		el = kit.GlassPanel(el.Clip(), p, kit.RadiusL, p.Surface, p.LineSoft)
+		el = kit.GlassPanel(el.Clip(), p, kit.RadiusL)
 	} else {
 		el = el.Gap(6)
 	}
@@ -801,7 +816,7 @@ func (d *dashboard) pdSplitDetailPane(ctx *ui.Context, p kit.Palette, msgs local
 	} else {
 		col.Padding(16)
 	}
-	kit.GlassPanel(col, p, kit.RadiusL, p.Surface, p.LineSoft).Children(func() {
+	kit.GlassPanel(col, p, kit.RadiusL).Children(func() {
 		ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			if landscape {
 				ui.Row(ctx).Grow(1).MinWidth(0).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -934,7 +949,15 @@ func pdFilterChip(ctx *ui.Context, p kit.Palette, label string, hide *bool, heig
 		bg, fg = p.SurfaceHi, p.Text
 	}
 	kit.ControlMotion(btn).Children(func() {
-		kit.GlassPillControl(ctx.Key("bg"), btn, p, radius, chipTint, true, bg, 1, border, 0.96)
+		kit.GlassPillControl(ctx.Key("bg"), btn, p, kit.GlassPillOptions{
+			Radius:             radius,
+			Tint:               chipTint,
+			VisibleAtRest:      true,
+			FallbackBackground: bg,
+			BorderWidth:        1,
+			FallbackBorder:     border,
+			PressScale:         0.96,
+		})
 		if active {
 			ui.Icon(ctx, kit.IconCheck).FontSize(iconSize).TextColor(fg).Shrink(0)
 		} else {
@@ -1031,18 +1054,18 @@ func (d *dashboard) packetModalContent(ctx *ui.Context, p kit.Palette, msgs loca
 		ui.Text(ctx, pdPacketHeaderMeta(d.packets.detail)).
 			FontFeatures("tnum").Font("monospace").FontSize(12).TextColor(p.Muted).SingleLine().MinWidth(0)
 		if len(visible) > 1 {
-			kit.IconActionButton(ctx.Key("prev-pkt"), p, kit.IconChevronL, "‹", btnH, false, func() {
+			kit.IconActionButton(ctx.Key("prev-pkt"), p, kit.IconChevronL, "‹", btnH, func() {
 				if idx > 0 {
 					d.packets.detail = visible[idx-1]
 				}
 			}).Disabled(idx <= 0)
-			kit.IconActionButton(ctx.Key("next-pkt"), p, kit.IconChevronR, "›", btnH, false, func() {
+			kit.IconActionButton(ctx.Key("next-pkt"), p, kit.IconChevronR, "›", btnH, func() {
 				if idx >= 0 && idx+1 < len(visible) {
 					d.packets.detail = visible[idx+1]
 				}
 			}).Disabled(idx < 0 || idx+1 >= len(visible))
 		}
-		kit.IconActionButton(ctx.Key("close"), p, kit.IconClose, msgs.GuiClose(), btnH, false, func() {
+		kit.IconActionButton(ctx.Key("close"), p, kit.IconClose, msgs.GuiClose(), btnH, func() {
 			d.packets.expanded = false
 		})
 	})

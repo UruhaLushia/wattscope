@@ -6,19 +6,22 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// BottomNavStyle selects the mobile bottom navigation bar layout style.
 type BottomNavStyle uint8
 
+// Bottom navigation style presets.
 const (
 	BottomNavCapsule BottomNavStyle = iota
 	BottomNavStandard
 )
 
+// Navigation layout dimensions and margins shared between kit navigation bars and workspace layouts.
 const (
 	BottomNavHeight              float32 = 56
 	BottomNavStandardHeight      float32 = 58
 	BottomNavDockMargin          float32 = 16
 	DesktopTopNavHeight          float32 = 32
-	MobileTopNavHeight           float32 = 38
+	mobileTopNavHeight           float32 = 38
 	desktopTopNavControl         float32 = 26
 	mobileTopNavControl          float32 = 32
 	DesktopSidebarWidth          float32 = 196
@@ -48,10 +51,9 @@ func DesktopSidebarRailWidth(iconsOnly bool, winH float32) float32 {
 	return DesktopCompactRailWidth
 }
 
-// DesktopNavTopBarHeight returns the height of the floating top navigation capsule.
-func DesktopNavTopBarHeight(touch bool) float32 {
+func desktopNavTopBarHeight(touch bool) float32 {
 	if touch {
-		return MobileTopNavHeight
+		return mobileTopNavHeight
 	}
 	return DesktopTopNavHeight
 }
@@ -64,18 +66,19 @@ func DesktopNavTopControlHeight(touch bool) float32 {
 	return desktopTopNavControl
 }
 
-func BottomNavHeightFor(style BottomNavStyle) float32 {
+func bottomNavHeightFor(style BottomNavStyle) float32 {
 	if style == BottomNavStandard {
 		return BottomNavStandardHeight
 	}
 	return BottomNavHeight
 }
 
+// BottomNavReserveFor returns the bottom viewport height reserved for the floating bottom navigation dock.
 func BottomNavReserveFor(bottomInset float32, visible bool, style BottomNavStyle) float32 {
 	if !visible {
 		return 0
 	}
-	return bottomInset + bottomNavDockGap(bottomInset) + BottomNavHeightFor(style)
+	return bottomInset + bottomNavDockGap(bottomInset) + bottomNavHeightFor(style)
 }
 
 func bottomNavDockGap(bottomInset float32) float32 {
@@ -104,13 +107,13 @@ func navShadowColor(p Palette, strong bool) ui.Color {
 func navBarChrome(ctx *ui.Context, bar ui.Element, p Palette, radius, clarity float32, fallbackBg, fallbackBorder ui.Color, strongShadow bool) {
 	if p.LiquidGlass {
 		bar.Shadow(0, 4, 16, 0, navShadowColor(p, strongShadow))
-		glassFloatingUnclipped(ctx, bar, p, radius, clarity, ui.Color{}, fallbackBg, fallbackBorder)
+		glassFloatingUnclipped(ctx, bar, p, radius, clarity, fallbackBg, fallbackBorder)
 		return
 	}
 	if strongShadow || !p.Dark {
 		bar.Shadow(0, 4, 16, 0, navShadowColor(p, strongShadow))
 	}
-	GlassFloating(ctx, bar, p, radius, clarity, ui.Color{}, false, fallbackBg, fallbackBorder)
+	glassFloatingEl(ctx, bar, p, radius, clarity, false, fallbackBg, fallbackBorder)
 }
 
 func navInactiveOverlayColors(p Palette, standard bool) (hoverBg, pressBg ui.Color) {
@@ -124,6 +127,7 @@ func glassNavPillBg(p Palette) ui.Color {
 	return glassNeutral(p.Dark, 0.065, 0.14)
 }
 
+// DesktopNavOptions configures DesktopNav layout mode, spacing, and collapse toggle.
 type DesktopNavOptions struct {
 	Sidebar       bool
 	IconsOnly     bool
@@ -168,7 +172,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 		if opts.Sidebar {
 			startPose = ui.Pose{X: -16, Scale: 0.94, Fade: 0.65}
 		}
-		ApplyRotateEnterPose(ctx, bar.TransformOrigin(0.5, 0.5), "rot-dnav", startPose, MotionRotatePanel)
+		ApplyRotateEnterPose(ctx, bar.TransformOrigin(0.5, 0.5), "rot-dnav", startPose, motionRotatePanel)
 	}
 	_, winH := ctx.Size()
 	compactSidebar := opts.Sidebar && winH > 0 && winH < compactSidebarMaxHeight
@@ -176,7 +180,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 	if compactSidebar {
 		sideTabH = 34
 	}
-	topBarH := DesktopNavTopBarHeight(opts.Touch)
+	topBarH := desktopNavTopBarHeight(opts.Touch)
 	topCtrlH := DesktopNavTopControlHeight(opts.Touch)
 	railW := DesktopSidebarRailWidth(opts.IconsOnly, winH)
 	sideMargin, sidePad, sideGap := CompactSidebarSideMargin(winH), float32(8), float32(3)
@@ -247,7 +251,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 
 		tabRadius := RadiusS
 		if opts.Sidebar {
-			tabRadius = GlassRadius(p, RadiusM, RadiusM+2)
+			tabRadius = glassRadius(p, RadiusM, RadiusM+2)
 		} else if p.LiquidGlass || opts.Touch {
 			tabRadius = topCtrlH / 2
 		}
@@ -333,7 +337,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				)
 				renderNavSolidPill(ctx, tabsStrip, selKey, target, tabRadius, "dnav-pill-bg",
 					pillBg, pillPose, pillAnim, pillPoseAnim,
-					!modeChanged && !IsStaticSnapshot(ctx) && !IsScaleReflow(ctx),
+					!modeChanged && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
 					!opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
 				)
 			}
@@ -357,7 +361,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 
 				var stateBg ui.Color
 				fg, weight := idleFg, 550
-				colorAnim := MotionNav
+				colorAnim := motionNav
 				iconPop := float32(0)
 
 				z := 1
@@ -413,14 +417,18 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 
 				tab.Children(func() {
 					if !active && !st.active {
-						GlassPillControl(ctx.Key("tab-state"), tab, p, tabRadius, ui.Color{}, false, stateBg, 0, ui.Transparent, 0.95)
+						GlassPillControl(ctx.Key("tab-state"), tab, p, GlassPillOptions{
+							Radius:             tabRadius,
+							FallbackBackground: stateBg,
+							PressScale:         0.95,
+						})
 					}
 					if entry.Icon != nil {
 						iconSize := float32(15)
 						if opts.Sidebar {
 							iconSize = 17
 						}
-						GlassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(iconSize).
+						glassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(iconSize).
 							TextColor(tab.AnimateColor("tab-fg", fg, colorAnim)), p, iconPop)
 					}
 					if !opts.IconsOnly {
@@ -591,18 +599,24 @@ func desktopNavToggle(ctx *ui.Context, p Palette, opts DesktopNavOptions, compac
 		bg, fg = p.Hover, p.Text
 	}
 	toggle.Children(func() {
-		GlassPillControl(ctx.Key("ntog-state"), toggle, p, toggleRadius, ui.Color{}, false, bg, 0, ui.Transparent, 0.95)
-		GlassIconPopOnPress(ctx, toggle, ui.Icon(ctx, toggleIcon).FontSize(15).
-			TextColor(toggle.AnimateColor("ntog-fg", fg, MotionFast)), p)
+		GlassPillControl(ctx.Key("ntog-state"), toggle, p, GlassPillOptions{
+			Radius:             toggleRadius,
+			FallbackBackground: bg,
+			PressScale:         0.95,
+		})
+		GlassIconPopOnPress(ctx, p, toggle, ui.Icon(ctx, toggleIcon).FontSize(15).
+			TextColor(toggle.AnimateColor("ntog-fg", fg, MotionFast)))
 	})
 }
 
+// NavTab describes one destination tab for DesktopNav, SectionTabs, and BottomNavigationBar.
 type NavTab struct {
 	Label    string
 	Icon     *ui.SVG
 	OnSelect func()
 }
 
+// SectionTabs renders horizontal in-page section tabs with Liquid Glass pill feedback.
 func SectionTabs(ctx *ui.Context, p Palette, label string, selected int, items []NavTab) {
 	tabRadius := PillRadius(p, RadiusM)
 	hoverBg, pressBg := navInactiveOverlayColors(p, p.LiquidGlass)
@@ -631,7 +645,13 @@ func SectionTabs(ctx *ui.Context, p Palette, label string, selected int, items [
 				bg, fg = hoverBg, p.Text
 			}
 			ControlMotion(tab).Children(func() {
-				GlassPillControl(ctx.Key("bg"), tab, p, tabRadius, glassTint, visibleAtRest, bg, 0, ui.Transparent, 0.96)
+				GlassPillControl(ctx.Key("bg"), tab, p, GlassPillOptions{
+					Radius:             tabRadius,
+					Tint:               glassTint,
+					VisibleAtRest:      visibleAtRest,
+					FallbackBackground: bg,
+					PressScale:         0.96,
+				})
 				AnimatedLabel(ctx, item.Label).FontSize(13).FontWeight(weight).TextColor(fg).SingleLine()
 			})
 		}
@@ -717,6 +737,7 @@ func clamp32(v, lo, hi float32) float32 {
 	return v
 }
 
+// BottomNavigationBarOptions configures BottomNavigationBar presentation style and safe-area insets.
 type BottomNavigationBarOptions struct {
 	Style       BottomNavStyle
 	BottomInset float32
@@ -739,7 +760,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 	standard := opts.Style == BottomNavStandard
 	standardGlass := standard && p.LiquidGlass
 	capsuleGlass := !standard && p.LiquidGlass
-	barHeight := BottomNavHeightFor(opts.Style)
+	barHeight := bottomNavHeightFor(opts.Style)
 	barPad, barGap := bottomNavPad, bottomNavGap
 	if standard {
 		barPad, barGap = bottomNavStdPad, bottomNavStdGap
@@ -752,7 +773,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		Justify(ui.Center).AlignItems(ui.End).PassThrough().
 		Padding(0, opts.RightInset+12, opts.BottomInset+bottomNavDockGap(opts.BottomInset), opts.LeftInset+12).
 		TransformOrigin(0.5, 0.85)
-	ApplyRotateEnterPose(ctx, dock, "rot-mnb", ui.Pose{Y: 20, Scale: 0.94, Fade: 0.70}, MotionRotatePanel)
+	ApplyRotateEnterPose(ctx, dock, "rot-mnb", ui.Pose{Y: 20, Scale: 0.94, Fade: 0.70}, motionRotatePanel)
 
 	barSolid := ui.Hex("#f7fafc").Mix(p.Accent, 0.07)
 	barBg := barSolid.Alpha(0.90)
@@ -780,8 +801,8 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		bar := tabs.List.Label(label).Row().Shrink(0).Height(barHeight).AlignItems(ui.Center).
 			Padding(barPad).Gap(barGap).
 			Draggable(nil, ui.DraggableOptions{Axis: ui.Horizontal, Bounds: &ui.Rect{}, Rigid: true})
-		if !IsStaticSnapshot(ctx) {
-			bar.Transition(ui.ElementTransition{Colors: true, Shadows: true, Animation: &MotionNavPanel})
+		if !isStaticSnapshot(ctx) {
+			bar.Transition(ui.ElementTransition{Colors: true, Shadows: true, Animation: &motionNavPanel})
 		}
 		if !p.LiquidGlass {
 			navBarChrome(ctx, bar, p, RadiusFull, 0, barBg, barBorder, true)
@@ -838,7 +859,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				barW = layoutBottomNav(slots, barPad, barGap, bottomNavInactiveW, displayIndex, st.widths[displayIndex])
 			}
 
-			capsulePose, capsuleAnim := ui.Pose{}, MotionNav
+			capsulePose, capsuleAnim := ui.Pose{}, motionNav
 			if !p.LiquidGlass {
 				capsulePose, capsuleAnim = navSolidScrubPose(navAxisHorizontal, st.active, st.lastX, barW, 3.5, 8)
 			}
@@ -926,7 +947,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				tab := tabEls[index].
 					Size(slot.extent, tabHeight).
 					Transition(ui.ElementTransition{
-						Position: true, Size: true, Animation: &MotionNav,
+						Position: true, Size: true, Animation: &motionNav,
 					}).
 					OnClick(navTabClick(&st.navScrubState, entry.OnSelect))
 
@@ -948,12 +969,12 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					default:
 						tab.ZIndex(1)
 					}
-					if capsuleGlass && !IsStaticSnapshot(ctx) {
+					if capsuleGlass && !isStaticSnapshot(ctx) {
 						tabScale := float32(1)
-						tabScaleAnim := MotionGlassRelease
+						tabScaleAnim := motionGlassRelease
 						if iconPop > 0.005 {
 							tabScale = 1 + 0.30*clamp32(iconPop, 0, 1.25)
-							tabScaleAnim = MotionGlassPress
+							tabScaleAnim = motionGlassPress
 						}
 						tab.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: tabScale}, tabScaleAnim)
 					}
@@ -961,7 +982,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 
 				var stateBg ui.Color
 				fg := idleFg
-				colorAnim := MotionNav
+				colorAnim := motionNav
 				var lensDistance float32
 				switch {
 				case followLens:
@@ -991,12 +1012,20 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					if !active && !st.active {
 						if p.LiquidGlass {
 							if standard {
-								GlassPillControl(ctx.Key("mnb-state"), tab, p, RadiusFull, ui.Color{}, false, stateBg, 0, ui.Transparent, 0.985)
+								GlassPillControl(ctx.Key("mnb-state"), tab, p, GlassPillOptions{
+									Radius:             RadiusFull,
+									FallbackBackground: stateBg,
+									PressScale:         0.985,
+								})
 							} else if !tapPressed {
-								GlassPillControl(ctx.Key("mnb-state"), tab, p, RadiusFull, ui.Color{}, false, stateBg, 0, ui.Transparent, 0.95)
+								GlassPillControl(ctx.Key("mnb-state"), tab, p, GlassPillOptions{
+									Radius:             RadiusFull,
+									FallbackBackground: stateBg,
+									PressScale:         0.95,
+								})
 							}
 						} else {
-							statePose, stateAnim := ui.Pose{}, MotionNav
+							statePose, stateAnim := ui.Pose{}, motionNav
 							if pressed {
 								statePose.Scale = 0.95
 								stateAnim = MotionFast
@@ -1007,7 +1036,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 						}
 					}
 					if entry.Icon != nil {
-						GlassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(bottomNavIconSize).Shrink(0).
+						glassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(bottomNavIconSize).Shrink(0).
 							TextColor(tab.AnimateColor("mnb-fg", fg, colorAnim)), p, iconPop*0.18)
 					}
 					if standard {
@@ -1026,7 +1055,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 						ui.Row(ctx.Key("mnb-lbl")).Shrink(0).Padding(0, 0, 0, bottomNavLabelGap).
 							Transition(ui.ElementTransition{
 								Enter:     &ui.Motion{Opacity: 0},
-								Animation: &MotionCapsuleIn,
+								Animation: &motionCapsuleIn,
 							}).
 							Children(func() {
 								AnimatedLabel(ctx, entry.Label).FontSize(12.5).FontWeight(650).
@@ -1036,7 +1065,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					}
 				})
 				if capsuleGlass && tapPressed {
-					snap := IsStaticSnapshot(ctx)
+					snap := isStaticSnapshot(ctx)
 					interaction := trackGlassInteraction(tab, snap)
 					dx, dy := bottomNavLensExpand(slot.extent, tabHeight, interaction.elastic, 0, false)
 					tapBox := expandGlass(ui.Rect{X: slot.start, Y: barPad, W: slot.extent, H: tabHeight}, dx, dy)
@@ -1090,14 +1119,14 @@ func bottomNavLensExpand(width, height, elastic, stretch float32, standard bool)
 }
 
 func (s *mnbDragState) applyDockGlass(ctx *ui.Context, bar ui.Element, p Palette, width, height float32, pressed, standard bool) {
-	snap := IsStaticSnapshot(ctx)
+	snap := isStaticSnapshot(ctx)
 	var progress float32
 	if !snap {
 		var target float32
 		if pressed {
 			target = 1
 		}
-		sp := GlassPressAnimation(pressed).Spring
+		sp := glassPressAnimation(pressed).Spring
 		if standard {
 			if pressed {
 				sp = ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.14}
