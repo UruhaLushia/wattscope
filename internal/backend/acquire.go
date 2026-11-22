@@ -16,28 +16,107 @@ import (
 type recordingError struct{ error }
 
 const (
-	minActiveCurrent    = 0.01
-	activeCurrentTime   = time.Second
-	maxCurrentSampleGap = 500 * time.Millisecond
+	directionVoltageOn       = 1.0
+	directionVoltageOff      = 0.5
+	directionCurrentMin      = 0.005
+	directionReverseCurrent  = 0.02
+	directionConfirmDuration = 250 * time.Millisecond
+	maxDirectionSampleGap    = 500 * time.Millisecond
 )
 
 type currentDirectionTracker struct {
 	direction device.CurrentDirection
+	pending   device.CurrentDirection
 	since     time.Time
 	last      time.Time
+	powered   bool
 }
 
 func (tracker *currentDirectionTracker) update(sample *device.Sample, now time.Time) bool {
-	if !(sample.Current >= minActiveCurrent) || sample.CurrentDirection == "" {
+	if sample == nil || math.IsNaN(sample.Voltage) || math.IsInf(sample.Voltage, 0) ||
+		math.IsNaN(sample.Current) || math.IsInf(sample.Current, 0) ||
+		sample.Voltage < 0 || sample.Current < 0 {
 		*tracker = currentDirectionTracker{}
 		return false
 	}
-	if tracker.direction != sample.CurrentDirection || now.Sub(tracker.last) > maxCurrentSampleGap {
-		tracker.direction = sample.CurrentDirection
-		tracker.since = now
+
+	if !tracker.powered {
+		if sample.Voltage < directionVoltageOn {
+			*tracker = currentDirectionTracker{}
+			return false
+		}
+		tracker.powered = true
+	} else if sample.Voltage <= directionVoltageOff {
+		*tracker = currentDirectionTracker{}
+		return false
+	}
+
+	if !tracker.last.IsZero() && now.Sub(tracker.last) > maxDirectionSampleGap {
+		tracker.pending = ""
+		tracker.since = time.Time{}
 	}
 	tracker.last = now
-	return now.Sub(tracker.since) >= activeCurrentTime
+
+	candidate := sample.CurrentDirection
+	if sample.Current < directionCurrentMin || !validCurrentDirection(candidate) {
+		candidate = ""
+	}
+	if tracker.direction != "" {
+		if candidate == tracker.direction || candidate == "" || sample.Current < directionReverseCurrent {
+			tracker.pending = ""
+			tracker.since = time.Time{}
+			return true
+		}
+		if tracker.pending != candidate {
+			tracker.pending = candidate
+			tracker.since = now
+			return true
+		}
+		if now.Sub(tracker.since) >= directionConfirmDuration {
+			tracker.direction = candidate
+			tracker.pending = ""
+			tracker.since = time.Time{}
+		}
+		return true
+	}
+	if candidate == "" {
+		tracker.pending = ""
+		tracker.since = time.Time{}
+		return false
+	}
+	if tracker.pending != candidate {
+		tracker.pending = candidate
+		tracker.since = now
+		return false
+	}
+	if now.Sub(tracker.since) >= directionConfirmDuration {
+		tracker.direction = candidate
+		tracker.pending = ""
+		tracker.since = time.Time{}
+	}
+	return tracker.direction != ""
+}
+
+func (tracker *currentDirectionTracker) apply(sample *device.Sample, now time.Time) {
+	if sample == nil {
+		tracker.update(nil, now)
+		return
+	}
+	sample.CurrentDirectionStable = tracker.update(sample, now)
+	if sample.CurrentDirectionStable {
+		sample.CurrentDirection = tracker.direction
+	} else {
+		sample.CurrentDirection = ""
+	}
+}
+
+func validCurrentDirection(direction device.CurrentDirection) bool {
+	switch direction {
+	case device.CurrentPlugToReceptacle, device.CurrentReceptacleToPlug:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) acquire(ctx context.Context, reader device.Connection, started time.Time, simulated bool, logger *slog.Logger) error {
@@ -135,7 +214,7 @@ func (s *Service) acquire(ctx context.Context, reader device.Connection, started
 		}
 		v := *event.Sample
 		v.Timestamp = now.UTC()
-		v.CurrentDirectionStable = currentDirection.update(&v, now)
+		currentDirection.apply(&v, now)
 		if v.Elapsed <= 0 {
 			v.Elapsed = now.Sub(started).Seconds()
 		}
