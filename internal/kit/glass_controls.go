@@ -48,21 +48,32 @@ func (g glassInteraction) active() bool {
 	return g.glow > 0.005 || g.hover > 0.005 || g.elastic != 0
 }
 
-func (g glassInteraction) material(base glass.Glass, staticSnapshot bool) ui.Material {
-	if g.active() {
-		return interactiveGlass{base: base, glassInteraction: g, staticSnapshot: staticSnapshot}
+func resolveGlassAlpha(alpha float32) float32 {
+	if alpha <= 0 {
+		return 1
 	}
-	return staticGlass{base: base, staticSnapshot: staticSnapshot}
+	return clamp32(alpha, 0, 1)
+}
+
+func (g glassInteraction) material(base glass.Glass, alpha float32, staticSnapshot bool) ui.Material {
+	if g.active() {
+		return interactiveGlass{base: base, glassInteraction: g, alpha: alpha, staticSnapshot: staticSnapshot}
+	}
+	return staticGlass{base: base, alpha: alpha, staticSnapshot: staticSnapshot}
 }
 
 type staticGlass struct {
 	base           glass.Glass
+	alpha          float32
 	staticSnapshot bool
 }
 
 func (g staticGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
+	a := resolveGlassAlpha(g.alpha)
 	if g.staticSnapshot || p.Preferences().ReduceTransparency {
-		g.base.PaintMaterial(p, box, radii)
+		if a > 0.5 {
+			g.base.PaintMaterial(p, box, radii)
+		}
 		return
 	}
 	radius := radii[0]
@@ -72,6 +83,7 @@ func (g staticGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32)
 	paintLiquidGlass(p, box, radius, liquidLensSpec{
 		Tint:      g.base.Tint,
 		Clarity:   g.base.Clarity,
+		Alpha:     a,
 		ClearLens: g.base.Style == glass.Clear,
 	})
 }
@@ -91,12 +103,16 @@ func glassIconPop(ctx *ui.Context, iconEl ui.Element, p Palette, amount float32)
 
 type dockGlass struct {
 	glassInteraction
+	alpha          float32
 	staticSnapshot bool
 }
 
 func (g dockGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
+	a := resolveGlassAlpha(g.alpha)
 	if g.staticSnapshot || p.Preferences().ReduceTransparency {
-		(glass.Glass{}).PaintMaterial(p, box, radii)
+		if a > 0.5 {
+			(glass.Glass{}).PaintMaterial(p, box, radii)
+		}
 		return
 	}
 	dx, dy := float32(0), float32(0)
@@ -105,6 +121,7 @@ func (g dockGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
 	}
 	paintLiquidGlass(p, expandGlass(box, dx, dy), max(1, radii[0]+max(dy, 0)), liquidLensSpec{
 		Clarity: 0.45,
+		Alpha:   a,
 		Glow:    0.15 * g.glow,
 		Touch:   g.touch,
 	})
@@ -113,12 +130,16 @@ func (g dockGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
 type interactiveGlass struct {
 	base glass.Glass
 	glassInteraction
+	alpha          float32
 	staticSnapshot bool
 }
 
 func (g interactiveGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
+	a := resolveGlassAlpha(g.alpha)
 	if g.staticSnapshot || p.Preferences().ReduceTransparency {
-		g.base.PaintMaterial(p, box, radii)
+		if a > 0.5 {
+			g.base.PaintMaterial(p, box, radii)
+		}
 		return
 	}
 	var dx, dy float32
@@ -133,6 +154,7 @@ func (g interactiveGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]flo
 	paintLiquidGlass(p, expandGlass(box, dx, dy), max(1, radii[0]+max(dy, 0)), liquidLensSpec{
 		Tint:    g.base.Tint,
 		Clarity: g.base.Clarity,
+		Alpha:   a,
 		Glow:    g.glow,
 		Hover:   g.hover,
 		Zoom:    zoom,
@@ -212,57 +234,6 @@ func GlassPillControl(ctx *ui.Context, owner ui.Element, p Palette, opts GlassPi
 			Zoom:       1 + 0.18*clamp32(glow, 0, 1.15),
 			ClearLens:  !subtle && glassTint.A == 0,
 			Touch:      touch,
-		})
-	})
-}
-
-func glassSelectionPill(ctx *ui.Context, owner ui.Element, p Palette, radius float32, restBg ui.Color, matchKey any, showShadow bool) {
-	if !p.LiquidGlass {
-		pillBg := restBg
-		pillPose, pillAnim := ui.Pose{}, motionRail
-		if owner.Pressed() {
-			pillBg = restBg.Mix(p.Text, 0.10)
-			pillPose.Scale = 0.96
-			pillAnim = MotionFast
-		}
-		pill := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).
-			TransformOrigin(0.5, 0.5).AnimatePose(pillPose, pillAnim).
-			Background(owner.AnimateColor("sp-bg", pillBg, MotionFast)).PassThrough().
-			Transition(pillMatchTransition(ctx, matchKey, &motionRail))
-		if showShadow && p.CardShadow.A > 0 && !owner.Pressed() {
-			pill.Shadow(0, 1, 2, 0, p.CardShadow)
-		}
-		return
-	}
-
-	interaction := trackGlassInteraction(owner, isStaticSnapshot(ctx))
-	elastic, glow, hover := interaction.elastic, interaction.glow, interaction.hover
-	lensMix := clamp32(glow, 0, 1)
-	bg := scaleAlpha(restBg, 1-0.68*lensMix)
-
-	pill := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).
-		Background(owner.AnimateColor("sp-bg", bg, MotionFast)).PassThrough().
-		Transition(pillMatchTransition(ctx, matchKey, &motionGlassScrub))
-
-	if showShadow && p.CardShadow.A > 0 && lensMix < 0.5 {
-		pill.Shadow(0, 1, 2, 0, scaleAlpha(p.CardShadow, 1-lensMix))
-	}
-
-	if !interaction.active() || ctx.Preferences().ReduceTransparency {
-		return
-	}
-	pill.Children(func() {
-		attachLiquidLens(ctx, "glass-lens", radius, max(glow, hover*0.55), func(r ui.Rect) (float32, float32) {
-			maxExX := clamp32(r.W*0.15, 8.0, 14.0)
-			maxExY := clamp32(r.H*0.22, 7.0, 11.0)
-			return maxExX*elastic + 0.4*hover, maxExY*elastic + 0.3*hover
-		}, liquidLensSpec{
-			ClearLens: true,
-			Glow:      max(glow, hover*0.4),
-			Hover:     hover,
-			Zoom:      1.0,
-			ZoomY:     0.88,
-			Touch:     interaction.touch,
 		})
 	})
 }

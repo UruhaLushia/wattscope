@@ -244,13 +244,23 @@ func ValueBadge(ctx *ui.Context, p Palette, text string, tone BadgeTone) ui.Elem
 
 func badge(ctx *ui.Context, p Palette, text string, tone BadgeTone, animate bool) ui.Element {
 	bg, fg := BadgeColors(p, tone)
-	box := ui.Box(ctx).Height(22).Shrink(0).Padding(0, 8).AlignItems(ui.Center).Justify(ui.Center).
-		Radius(PillRadius(p, RadiusS)).Background(bg)
+	border := ui.Transparent
+	if p.LiquidGlass && tone == TonePlain {
+		bg = glassNeutral(p.Dark, 0.05, 0.08)
+		border = glassNeutral(p.Dark, 0.06, 0.12)
+	}
+	box := ui.Box(ctx).Height(22).Shrink(0).Padding(0, 8).AlignItems(ui.Center).Justify(ui.Center)
+	targetR := RadiusS
+	if p.LiquidGlass {
+		targetR = 11
+	}
+	box.Radius(morphRadius(ctx, box, glassRadiusKey{}, targetR)).
+		Background(box.AnimateColor("bdg-bg", bg, motionGlassMorph))
 	if animate {
 		box.Transition(localeSizeTransition)
 	}
-	if p.LiquidGlass && tone == TonePlain {
-		box.Background(glassNeutral(p.Dark, 0.05, 0.08)).Border(1, glassNeutral(p.Dark, 0.06, 0.12))
+	if tone == TonePlain {
+		box.Border(1, box.AnimateColor("bdg-bd", border, motionGlassMorph))
 	}
 	return box.Children(func() {
 		label := ui.Text(ctx, text).FontSize(11).FontWeight(650).TextColor(fg).SingleLine().Shrink(0)
@@ -267,10 +277,17 @@ func BadgeButton(ctx *ui.Context, p Palette, text string, tone BadgeTone, height
 	if height <= 20 {
 		fontSize = 10.5
 	}
+	targetR := RadiusS
+	if p.LiquidGlass {
+		targetR = height / 2
+	}
 	btn := ui.ButtonBase(ctx).Height(height).Shrink(0).Padding(0, 8).AlignItems(ui.Center).Justify(ui.Center).
-		Radius(PillRadius(p, RadiusS)).Background(bg).Label(text).OnClick(onClick)
+		Label(text).OnClick(onClick)
+	btn.Background(btn.AnimateColor("badge-btn-bg", bg, motionGlassMorph))
+	btn.Radius(morphRadius(ctx, btn, glassRadiusKey{}, targetR))
 	return ControlMotion(btn).Children(func() {
-		ui.Text(ctx, text).FontSize(fontSize).FontWeight(650).TextColor(fg).SingleLine()
+		ui.Text(ctx, text).FontSize(fontSize).FontWeight(650).
+			TextColor(btn.AnimateColor("badge-btn-fg", fg, motionGlassMorph)).SingleLine()
 	})
 }
 
@@ -447,9 +464,15 @@ func resolveButtonStyle(el ui.Element, p Palette, variant ButtonVariant, activeO
 }
 
 func actionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SVG, label string, touch bool, onClick func(), animateLabel bool) ui.Element {
-	radius := PillRadius(p, RadiusM)
-	el := ui.ButtonBase(ctx).Height(ControlHeight(touch)).Shrink(0).Padding(0, 12).Gap(7).
-		Radius(radius).AlignItems(ui.Center).Justify(ui.Center).Label(label).OnClick(onClick)
+	h := ControlHeight(touch)
+	el := ui.ButtonBase(ctx).Height(h).Shrink(0).Padding(0, 12).Gap(7).
+		AlignItems(ui.Center).Justify(ui.Center).Label(label).OnClick(onClick)
+	targetR := RadiusM
+	if p.LiquidGlass {
+		targetR = h / 2
+	}
+	radius := morphRadius(ctx, el, glassRadiusKey{}, targetR)
+	el.Radius(radius)
 	bg, ink, border, glassTint, borderW, weight, visibleAtRest := resolveButtonStyle(el, p, variant, false)
 	return ControlMotion(el).Children(func() {
 		GlassPillControl(ctx.Key("bg"), el, p, GlassPillOptions{
@@ -475,16 +498,25 @@ func actionButton(ctx *ui.Context, p Palette, variant ButtonVariant, icon *ui.SV
 
 // IconActionButton renders a square icon-only action button sized to size.
 func IconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, size float32, onClick func()) ui.Element {
-	return iconActionButton(ctx, p, icon, label, size, PillRadius(p, min(RadiusM, max(RadiusS, size/3))), onClick)
+	return iconActionButton(ctx, p, icon, label, size, min(RadiusM, max(RadiusS, size/3)), true, onClick)
 }
 
 // RoundIconActionButton renders an icon-only action button with circular pill corners.
 func RoundIconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, size float32, onClick func()) ui.Element {
-	return iconActionButton(ctx, p, icon, label, size, RadiusFull, onClick)
+	return iconActionButton(ctx, p, icon, label, size, RadiusFull, false, onClick)
 }
 
-func iconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, size, radius float32, onClick func()) ui.Element {
-	el := ui.ButtonBase(ctx).Size(size, size).Shrink(0).Radius(radius).Center().Label(label).Tooltip(label).OnClick(onClick)
+func iconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, size, solidRadius float32, morphPill bool, onClick func()) ui.Element {
+	el := ui.ButtonBase(ctx).Size(size, size).Shrink(0).Center().Label(label).Tooltip(label).OnClick(onClick)
+	radius := solidRadius
+	if morphPill {
+		targetR := solidRadius
+		if p.LiquidGlass {
+			targetR = size / 2
+		}
+		radius = morphRadius(ctx, el, glassRadiusKey{}, targetR)
+	}
+	el.Radius(radius)
 	bg, fg := ui.Transparent, p.Muted
 	switch {
 	case el.Pressed():
@@ -502,86 +534,94 @@ func iconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, si
 	})
 }
 
-type segTrackKey struct{}
+type segRadiusKey struct{}
 
-func segmentStyle(ctx *ui.Context, p Palette, seg ui.Element, label string, active, touch bool, matchKey *segTrackKey) ui.Element {
-	segH, padX := float32(20), float32(8)
-	if touch {
-		segH, padX = 24, 10
-	}
-	segRadius := RadiusS
-	if p.LiquidGlass {
-		segRadius = RadiusFull
-	}
-	seg.Height(segH).Shrink(0).Padding(0, padX).
-		Radius(segRadius).AlignItems(ui.Center).Justify(ui.Center).
-		Transition(localeSizeTransition)
-	bg, fg, weight := ui.Transparent, p.Muted, 550
-	switch {
-	case active && seg.Pressed():
-		seg.ZIndex(0)
-		fg = p.TrackOnInk.Alpha(0.90)
-	case active:
-		seg.ZIndex(0)
-		fg = p.TrackOnInk
-	case seg.Pressed():
-		seg.ZIndex(1)
-		bg, fg = p.Press, p.Text
-	case seg.Hovered() || seg.FocusVisible():
-		seg.ZIndex(1)
-		bg, fg = p.Hover, p.Text
-	default:
-		seg.ZIndex(1)
-	}
-	return seg.Children(func() {
-		if active {
-			glassSelectionPill(ctx.Key("seg-pill"), seg, p, segRadius, p.TrackOn, matchKey, true)
-		} else {
-			GlassPillControl(ctx.Key("seg-state"), seg, p, GlassPillOptions{
-				Radius:             segRadius,
-				FallbackBackground: bg,
-				PressScale:         0.96,
-			})
-		}
-		AnimatedLabel(ctx, label).FontSize(11.5).FontWeight(weight).
-			TextColor(seg.AnimateColor("seg-fg", fg, MotionFast)).SingleLine().Shrink(0)
-	})
-}
-
-// Segmented renders a sliding pill segmented control bound to selected.
+// Segmented renders a sliding Liquid Glass droplet or solid pill segmented control bound to selected.
 func Segmented(ctx *ui.Context, p Palette, selected *int, labels []string, touch bool, onChange func()) ui.Element {
-	parts := ui.SegmentedBase(ctx, selected, len(labels))
-	trackH := float32(26)
+	const trackPad, segGap = float32(3), float32(2)
+	trackH, segH, padX := float32(26), float32(20), float32(8)
 	if touch {
-		trackH = 30
+		trackH, segH, padX = 30, 24, 10
 	}
-	trackRadius := PillRadius(p, RadiusM)
+	targetTrackR, targetSegR := RadiusM, RadiusS
+	if p.LiquidGlass {
+		targetTrackR, targetSegR = trackH/2, segH/2
+	}
 	trackBg := p.Track
 	if p.LiquidGlass {
 		trackBg = glassNeutral(p.Dark, 0.06, 0.08)
 	}
-	track := parts.Track.Height(trackH).Shrink(0).Padding(3).Gap(2).
-		Radius(trackRadius).Background(trackBg).Transition(localeSizeTransition)
-	matchKey := ui.Local(track, "seg-id", func() segTrackKey { return segTrackKey{} })
+	var scratch int
+	if selected == nil && len(labels) > 0 {
+		selected = &scratch
+	}
+	parts := ui.SegmentedBase(ctx, selected, len(labels))
+	trackRadius := morphRadius(ctx, parts.Track, glassRadiusKey{}, targetTrackR)
+	segRadius := morphRadius(ctx, parts.Track, segRadiusKey{}, targetSegR)
+	track := parts.Track.Height(trackH).Shrink(0).Padding(trackPad).Gap(segGap).
+		Radius(trackRadius).Background(parts.Track.AnimateColor("seg-trk-bg", trackBg, motionGlassMorph)).Transition(localeSizeTransition)
 	if onChange != nil {
 		track.OnChange(onChange)
 	}
-	track.Children(func() {
-		for index, label := range labels {
-			segmentStyle(ctx, p, parts.Segment(index), label, index == *selected, touch, matchKey)
-		}
+	if len(labels) == 0 {
+		return track
+	}
+
+	var mode uint8
+	if p.LiquidGlass {
+		mode |= 1
+	}
+	if touch {
+		mode |= 2
+	}
+	activeWeight, activeFg := 550, p.TrackOnInk
+	if p.LiquidGlass {
+		activeWeight, activeFg = 650, p.Text
+	}
+	restBg := ui.RGBA(255, 255, 255, 0.88)
+	if p.Dark {
+		restBg = ui.RGBA(255, 255, 255, 0.16)
+	}
+	renderCompactGlassTrack(ctx, track, p, compactGlassTrackConfig{
+		keyPrefix: "seg", mode: mode, count: len(labels), pad: trackPad, gap: segGap, height: segH, padX: padX,
+		radius: segRadius, fontSize: 11.5, idleWeight: 550, activeWeight: activeWeight,
+		restBg: restBg, solidBg: p.TrackOn, activeFg: activeFg, shadow: true, pressDim: true,
+		selected: selected,
+		labelAt:  func(i int) string { return labels[i] },
+		buildItem: func(i int, _ *navScrubState) ui.Element {
+			return parts.Segment(i).Height(segH).Shrink(0).Padding(0, padX).
+				Radius(segRadius).AlignItems(ui.Center).Justify(ui.Center).
+				Background(ui.Transparent).Transition(localeSizeTransition)
+		},
+		onCommit: func(prev, target int) {
+			if target != prev && onChange != nil {
+				onChange()
+			}
+		},
 	})
 	return track
 }
 
-// ColorSwatch renders a selectable circular color swatch with an active halo ring.
+// ColorSwatch renders a selectable circular color swatch with an animated active halo ring.
 func ColorSwatch(ctx *ui.Context, p Palette, color ui.Color, selected bool, onClick func()) ui.Element {
 	el := ui.ButtonBase(ctx).Size(24, 24).Shrink(0).Radius(RadiusFull).Background(color).
 		Label(HexColor(color)).OnClick(onClick)
+	target := float32(0)
 	if selected || el.FocusVisible() {
+		target = 1
+	}
+	ring := target
+	if !isStaticSnapshot(ctx) {
+		ring = el.Spring("swatch-sel", target, motionGlassPress.Spring)
+	}
+	alpha := clamp32(ring, 0, 1)
+	if alpha > 0.005 {
+		expand := clamp32(ring, 0, 1.25)
+		inset1 := 1.0 + 1.0*expand
+		inset2 := 2.4 + 1.6*expand
 		el.Draw(func(painter *ui.Painter, rect ui.Rect) {
-			painter.Stroke(ui.Rect{X: rect.X - 2, Y: rect.Y - 2, W: rect.W + 4, H: rect.H + 4}, p.Surface, RadiusFull, 2)
-			painter.Stroke(ui.Rect{X: rect.X - 4, Y: rect.Y - 4, W: rect.W + 8, H: rect.H + 8}, color, RadiusFull, 2)
+			painter.Stroke(ui.Rect{X: rect.X - inset1, Y: rect.Y - inset1, W: rect.W + 2*inset1, H: rect.H + 2*inset1}, scaleAlpha(p.Surface, alpha), RadiusFull, 2)
+			painter.Stroke(ui.Rect{X: rect.X - inset2, Y: rect.Y - inset2, W: rect.W + 2*inset2, H: rect.H + 2*inset2}, scaleAlpha(color, alpha), RadiusFull, 2)
 		})
 	}
 	return el

@@ -744,3 +744,79 @@ func TestDashboardStatusAndPageOrder(t *testing.T) {
 		t.Fatalf("expected out-of-bounds desktop pageOrder to return 0, got %d/%d", desk.pageOrder(-1), desk.pageOrder(99))
 	}
 }
+
+func TestWorkspaceLayoutAndDesktopSafeArea(t *testing.T) {
+	d := &dashboard{language: "en"}
+	d.settings = guiSettings{Theme: mygo.ThemeLight, Navigation: navigationSidebar, Accent: kit.DefaultAccentHex}
+
+	var layOff, layOn workspaceLayout
+	var renderGlass bool
+	tt := ui.NewTesterWith(func(ctx *ui.Context) {
+		d.settings.LiquidGlass = false
+		layOff = d.computeWorkspaceLayout(ctx)
+		d.settings.LiquidGlass = true
+		layOn = d.computeWorkspaceLayout(ctx)
+		d.settings.LiquidGlass = renderGlass
+		p, msgs := d.frameTheme(ctx)
+		d.draw(ctx, p, msgs, backend.Snapshot{})
+	}, 1000, 700, ui.TesterOptions{Preferences: ui.Preferences{ReduceMotion: true}})
+
+	tt.Frame()
+	if layOff.floatingTop != headerHeight || layOn.floatingTop != layOff.floatingTop {
+		t.Fatalf("desktop floatingTop mismatch: off=%v on=%v want=%v", layOff.floatingTop, layOn.floatingTop, float32(headerHeight))
+	}
+	brand0, ok := tt.Find("WattScope")
+	if !ok {
+		t.Fatal("missing WattScope header text")
+	}
+	ov0, ok := tt.Find("Overview")
+	if !ok {
+		t.Fatal("missing Overview sidebar tab")
+	}
+
+	renderGlass = true
+	tt.Frame()
+	brandGlass, _ := tt.Find("WattScope")
+	ovGlass, _ := tt.Find("Overview")
+	if brandGlass != brand0 || ovGlass != ov0 {
+		t.Fatalf("Sidebar LiquidGlass toggle shifted layout: brand %v->%v, ov %v->%v", brand0, brandGlass, ov0, ovGlass)
+	}
+
+	// Verify TopBar mode also keeps 0.0px shift across LiquidGlass toggle.
+	d.settings.Navigation = navigationHorizontal
+	renderGlass = false
+	tt.Frame()
+	topBrand0, _ := tt.Find("WattScope")
+	topOv0, _ := tt.Find("Overview")
+	renderGlass = true
+	tt.Frame()
+	topBrandGlass, _ := tt.Find("WattScope")
+	topOvGlass, _ := tt.Find("Overview")
+	if topBrandGlass != topBrand0 || topOvGlass != topOv0 {
+		t.Fatalf("TopBar LiquidGlass toggle shifted layout: brand %v->%v, ov %v->%v", topBrand0, topBrandGlass, topOv0, topOvGlass)
+	}
+
+	d.settings.Navigation = navigationSidebar
+	tt.Frame()
+	tt.SetInsets(12, 8, 0, 16)
+	tt.Frame()
+	if layOff.topInset != 12 || layOff.floatingTop != headerHeight || layOn.floatingTop != layOff.floatingTop {
+		t.Fatalf("safe-area layout mismatch: off=%+v on=%+v", layOff, layOn)
+	}
+	brand1, ok := tt.Find("WattScope")
+	if !ok {
+		t.Fatal("missing WattScope header text with safe-area")
+	}
+	ov1, ok := tt.Find("Overview")
+	if !ok {
+		t.Fatal("missing Overview sidebar tab with safe-area")
+	}
+	dbX, dbY := brand1.X-brandGlass.X, brand1.Y-brandGlass.Y
+	doX, doY := ov1.X-ovGlass.X, ov1.Y-ovGlass.Y
+	if dbX <= 0 || dbY <= 0 || dbX != doX || dbY != doY {
+		t.Fatalf("header and desktop-body drifted under SafeArea: brandDelta=(%v,%v) bodyDelta=(%v,%v)", dbX, dbY, doX, doY)
+	}
+	if ov1.Y < brand1.Y+brand1.H {
+		t.Fatalf("sidebar overlapped header under SafeArea: ov.Y=%v, brandBottom=%v", ov1.Y, brand1.Y+brand1.H)
+	}
+}

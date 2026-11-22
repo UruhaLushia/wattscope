@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/UruhaLushia/wattscope/internal/kit"
 	"github.com/UruhaLushia/wattscope/locales"
 	"github.com/egoist/mygo/ui"
@@ -124,9 +126,9 @@ func pageScrollsUnderHeader(page workspacePage, pageID int, portraitMobile bool)
 	return page.fixed == nil && page.list == nil && (portraitMobile || (pageID != pageDevice && pageID != pageConnectionLog))
 }
 
-func (d *dashboard) renderTopScrollEdge(ctx *ui.Context, p kit.Palette, page workspacePage, portraitMobile bool, floatingTop float32) {
+func (d *dashboard) renderTopScrollEdge(ctx *ui.Context, p kit.Palette, page workspacePage, portraitMobile bool, topOffset, floatingTop float32) {
 	if pageScrollsUnderHeader(page, d.page, portraitMobile) && d.scroll.Y > 0.5 {
-		kit.GlassScrollEdge(ctx, p, 0, floatingTop+4, 8)
+		kit.GlassScrollEdge(ctx, p, topOffset, floatingTop+4, 8)
 	}
 }
 
@@ -139,7 +141,7 @@ type workspaceLayout struct {
 	navStyle                                     kit.BottomNavStyle
 }
 
-func (d *dashboard) computeWorkspaceLayout(ctx *ui.Context, p kit.Palette) workspaceLayout {
+func (d *dashboard) computeWorkspaceLayout(ctx *ui.Context) workspaceLayout {
 	width, height := ctx.Size()
 	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
 	landscape := d.isLandscape(ctx)
@@ -151,12 +153,9 @@ func (d *dashboard) computeWorkspaceLayout(ctx *ui.Context, p kit.Palette) works
 	if d.mobile {
 		activeHeaderHeight = mobileHeaderHeight
 	}
-	floatingTop := float32(0)
-	if p.LiquidGlass {
-		floatingTop = activeHeaderHeight
-		if d.mobile {
-			floatingTop += topInset
-		}
+	floatingTop := activeHeaderHeight
+	if d.mobile {
+		floatingTop += topInset
 	}
 	return workspaceLayout{
 		width:              width,
@@ -225,15 +224,6 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		if !layout.portraitMobile && layout.position == navigationSide {
 			headerExtra = pages[d.page].headerExtra
 		}
-		renderChrome := func() {
-			d.workspaceHeader(ctx, p, msgs, layout, mobileTitle, name, status, tone, topPages, headerExtra)
-			if layout.portraitMobile && layout.hasBottomBar {
-				d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, layout.bottomInset, layout.leftInset, layout.rightInset)
-			}
-		}
-		if !p.LiquidGlass {
-			renderChrome()
-		}
 		renderContent := func() {
 			d.renderPageContent(ctx, p, msgs, layout, pages)
 		}
@@ -261,13 +251,11 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			body.Children(func() {
 				if layout.position == navigationSide {
 					sideWrap := ui.Box(ctx).FillHeight().ZIndex(2)
-					if p.LiquidGlass || layout.landscape {
-						var sideLeft, sideBottom float32
-						if layout.landscape {
-							sideLeft, sideBottom = layout.leftInset, layout.bottomInset
-						}
-						sideWrap.Padding(layout.floatingTop, 0, sideBottom, sideLeft)
+					var sideLeft, sideBottom float32
+					if layout.landscape {
+						sideLeft, sideBottom = layout.leftInset, layout.bottomInset
 					}
+					sideWrap.Padding(layout.floatingTop, 0, sideBottom, sideLeft)
 					sideWrap.Children(func() {
 						d.pageNavigation(ctx, p, msgs, pages[:pageMore], navigationSide, false)
 					})
@@ -280,8 +268,15 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			})
 		}
 		if p.LiquidGlass {
-			d.renderTopScrollEdge(ctx, p, pages[d.page], layout.portraitMobile, layout.floatingTop)
-			renderChrome()
+			topEdgeOffset := float32(0)
+			if !d.mobile {
+				topEdgeOffset = layout.topInset
+			}
+			d.renderTopScrollEdge(ctx, p, pages[d.page], layout.portraitMobile, topEdgeOffset, layout.floatingTop)
+		}
+		d.workspaceHeader(ctx, p, msgs, layout, mobileTitle, name, status, tone, topPages, headerExtra)
+		if layout.portraitMobile && layout.hasBottomBar {
+			d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, layout.bottomInset, layout.leftInset, layout.rightInset)
 		}
 	})
 
@@ -434,11 +429,7 @@ func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locale
 		if !d.mobile {
 			kit.ControlMotion(pill)
 		}
-		if p.LiquidGlass {
-			kit.GlassFloatingButton(ctx, pill, p, kit.RadiusFull, pillBg, p.LineSoft)
-		} else {
-			pill.Background(pill.AnimateColor("pill-bg", pillBg, kit.MotionFast)).Border(1, p.LineSoft)
-		}
+		kit.GlassFloatingButton(ctx, pill, p, kit.RadiusFull, pillBg, p.LineSoft)
 		pill.Children(func() {
 			kit.StatusDot(ctx, tone, 7)
 			if !iconsOnly {
@@ -457,7 +448,11 @@ func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locale
 	return pill
 }
 
-func floatingGlassIconButton(ctx *ui.Context, p kit.Palette, key string, size float32, icon *ui.SVG, iconSize float32, iconColor ui.Color, label string, onClick func(ui.Element)) ui.Element {
+func headerIconButton(ctx *ui.Context, p kit.Palette, key string, size float32, roundSolid bool, icon *ui.SVG, iconSize float32, iconColor ui.Color, label string, onClick func(ui.Element)) ui.Element {
+	radius := size / 2
+	if !p.LiquidGlass && !roundSolid {
+		radius = min(kit.RadiusM, max(kit.RadiusS, size/3))
+	}
 	var btn ui.Element
 	btn = ui.ButtonBase(ctx.Key(key)).Size(size, size).Shrink(0).Center().
 		Label(label).Tooltip(label).OnClick(func() {
@@ -465,23 +460,15 @@ func floatingGlassIconButton(ctx *ui.Context, p kit.Palette, key string, size fl
 			onClick(btn)
 		}
 	})
-	kit.ControlMotion(kit.GlassFloatingButton(ctx, btn, p, kit.RadiusFull, p.Surface, p.LineSoft)).Children(func() {
-		kit.GlassIconPopOnPress(ctx, p, btn, ui.Icon(ctx, icon).FontSize(iconSize).TextColor(iconColor))
+	bg := kit.InteractiveBg(btn, p)
+	fg := iconColor
+	if !p.LiquidGlass && (btn.Pressed() || btn.Hovered() || btn.FocusVisible()) {
+		fg = p.Text
+	}
+	kit.ControlMotion(kit.GlassFloatingButton(ctx, btn, p, radius, bg, ui.Transparent)).Children(func() {
+		kit.GlassIconPopOnPress(ctx, p, btn, ui.Icon(ctx, icon).FontSize(iconSize).
+			TextColor(btn.AnimateColor("hdr-fg", fg, kit.MotionFast)))
 	})
-	return btn
-}
-
-func headerIconButton(ctx *ui.Context, p kit.Palette, key string, glassSize, solidSize float32, roundSolid bool, icon *ui.SVG, iconSize float32, iconColor ui.Color, label string, onClick func(ui.Element)) ui.Element {
-	if p.LiquidGlass {
-		return floatingGlassIconButton(ctx, p, key, glassSize, icon, iconSize, iconColor, label, onClick)
-	}
-	var btn ui.Element
-	click := func() { onClick(btn) }
-	if roundSolid {
-		btn = kit.RoundIconActionButton(ctx.Key(key), p, icon, label, solidSize, click)
-	} else {
-		btn = kit.IconActionButton(ctx.Key(key), p, icon, label, solidSize, click)
-	}
 	return btn
 }
 
@@ -490,20 +477,31 @@ func (d *dashboard) headerThemeButton(ctx *ui.Context, p kit.Palette, msgs local
 	if p.Dark {
 		themeIcon, themeLabel = kit.IconSun, msgs.GuiLight()
 	}
-	iconSize, solidSize := float32(15), float32(windowButtonWidth)
+	iconSize := float32(15)
 	if d.mobile {
-		iconSize, solidSize = 16, size
+		iconSize = 16
 	}
-	btn := headerIconButton(ctx, p, "theme-toggle", size, solidSize, d.mobile, themeIcon, iconSize, p.Muted, themeLabel, d.toggleLightDark)
-	if p.LiquidGlass && !d.mobile && !p.Dark && p.CardShadow.A > 0 {
-		btn.Shadow(0, 1, 4, 0, p.CardShadow)
+	btn := headerIconButton(ctx, p, "theme-toggle", size, d.mobile, themeIcon, iconSize, p.Muted, themeLabel, d.toggleLightDark)
+	if !d.mobile && !p.Dark && p.CardShadow.A > 0 {
+		target := float32(0)
+		if p.LiquidGlass {
+			target = 1
+		}
+		if sh := btn.AnimateTo("hdr-sh", target, ui.Animation{Duration: 240 * time.Millisecond, Ease: ui.EaseOut}); sh > 0.005 {
+			c := p.CardShadow
+			c.A = uint8(float32(c.A) * min(sh, 1))
+			btn.Shadow(0, 1, 4, 0, c)
+		}
 	}
 }
 
 func (d *dashboard) workspaceHeader(ctx *ui.Context, p kit.Palette, msgs locales.Messages, layout workspaceLayout, pageTitle, name, status string, tone ui.Color, topPages []workspacePage, headerExtra func()) {
-	header := ui.Row(ctx.Key("workspace-header")).Shrink(0).AlignItems(ui.Center)
-	if p.LiquidGlass {
-		header.Absolute().Top(0).Left(0).Right(0).ZIndex(9)
+	header := ui.Row(ctx.Key("workspace-header")).Shrink(0).AlignItems(ui.Center).
+		Absolute().ZIndex(9)
+	if d.mobile {
+		header.Top(0).Left(0).Right(0)
+	} else {
+		header.Top(layout.topInset).Left(layout.leftInset).Right(layout.rightInset)
 	}
 	kit.GlassBarChrome(header, p)
 
@@ -518,7 +516,7 @@ func (d *dashboard) workspaceHeader(ctx *ui.Context, p kit.Palette, msgs locales
 			Padding(layout.topInset, layout.rightInset+14, 0, leading).Gap(gap).
 			Children(func() {
 				if hasBack {
-					headerIconButton(ctx, p, "more-back", 38, 40, true, kit.IconArrowLeft, 16, p.Text, msgs.GuiBack(), func(ui.Element) {
+					headerIconButton(ctx, p, "more-back", 38, true, kit.IconArrowLeft, 16, p.Text, msgs.GuiBack(), func(ui.Element) {
 						d.goPage(pageMore)
 					})
 				}
@@ -809,11 +807,10 @@ func (d *dashboard) computeDesktopHeaderPlan(ctx *ui.Context, pages []workspaceP
 	}
 
 	var brandW float32
-	rightW := float32(windowButtonWidth)
+	rightW := metrics.themeBtnSize
 	if d.mobile {
 		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: pageTitle, Size: 19, Weight: 750})
 		brandW = titleW
-		rightW = metrics.themeBtnSize
 		available -= leftInset + rightInset
 	} else {
 		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: "WattScope", Size: 13, Weight: 750})

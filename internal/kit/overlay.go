@@ -232,13 +232,22 @@ func MenuButton(ctx *ui.Context, p Palette, opts MenuButtonOptions) ui.Element {
 		size = ControlHeight(touch)
 	}
 
-	btnRadius := PillRadius(p, RadiusM)
+	h := size
+	if !iconOnly {
+		h = ControlHeight(touch)
+	}
+	targetR := RadiusM
+	if p.LiquidGlass {
+		targetR = h / 2
+	}
 	menu := ui.MenuBase(ctx, open)
-	trigger := menu.Trigger.Shrink(0).Radius(btnRadius).AlignItems(ui.Center).Justify(ui.Center).Label(label)
+	trigger := menu.Trigger.Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Label(label)
+	btnRadius := morphRadius(ctx, trigger, glassRadiusKey{}, targetR)
+	trigger.Radius(btnRadius)
 	if iconOnly {
 		trigger.Size(size, size).Tooltip(label)
 	} else {
-		trigger.Height(ControlHeight(touch)).Padding(0, 9, 0, 11).Gap(4)
+		trigger.Height(h).Padding(0, 9, 0, 11).Gap(4)
 		if label == "" {
 			trigger.Padding(0, 9)
 		}
@@ -324,9 +333,14 @@ func OptionRow(ctx *ui.Context, p Palette, opts OptionRowOptions) {
 		chipWrap := ui.Box(ctx.Key("slot")).Shrink(0).Transition(localeSizeTransition)
 		chipOpacity := chipWrap.AnimateTo("koc-a", targetAlpha, chipAnim)
 		chipWrap.Opacity(min(chipOpacity, targetAlpha)).Children(func() {
-			chipRadius := PillRadius(p, RadiusM+2)
-			trigger = ui.ButtonBase(ctx.Key("chip")).Shrink(0).Padding(6, 10).Gap(5).Radius(chipRadius).
+			trigger = ui.ButtonBase(ctx.Key("chip")).Shrink(0).Padding(6, 10).Gap(5).
 				AlignItems(ui.Center).Label(label + " · " + value).Expanded(*open)
+			targetR := RadiusM + 2
+			if p.LiquidGlass {
+				targetR = 16
+			}
+			chipRadius := morphRadius(ctx, trigger, glassRadiusKey{}, targetR)
+			trigger.Radius(chipRadius)
 
 			type optionState struct {
 				openOnPress bool

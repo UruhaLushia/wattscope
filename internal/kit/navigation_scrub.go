@@ -66,36 +66,68 @@ type navScrubOutcome struct {
 }
 
 type navLensStyle struct {
-	activePos  ui.SpringOptions
-	idlePos    ui.SpringOptions
-	extSpring  ui.SpringOptions
-	liftOn     ui.SpringOptions
-	liftOff    ui.SpringOptions
-	stretchDiv float32
-	stretchMax float32
-	liftFlight float32
+	activePos     ui.SpringOptions
+	idlePos       ui.SpringOptions
+	extSpring     ui.SpringOptions
+	stretchSpring ui.SpringOptions
+	liftOn        ui.SpringOptions
+	liftOff       ui.SpringOptions
+	stretchDiv    float32
+	stretchMax    float32
+	liftFlight    float32
 }
 
 var (
 	navLensDesktopStyle = navLensStyle{
-		activePos: ui.SpringOptions{Duration: 45 * time.Millisecond, Bounce: 0.04},
-		idlePos:   motionGlassScrub.Spring, extSpring: motionGlassScrub.Spring,
-		liftOn: glassPressAnimation(true).Spring, liftOff: glassPressAnimation(false).Spring,
-		stretchDiv: 1100, stretchMax: 0.20, liftFlight: 0.78,
+		activePos:     ui.SpringOptions{Duration: 45 * time.Millisecond, Bounce: 0.04},
+		idlePos:       ui.SpringOptions{Duration: 240 * time.Millisecond, Bounce: 0.12},
+		extSpring:     ui.SpringOptions{Duration: 215 * time.Millisecond, Bounce: 0.12},
+		stretchSpring: ui.SpringOptions{Duration: 115 * time.Millisecond, Bounce: 0.08},
+		liftOn:        ui.SpringOptions{Duration: 165 * time.Millisecond, Bounce: 0.14},
+		liftOff:       ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.12},
+		stretchDiv:    950, stretchMax: 0.22, liftFlight: 0.88,
 	}
 	navLensBottomCapsuleStyle = navLensStyle{
-		activePos: ui.SpringOptions{Duration: 155 * time.Millisecond, Bounce: 0.16},
-		idlePos:   motionGlassScrub.Spring, extSpring: motionGlassScrub.Spring,
-		liftOn: glassPressAnimation(true).Spring, liftOff: glassPressAnimation(false).Spring,
+		activePos:     ui.SpringOptions{Duration: 155 * time.Millisecond, Bounce: 0.16},
+		idlePos:       motionGlassScrub.Spring,
+		extSpring:     motionGlassScrub.Spring,
+		stretchSpring: ui.SpringOptions{Duration: 110 * time.Millisecond, Bounce: 0.08},
+		liftOn:        motionGlassPress.Spring, liftOff: motionGlassRelease.Spring,
 		stretchDiv: 750, stretchMax: 0.20, liftFlight: 0.76,
 	}
 	navLensBottomStandardStyle = navLensStyle{
-		activePos: ui.SpringOptions{Duration: 40 * time.Millisecond},
-		idlePos:   ui.SpringOptions{Duration: 190 * time.Millisecond, Bounce: 0.14}, extSpring: motionGlassScrub.Spring,
-		liftOn: ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.16}, liftOff: ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.18},
+		activePos:     ui.SpringOptions{Duration: 40 * time.Millisecond},
+		idlePos:       ui.SpringOptions{Duration: 190 * time.Millisecond, Bounce: 0.14},
+		extSpring:     motionGlassScrub.Spring,
+		stretchSpring: ui.SpringOptions{Duration: 110 * time.Millisecond, Bounce: 0.08},
+		liftOn:        ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.16}, liftOff: ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.18},
 		stretchDiv: 1400, stretchMax: 0.10, liftFlight: 0.76,
 	}
+	navLensCompactStyle = navLensStyle{
+		activePos:     ui.SpringOptions{Duration: 40 * time.Millisecond, Bounce: 0.02},
+		idlePos:       ui.SpringOptions{Duration: 220 * time.Millisecond, Bounce: 0.12},
+		extSpring:     ui.SpringOptions{Duration: 200 * time.Millisecond, Bounce: 0.12},
+		stretchSpring: ui.SpringOptions{Duration: 105 * time.Millisecond, Bounce: 0.08},
+		liftOn:        ui.SpringOptions{Duration: 160 * time.Millisecond, Bounce: 0.14},
+		liftOff:       ui.SpringOptions{Duration: 250 * time.Millisecond, Bounce: 0.12},
+		stretchDiv:    900, stretchMax: 0.18, liftFlight: 0.84,
+	}
 )
+
+type navSlotCache struct {
+	inline [4]navSlot
+	extra  []navSlot
+}
+
+func (c *navSlotCache) slotsFor(n int) []navSlot {
+	if n <= len(c.inline) {
+		return c.inline[:n]
+	}
+	if len(c.extra) != n {
+		c.extra = make([]navSlot, n)
+	}
+	return c.extra
+}
 
 type navLensConfig struct {
 	axis       navScrubAxis
@@ -118,9 +150,12 @@ type navGlassLens struct {
 	inFlight, optics bool
 }
 
+func rectBox(ctx *ui.Context, r ui.Rect, radius float32, z int) ui.Element {
+	return ui.Box(ctx).Absolute().Left(r.X).Top(r.Y).Width(r.W).Height(r.H).ZIndex(z).Radius(radius).PassThrough()
+}
+
 func (l navGlassLens) box(ctx *ui.Context, radius float32, z int) ui.Element {
-	return ui.Box(ctx).Absolute().Left(l.bounds.X).Top(l.bounds.Y).
-		Width(l.bounds.W).Height(l.bounds.H).ZIndex(z).Radius(radius).PassThrough()
+	return rectBox(ctx, l.bounds, radius, z)
 }
 
 func (l navGlassLens) coverAt(axis navScrubAxis, center, falloff float32) (cover, dist float32) {
@@ -231,7 +266,7 @@ func stepNavScrub(st *navScrubState, in navScrubInput) navScrubOutcome {
 	return out
 }
 
-func (st *navScrubState) stepTabs(ctx *ui.Context, host ui.Element, tabEls []ui.Element, axis navScrubAxis, gap float32, slots []navSlot, liquidGlass, requireTabArm bool, selected *int, items []NavTab) (displayIndex int, anyPressed bool) {
+func (st *navScrubState) applyNavScrub(ctx *ui.Context, host ui.Element, itemEls []ui.Element, axis navScrubAxis, gap float32, slots []navSlot, liquidGlass, requireItemArm bool, selected *int) (displayIndex int, anyPressed, committed bool, commitIndex int) {
 	hostPressed := host.Pressed()
 	if b, ok := host.PressedButton(); ok && b == 0 {
 		hostPressed = true
@@ -241,23 +276,23 @@ func (st *navScrubState) stepTabs(ctx *ui.Context, host ui.Element, tabEls []ui.
 	hostCanceled := host.PressCanceled()
 	px, py, _ := host.PointerPosition()
 
-	var tabPressed, tabCanceled, tabDragEnded bool
-	for _, tab := range tabEls {
-		if b, ok := tab.PressedButton(); tab.Pressed() || (ok && b == 0) {
-			tabPressed = true
+	var itemPressed, itemCanceled, itemDragEnded bool
+	for _, el := range itemEls {
+		if b, ok := el.PressedButton(); el.Pressed() || (ok && b == 0) {
+			itemPressed = true
 		}
-		if _, _, ended := tab.DragEnded(); ended {
-			tabDragEnded = true
+		if _, _, ended := el.DragEnded(); ended {
+			itemDragEnded = true
 		}
-		if tab.PressCanceled() {
-			tabCanceled = true
+		if el.PressCanceled() {
+			itemCanceled = true
 		}
 	}
 
-	anyPressed = hostPressed || hostDragHeld || tabPressed
-	anyCanceled := st.canceled || hostCanceled || tabCanceled
-	dragEnded := hostDragEnded || tabDragEnded
-	// A tab can emit a synthetic release when the host takes over the drag.
+	anyPressed = hostPressed || hostDragHeld || itemPressed
+	anyCanceled := st.canceled || hostCanceled || itemCanceled
+	dragEnded := hostDragEnded || itemDragEnded
+	// An item can emit a synthetic release when the host takes over the drag.
 	if anyPressed && !anyCanceled && !dragEnded {
 		st.upPending = false
 	}
@@ -275,21 +310,27 @@ func (st *navScrubState) stepTabs(ctx *ui.Context, host ui.Element, tabEls []ui.
 		selected:    *selected,
 		slots:       slots,
 		gap:         gap,
-		allowArm:    !requireTabArm || tabPressed,
+		allowArm:    !requireItemArm || itemPressed,
 	})
 	if outcome.waitForHold > 0 {
 		ctx.After(outcome.waitForHold)
 	}
 	if outcome.commit {
-		target := clamp32Index(outcome.commitIndex, len(items))
-		*selected = target
-		if items[target].OnSelect != nil {
-			items[target].OnSelect()
-		}
+		commitIndex = clamp32Index(outcome.commitIndex, len(itemEls))
+		*selected = commitIndex
+		committed = true
 	}
-	displayIndex = clamp32Index(*selected, len(items))
+	displayIndex = clamp32Index(*selected, len(itemEls))
 	if st.active {
-		displayIndex = clamp32Index(st.dragIndex, len(items))
+		displayIndex = clamp32Index(st.dragIndex, len(itemEls))
+	}
+	return displayIndex, anyPressed, committed, commitIndex
+}
+
+func (st *navScrubState) stepTabs(ctx *ui.Context, host ui.Element, tabEls []ui.Element, axis navScrubAxis, gap float32, slots []navSlot, liquidGlass, requireTabArm bool, selected *int, items []NavTab) (displayIndex int, anyPressed bool) {
+	displayIndex, anyPressed, committed, target := st.applyNavScrub(ctx, host, tabEls, axis, gap, slots, liquidGlass, requireTabArm, selected)
+	if committed && items[target].OnSelect != nil {
+		items[target].OnSelect()
 	}
 	return displayIndex, anyPressed
 }
@@ -331,19 +372,25 @@ func (s *navScrubState) animateGlassLens(ctx *ui.Context, host ui.Element, cfg n
 		}
 		curMain = host.Spring(cfg.keyPrefix+"-main", curMain, posSpring)
 		curExt = host.Spring(cfg.keyPrefix+"-ext", curExt, cfg.style.extSpring)
-		var stretchTarget float32
+		var speed, stretchTarget float32
 		if dt := now.Sub(s.lastTime).Seconds(); dt > 0.0005 && dt < 0.25 {
-			speed := abs32(curMain-s.prevMain) / float32(dt)
+			speed = abs32(curMain-s.prevMain) / float32(dt)
 			stretchTarget = clamp32(speed/cfg.style.stretchDiv, 0, cfg.style.stretchMax)
 		}
-		stretch = clamp32(host.Spring(cfg.keyPrefix+"-stretch", stretchTarget, cfg.style.extSpring), 0, 0.24)
-		inFlight = abs32(curMain-targetMain) > 3 || abs32(curExt-targetExt) > 3
+		stretchSpring := cfg.style.stretchSpring
+		if stretchSpring.Duration <= 0 {
+			stretchSpring = ui.SpringOptions{Duration: 115 * time.Millisecond, Bounce: 0.08}
+		}
+		stretch = clamp32(host.Spring(cfg.keyPrefix+"-stretch", stretchTarget, stretchSpring), 0, 0.24)
+		flightDist := max(abs32(curMain-targetMain), abs32(curExt-targetExt))
+		inFlight = flightDist > 0.75 || speed > 36
 		var liftTarget float32
 		switch {
 		case s.active || cfg.tabPressed:
 			liftTarget = 1
 		case inFlight:
-			liftTarget = cfg.style.liftFlight
+			flightFactor := clamp32(flightDist/10+speed/550, 0, 1)
+			liftTarget = cfg.style.liftFlight * flightFactor
 		}
 		liftSpring := cfg.style.liftOff
 		if liftTarget > 0.5 {
@@ -422,9 +469,9 @@ func navSolidPillFeedback(active, pressed bool, lastMain, stripMain float32, bas
 }
 
 func renderNavSolidPill(ctx *ui.Context, host ui.Element, key any, rect ui.Rect, radius float32, colorKey string, bg ui.Color, pose ui.Pose, moveAnim, poseAnim ui.Animation, animateLayout, shadow bool, shadowBlur float32, shadowColor ui.Color) {
-	pill := ui.Box(ctx.Key(key)).Absolute().Left(rect.X).Top(rect.Y).Width(rect.W).Height(rect.H).
-		ZIndex(0).Radius(radius).TransformOrigin(0.5, 0.5).AnimatePose(pose, poseAnim).
-		Background(host.AnimateColor(colorKey, bg, MotionFast)).PassThrough()
+	pill := rectBox(ctx.Key(key), rect, radius, 0).
+		TransformOrigin(0.5, 0.5).AnimatePose(pose, poseAnim).
+		Background(host.AnimateColor(colorKey, bg, motionGlassMorph))
 	if animateLayout {
 		pill.Transition(ui.ElementTransition{Position: true, Size: true, Animation: &moveAnim})
 	}
@@ -503,4 +550,258 @@ func (s *navScrubState) observePointer(axis navScrubAxis, gap float32, slots []n
 			}
 		}
 	}
+}
+
+func compactNavLensExpand(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32) {
+	e := max(0, elastic)
+	mainEx := clamp32(mainExt*0.14, 4.5, 9.5)*e + mainExt*stretch*0.30
+	crossEx := max(0, clamp32(crossExt*0.18, 3.2, 5.5)*e-crossExt*stretch*0.05)
+	return mainEx, crossEx, crossEx
+}
+
+func navGlassBlend(active, scrubbing bool, cover, lensAlpha float32) float32 {
+	switch {
+	case scrubbing:
+		return clamp32(cover*max(lensAlpha, 0.85), 0, 1)
+	case active:
+		return clamp32(cover, 0, 1)
+	default:
+		return clamp32(cover*lensAlpha, 0, 1)
+	}
+}
+
+func renderNavGlassRestingPill(ctx *ui.Context, host ui.Element, key any, lens navGlassLens, radius float32, colorKey string, pillBg ui.Color, reduceTransparency, showShadow bool, shadowColor ui.Color) {
+	bg := host.AnimateColor(colorKey, pillBg, motionGlassMorph)
+	if !reduceTransparency {
+		u := clamp32(1-1.25*lens.alpha, 0, 1)
+		bg = scaleAlpha(bg, u*u*(3-2*u))
+	}
+	pill := rectBox(ctx.Key(key), lens.base, radius, 0).Background(bg)
+	if showShadow && shadowColor.A > 0 {
+		if fade := clamp32(1-2*lens.alpha, 0, 1); fade > 0 {
+			pill.Shadow(0, 1, 2, 0, scaleAlpha(shadowColor, fade))
+		}
+	}
+}
+
+func renderNavGlassDroplet(ctx *ui.Context, key any, axis navScrubAxis, lens navGlassLens, baseRadius float32, dark bool) {
+	lensRadius := max(1, baseRadius+max(lens.padCross, 0))
+	lensEl := lens.box(ctx.Key(key), lensRadius, 3)
+	navLensShadow(lensEl, dark, lens.alpha, false)
+	zoomX, zoomY := 1+0.11*lens.alpha, 1+0.05*lens.alpha
+	if axis == navAxisVertical {
+		zoomX, zoomY = zoomY, zoomX
+	}
+	drawNavGlassLens(ctx, lensEl, lensRadius, liquidLensSpec{
+		Alpha: lens.alpha, Glow: lens.glow, Touch: lens.touch, Zoom: zoomX, ZoomY: zoomY, ClearLens: true,
+	})
+}
+
+type navTabVisualOpts struct {
+	active, scrubbing, pressed, hovered, focused bool
+	liquidGlass, glassOptics, lensMoving         bool
+	solidPressDim                                bool
+	cover, lensAlpha                             float32
+	idleFg, activeFg, textFg, hoverBg, pressBg   ui.Color
+	idleWeight, activeWeight                     int
+}
+
+type navTabVisual struct {
+	fg, stateBg ui.Color
+	weight      int
+	colorAnim   ui.Animation
+	iconPop     float32
+}
+
+func resolveNavTabVisual(o navTabVisualOpts) navTabVisual {
+	v := navTabVisual{fg: o.idleFg, weight: o.idleWeight, colorAnim: motionNav}
+	if o.active || (o.glassOptics && o.lensMoving && o.cover > 0.5) {
+		v.weight = o.activeWeight
+	}
+	handled := false
+	switch {
+	case o.glassOptics && o.lensMoving:
+		handled, v.colorAnim = true, MotionFast
+		v.fg = o.idleFg.Mix(o.activeFg, navGlassBlend(o.active, o.scrubbing, o.cover, o.lensAlpha))
+		v.iconPop = o.cover * o.lensAlpha
+	case o.glassOptics && o.active:
+		handled, v.fg = true, o.activeFg
+		if o.pressed {
+			v.iconPop = max(o.lensAlpha, 1)
+		} else if o.lensAlpha > 0.01 {
+			v.iconPop = o.cover * o.lensAlpha
+		}
+	case !o.glassOptics && o.active && !o.scrubbing && o.pressed:
+		handled, v.fg = true, o.activeFg
+		if o.solidPressDim && !o.liquidGlass {
+			v.fg = o.activeFg.Alpha(0.90)
+		}
+	case !o.glassOptics && (o.active || (o.liquidGlass && o.lensMoving && o.cover > 0.5)):
+		handled, v.fg = true, o.activeFg
+		if o.lensMoving {
+			v.colorAnim = MotionFast
+		}
+	}
+	if !handled {
+		allowHover := o.glassOptics || !o.scrubbing
+		switch {
+		case allowHover && o.pressed:
+			v.stateBg, v.fg = o.pressBg, o.textFg
+		case allowHover && (o.hovered || o.focused):
+			v.stateBg, v.fg = o.hoverBg, o.textFg
+		case o.scrubbing:
+			v.colorAnim = MotionFast
+		}
+		if o.glassOptics && o.pressed {
+			v.iconPop = 1
+		}
+	}
+	return v
+}
+
+func resolveCompactSlots(ctx *ui.Context, slots []navSlot, itemEls []ui.Element, cfg compactGlassTrackConfig, hostBounds ui.Rect, modeChanged bool) (stripMain, stripCross, crossOff float32) {
+	if !modeChanged && hostBounds.W > 0 && hostBounds.H > 0 && len(itemEls) > 0 {
+		allValid := true
+		for i, el := range itemEls {
+			b := el.LayoutBounds()
+			if b.W <= 0 || b.H <= 0 {
+				allValid = false
+				break
+			}
+			slots[i] = navSlot{start: b.X - hostBounds.X, extent: b.W}
+		}
+		if allValid {
+			b0 := itemEls[0].LayoutBounds()
+			return hostBounds.W, b0.H, b0.Y - hostBounds.Y
+		}
+	}
+	x := cfg.pad
+	sel := clamp32Index(*cfg.selected, cfg.count)
+	for i := 0; i < cfg.count; i++ {
+		w := cfg.idleWeight
+		if i == sel {
+			w = cfg.activeWeight
+		}
+		tw, _ := ctx.MeasureText(1<<20, ui.Span{Text: cfg.labelAt(i), Size: cfg.fontSize, Weight: w})
+		ext := tw + 2*cfg.padX
+		slots[i] = navSlot{start: x, extent: ext}
+		x += ext
+		if i+1 < cfg.count {
+			x += cfg.gap
+		}
+	}
+	return x + cfg.pad, cfg.height, cfg.pad
+}
+
+type compactTrackScrubState struct {
+	navScrubState
+	navSlotCache
+}
+
+type compactGlassTrackConfig struct {
+	keyPrefix                string
+	mode                     uint8
+	count                    int
+	pad, gap, height, padX   float32
+	radius, fontSize         float32
+	idleWeight, activeWeight int
+	restBg, solidBg          ui.Color
+	activeFg                 ui.Color
+	shadow, pressDim         bool
+	checkSlot, requireArm    bool
+	selected                 *int
+	labelAt                  func(int) string
+	buildItem                func(index int, st *navScrubState) ui.Element
+	onCommit                 func(prev, target int)
+}
+
+func renderCompactGlassTrack(ctx *ui.Context, host ui.Element, p Palette, cfg compactGlassTrackConfig) {
+	if cfg.count <= 0 {
+		return
+	}
+	host.Draggable(nil, ui.DraggableOptions{Axis: ui.Horizontal, Bounds: &ui.Rect{}, Rigid: true})
+	st := ui.Local(host, cfg.keyPrefix+"-scrub", func() compactTrackScrubState { return compactTrackScrubState{} })
+	slots := st.slotsFor(cfg.count)
+	host.ObserveInput(st.observePointer(navAxisHorizontal, cfg.gap, slots, *cfg.selected, cfg.count, cfg.checkSlot))
+	hostBounds := host.LayoutBounds()
+
+	host.Children(func() {
+		var inlineEls [4]ui.Element
+		els := inlineEls[:0]
+		if cfg.count > len(inlineEls) {
+			els = make([]ui.Element, 0, cfg.count)
+		}
+		for i := 0; i < cfg.count; i++ {
+			els = append(els, cfg.buildItem(i, &st.navScrubState))
+		}
+
+		modeChanged := !st.hasPrev || st.lastMode != cfg.mode || st.lastCount != cfg.count
+		stripMain, stripCross, crossOff := resolveCompactSlots(ctx, slots, els, cfg, hostBounds, modeChanged)
+
+		prevSel := *cfg.selected
+		displayIndex, _, committed, commitIdx := st.applyNavScrub(ctx, host, els, navAxisHorizontal, cfg.gap, slots, p.LiquidGlass, cfg.requireArm, cfg.selected)
+		if committed && cfg.onCommit != nil {
+			cfg.onCommit(prevSel, commitIdx)
+		}
+
+		pillStart, pillExtent := slots[displayIndex].start, slots[displayIndex].extent
+		if st.active {
+			pillStart = clamp32(st.lastX-pillExtent*0.5, cfg.pad, max(cfg.pad, stripMain-cfg.pad-pillExtent))
+		}
+		target := ui.Rect{X: pillStart, Y: crossOff, W: pillExtent, H: stripCross}
+
+		reduceTransparency := ctx.Preferences().ReduceTransparency
+		var lens navGlassLens
+		if p.LiquidGlass {
+			lens = st.animateGlassLens(ctx, host, navLensConfig{
+				axis: navAxisHorizontal, target: target, mode: cfg.mode, count: cfg.count, keyPrefix: cfg.keyPrefix,
+				style: navLensCompactStyle, tabPressed: els[displayIndex].Pressed(),
+				forceJump: modeChanged, expand: compactNavLensExpand,
+			})
+			renderNavGlassRestingPill(ctx, host, cfg.keyPrefix+"-pill", lens, cfg.radius, cfg.keyPrefix+"-pill-bg", cfg.restBg, reduceTransparency, cfg.shadow, p.CardShadow)
+		} else {
+			st.hasPrev, st.lastMode, st.lastCount = true, cfg.mode, cfg.count
+			pillBg, pillPose, pillAnim, pillPoseAnim := navSolidPillFeedback(
+				st.active, els[displayIndex].Pressed(), st.lastX, stripMain, cfg.solidBg, p.Text, 0.08, 0.10,
+			)
+			renderNavSolidPill(ctx, host, cfg.keyPrefix+"-pill", target, cfg.radius, cfg.keyPrefix+"-pill-bg",
+				pillBg, pillPose, pillAnim, pillPoseAnim,
+				!modeChanged && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
+				cfg.shadow && !els[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
+			)
+		}
+
+		lensMoving := st.active || lens.inFlight
+		glassOptics := p.LiquidGlass && !reduceTransparency
+		hoverBg, pressBg := navInactiveOverlayColors(p, p.LiquidGlass)
+		z := 1
+		if glassOptics {
+			z = 2
+		}
+
+		for i := 0; i < cfg.count; i++ {
+			active := i == displayIndex
+			el := els[i].ZIndex(z)
+			cover, _ := lens.coverAt(navAxisHorizontal, slots[i].start+slots[i].extent*0.5, 0.85)
+			vis := resolveNavTabVisual(navTabVisualOpts{
+				active: active, scrubbing: st.active, pressed: el.Pressed(), hovered: el.Hovered(), focused: el.FocusVisible(),
+				liquidGlass: p.LiquidGlass, glassOptics: glassOptics, lensMoving: lensMoving, solidPressDim: cfg.pressDim,
+				cover: cover, lensAlpha: lens.alpha,
+				idleFg: p.Muted, activeFg: cfg.activeFg, textFg: p.Text, hoverBg: hoverBg, pressBg: pressBg,
+				idleWeight: cfg.idleWeight, activeWeight: cfg.activeWeight,
+			})
+			label := cfg.labelAt(i)
+			el.Children(func() {
+				if !active && !st.active {
+					pillSurface(ctx.Key(cfg.keyPrefix+"-state"), el, cfg.radius, vis.stateBg, 0, ui.Transparent, 0.97)
+				}
+				AnimatedLabel(ctx, label).FontSize(cfg.fontSize).FontWeight(vis.weight).
+					TextColor(el.AnimateColor(cfg.keyPrefix+"-fg", vis.fg, vis.colorAnim)).SingleLine().Shrink(0)
+			})
+		}
+
+		if lens.optics {
+			renderNavGlassDroplet(ctx, cfg.keyPrefix+"-pill-lens", navAxisHorizontal, lens, cfg.radius, p.Dark)
+		}
+	})
 }

@@ -283,7 +283,7 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 }
 
 func (d *dashboard) draw(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snapshot backend.Snapshot) {
-	layout := d.computeWorkspaceLayout(ctx, p)
+	layout := d.computeWorkspaceLayout(ctx)
 	if page := normalizeWorkspacePage(d.page, layout.portraitMobile); page != d.page {
 		d.page = page
 		d.activePage.Store(int32(page))

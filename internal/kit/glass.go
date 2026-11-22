@@ -23,6 +23,29 @@ func GlassPanel(el ui.Element, p Palette, radius float32) ui.Element {
 	return ApplyCardShadow(glassSurface(el.Radius(radius), p.Surface, p.LineSoft), p)
 }
 
+type glassMixKey struct{}
+type glassRadiusKey struct{}
+
+func morphFloat(ctx *ui.Context, el ui.Element, key any, target float32, anim ui.Animation) float32 {
+	if isStaticSnapshot(ctx) || isScaleReflow(ctx) {
+		return target
+	}
+	return el.AnimateTo(key, target, anim)
+}
+
+func morphRadius(ctx *ui.Context, el ui.Element, key any, target float32) float32 {
+	target = max(0, target)
+	return max(0, morphFloat(ctx, el, key, target, motionGlassShape))
+}
+
+func glassMix(ctx *ui.Context, el ui.Element, p Palette) float32 {
+	var target float32
+	if p.LiquidGlass {
+		target = 1
+	}
+	return clamp32(morphFloat(ctx, el, glassMixKey{}, target, motionGlassMorph), 0, 1)
+}
+
 func glassFloatingEl(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, interactive bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	return glassFloating(ctx, el, p, radius, clarity, interactive, true, fallbackBg, fallbackBorder)
 }
@@ -32,51 +55,74 @@ func glassFloatingUnclipped(ctx *ui.Context, el ui.Element, p Palette, radius, c
 }
 
 func glassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, interactive, clip bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	el.Radius(radius)
+	mix := glassMix(ctx, el, p)
+	el.Radius(morphRadius(ctx, el, glassRadiusKey{}, radius))
 	if clip && (!p.LiquidGlass || !interactive) {
 		el.Clip()
 	}
-	if p.LiquidGlass {
+	bg := el.AnimateColor("g-bg", fallbackBg, motionGlassMorph)
+	if mix < 0.995 {
+		el.Background(scaleAlpha(bg, 1-mix*mix))
+	} else {
+		el.Background(ui.Transparent)
+	}
+	if fallbackBorder.A > 0 {
+		el.Border(1, scaleAlpha(fallbackBorder, 1-mix))
+	}
+	if mix > 0.005 {
 		snap := isStaticSnapshot(ctx)
 		base := glass.Glass{Clarity: clarity}
-		if interactive {
-			return el.Material(trackGlassInteraction(el, snap).material(base, snap))
+		if interactive && p.LiquidGlass {
+			return el.Material(trackGlassInteraction(el, snap).material(base, mix, snap))
 		}
-		return el.Material(staticGlass{base: base, staticSnapshot: snap})
+		return el.Material(staticGlass{base: base, alpha: mix, staticSnapshot: snap})
 	}
-	return glassSurface(el, fallbackBg, fallbackBorder)
+	return el
 }
 
 // GlassFloatingButton attaches interactive Liquid Glass optics and press spring scaling onto floating button el.
 func GlassFloatingButton(ctx *ui.Context, el ui.Element, p Palette, radius float32, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	if !p.LiquidGlass {
-		return glassFloatingEl(ctx, el, p, radius, 0, false, fallbackBg, fallbackBorder)
+	mix := glassMix(ctx, el, p)
+	el.Radius(morphRadius(ctx, el, glassRadiusKey{}, radius))
+	bg := el.AnimateColor("g-bg", fallbackBg, MotionFast)
+	if mix < 0.995 {
+		el.Background(scaleAlpha(bg, 1-mix*mix))
+	} else {
+		el.Background(ui.Transparent)
 	}
-	snap := isStaticSnapshot(ctx)
-	state := trackGlassInteraction(el, snap)
-	if !snap {
-		anim := motionGlassRelease
-		if el.Pressed() && !el.IsDisabled() {
-			anim = motionGlassPress
+	if fallbackBorder.A > 0 {
+		el.Border(1, scaleAlpha(fallbackBorder, 1-mix))
+	}
+	if mix > 0.005 {
+		snap := isStaticSnapshot(ctx)
+		state := trackGlassInteraction(el, snap)
+		if !snap {
+			anim := motionGlassRelease
+			if el.Pressed() && !el.IsDisabled() {
+				anim = motionGlassPress
+			}
+			scale := 1 + 0.18*mix*clamp32(state.elastic, -0.15, 1.25)
+			el.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: scale}, anim)
 		}
-		scale := 1 + 0.18*clamp32(state.elastic, -0.15, 1.25)
-		el.TransformOrigin(0.5, 0.5).AnimatePose(ui.Pose{Scale: scale}, anim)
+		el.Material(interactiveGlass{
+			base:             glass.Glass{},
+			glassInteraction: state,
+			alpha:            mix,
+			staticSnapshot:   snap,
+		})
 	}
-	return el.Radius(radius).Material(interactiveGlass{
-		base:             glass.Glass{},
-		glassInteraction: state,
-		staticSnapshot:   snap,
-	})
+	return el
 }
 
-// GlassBarChrome applies the non-glass header background and bottom border to el when LiquidGlass is disabled.
+// GlassBarChrome applies the animated header background and bottom border to el across LiquidGlass transitions.
 func GlassBarChrome(el ui.Element, p Palette) ui.Element {
+	bg, border := p.Surface, p.LineSoft
 	if p.LiquidGlass {
-		return el
+		bg, border = ui.Transparent, ui.Transparent
 	}
-	el.Background(p.Surface)
+	el.Background(el.AnimateColor("bar-bg", bg, motionGlassMorph))
 	if p.LineSoft.A > 0 {
-		el.BorderWidth(0, 0, 1, 0).BorderColor(p.LineSoft)
+		el.BorderWidth(0, 0, 1, 0).BorderColor(el.AnimateColor("bar-bd", border, motionGlassMorph))
 	}
 	return el
 }

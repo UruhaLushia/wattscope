@@ -12,11 +12,11 @@ const (
 	motionNavDur         = 175 * time.Millisecond
 	motionMoveDur        = 220 * time.Millisecond
 	motionPopupOpenDur   = 180 * time.Millisecond
-	motionPopupCloseDur  = 100 * time.Millisecond
+	motionPopupCloseDur  = 110 * time.Millisecond
 	motionOptionCloseDur = 125 * time.Millisecond
 	motionPopupDur       = 230 * time.Millisecond
 	motionSheetDur       = 260 * time.Millisecond
-	motionPageDur        = 180 * time.Millisecond
+	motionPageDur        = 235 * time.Millisecond
 	motionUnfoldDur      = 280 * time.Millisecond
 	rotateWindowDur      = 380 * time.Millisecond
 )
@@ -34,11 +34,12 @@ var (
 	motionCapsuleDrag  = ui.Animation{Duration: 22 * time.Millisecond, Ease: ui.EaseOut}
 	motionMove         = ui.Animation{Duration: motionMoveDur, Ease: ui.EaseOut}
 	motionLocale       = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.04}}
-	motionPage         = ui.Animation{Duration: motionPageDur, Ease: easeStandard}
-	motionRail         = ui.Animation{Spring: ui.SpringOptions{Duration: 260 * time.Millisecond, Bounce: 0.14}}
+	motionPage         = ui.Animation{Spring: ui.SpringOptions{Duration: motionPageDur, Bounce: 0.03}}
 	motionGlassPress   = ui.Animation{Spring: ui.SpringOptions{Duration: 115 * time.Millisecond, Bounce: 0.24}}
 	motionGlassRelease = ui.Animation{Spring: ui.SpringOptions{Duration: 300 * time.Millisecond, Bounce: 0.28}}
 	motionGlassScrub   = ui.Animation{Spring: ui.SpringOptions{Duration: 180 * time.Millisecond, Bounce: 0.22}}
+	motionGlassMorph   = ui.Animation{Duration: 240 * time.Millisecond, Ease: easeStandard}
+	motionGlassShape   = ui.Animation{Spring: ui.SpringOptions{Duration: 280 * time.Millisecond, Bounce: 0.08}}
 	motionNavPanel     = ui.Animation{Spring: ui.SpringOptions{Duration: 340 * time.Millisecond, Bounce: 0.14}}
 	// MotionRotate is the spring animation used when elements transition across mobile orientations.
 	MotionRotate       = ui.Animation{Spring: ui.SpringOptions{Duration: 320 * time.Millisecond, Bounce: 0.04}}
@@ -46,6 +47,7 @@ var (
 	motionSpring       = ui.Animation{Spring: ui.SpringOptions{Duration: motionMoveDur, Bounce: 0.06}}
 	motionOptionSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 230 * time.Millisecond, Bounce: 0.06}}
 	motionPopup        = ui.Animation{Duration: motionPopupOpenDur, Ease: easeStandard}
+	motionPopupSpring  = ui.Animation{Spring: ui.SpringOptions{Duration: 220 * time.Millisecond, Bounce: 0.09}}
 	motionDialogPop    = ui.Animation{Spring: ui.SpringOptions{Duration: motionPopupDur, Bounce: 0.06}}
 	motionSheet        = ui.Animation{Spring: ui.SpringOptions{Duration: motionSheetDur, Bounce: 0.04}}
 
@@ -60,13 +62,12 @@ var (
 		Animation: &motionNavPanel,
 	}
 	popupTransition = ui.ElementTransition{
-		Duration:     motionPopupOpenDur,
-		Ease:         easeStandard,
+		Animation:    &motionPopupSpring,
 		ExitDuration: motionPopupCloseDur,
 		ExitEase:     easeAccelerate,
 		Position:     true,
-		Enter:        &ui.Motion{Y: -2, Scale: 0.88, Flip: true},
-		Exit:         &ui.Motion{Y: -1, Scale: 0.92, Flip: true},
+		Enter:        &ui.Motion{Y: -3, Scale: 0.90, Flip: true},
+		Exit:         &ui.Motion{Y: -1, Scale: 0.94, Flip: true},
 	}
 	optionPopupTransition = ui.ElementTransition{
 		Animation:    &motionOptionSpring,
@@ -168,26 +169,14 @@ func glassPressAnimation(pressed bool) ui.Animation {
 	return motionGlassRelease
 }
 
-func pillMatchTransition(ctx *ui.Context, matchKey any, anim *ui.Animation) ui.ElementTransition {
-	if isStaticSnapshot(ctx) {
-		return ui.ElementTransition{}
-	}
-	return ui.ElementTransition{
-		Position: true, Size: true, Colors: true,
-		Animation: anim, Match: matchKey,
-	}
-}
-
 // Desktop navigation shares one spring so its tabs and toggle stay with the panel.
-func navMatchTransition(ctx *ui.Context, matchKey any, shadows bool) ui.ElementTransition {
+func navMatchTransition(ctx *ui.Context, matchKey any) ui.ElementTransition {
 	if isStaticSnapshot(ctx) {
 		return ui.ElementTransition{}
 	}
 	return ui.ElementTransition{
 		Position:  true,
 		Size:      true,
-		Colors:    true,
-		Shadows:   shadows,
 		Animation: &motionNavPanel,
 		Match:     matchKey,
 		Fly:       true,
@@ -324,9 +313,9 @@ func NavigationPageMotion(el ui.Element, horizontal bool, direction int) ui.Elem
 	if direction == 0 {
 		direction = 1
 	}
-	enter := &ui.Motion{Opacity: 0.72}
+	enter := &ui.Motion{Opacity: 0.45}
 	if horizontal {
-		enter.X = float32(direction * 12)
+		enter.X = float32(direction * 14)
 	} else {
 		enter.Y = float32(direction * 10)
 	}

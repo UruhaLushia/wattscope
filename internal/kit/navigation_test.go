@@ -241,3 +241,89 @@ func TestStepNavScrubSystemCancelAndNonSlotGuard(t *testing.T) {
 		t.Fatalf("canceled scrub must not commit: st=%+v out=%+v", st, out)
 	}
 }
+
+func TestNavGlassBlendAndCompactControls(t *testing.T) {
+	if got := navGlassBlend(true, false, 1.0, 0); got != 1 {
+		t.Fatalf("active landing blend = %v, want 1", got)
+	}
+	if got := navGlassBlend(true, false, 0.65, 0.2); abs32(got-0.65) > 1e-5 {
+		t.Fatalf("active mid-landing blend = %v, want 0.65", got)
+	}
+	if got := navGlassBlend(false, false, 0.8, 0.5); abs32(got-0.4) > 1e-5 {
+		t.Fatalf("inactive pass-over blend = %v, want 0.4", got)
+	}
+	if got := navGlassBlend(false, true, 1.0, 0.3); abs32(got-0.85) > 1e-5 {
+		t.Fatalf("scrubbing blend = %v, want 0.85", got)
+	}
+
+	dx, dy, pad := compactNavLensExpand(64, 24, 1, 0.12)
+	if dx <= 0 || dy <= 0 || pad != dy || dx > 14 || dy > 6 {
+		t.Fatalf("compactNavLensExpand(64,24,1,0.12) = (%v, %v, %v)", dx, dy, pad)
+	}
+	for _, tc := range []struct {
+		name string
+		dx   float32
+		dy   float32
+	}{
+		{"compact-neg", func() float32 { x, _, _ := compactNavLensExpand(64, 24, -0.18, 0.25); return x }(), func() float32 { _, y, _ := compactNavLensExpand(64, 24, -0.18, 0.25); return y }()},
+		{"desktop-h-neg", func() float32 { x, _, _ := desktopNavLensExpand(navAxisHorizontal, 80, 26, -0.18, 0.25); return x }(), func() float32 { _, y, _ := desktopNavLensExpand(navAxisHorizontal, 80, 26, -0.18, 0.25); return y }()},
+		{"desktop-v-neg", func() float32 { x, _, _ := desktopNavLensExpand(navAxisVertical, 36, 180, -0.18, 0.25); return x }(), func() float32 { _, y, _ := desktopNavLensExpand(navAxisVertical, 36, 180, -0.18, 0.25); return y }()},
+	} {
+		if tc.dx < 0 || tc.dy < 0 {
+			t.Fatalf("%s produced negative expansion: (%v, %v)", tc.name, tc.dx, tc.dy)
+		}
+	}
+	if sdx, _, _ := desktopNavLensExpand(navAxisVertical, 36, 180, 1.28, 0); sdx < 0 || sdx > 8 {
+		t.Fatalf("sidebar horizontal expansion = %v, want within [0, 8]", sdx)
+	}
+
+	var cache navSlotCache
+	if s := cache.slotsFor(4); len(s) != 4 || cache.extra != nil {
+		t.Fatalf("slotsFor(4) should use inline buffer: len=%d extra=%v", len(s), cache.extra)
+	}
+	if s := cache.slotsFor(6); len(s) != 6 || len(cache.extra) != 6 {
+		t.Fatalf("slotsFor(6) = %d, extra=%d", len(s), len(cache.extra))
+	}
+
+	for name, st := range map[string]navLensStyle{
+		"desktop": navLensDesktopStyle, "bottomCapsule": navLensBottomCapsuleStyle,
+		"bottomStandard": navLensBottomStandardStyle, "compact": navLensCompactStyle,
+	} {
+		if st.stretchSpring.Duration <= 0 || st.stretchDiv <= 0 || st.liftFlight <= 0 {
+			t.Fatalf("%s style incomplete: %+v", name, st)
+		}
+	}
+}
+
+func TestGlassMorphTransition(t *testing.T) {
+	var glass bool
+	var targetR float32 = 11
+	var gotMix, gotR float32
+
+	tt := ui.NewTester(func(ctx *ui.Context) {
+		box := ui.Box(ctx.Key("morph-box")).Size(80, 32)
+		gotMix = glassMix(ctx, box, Palette{LiquidGlass: glass})
+		gotR = morphRadius(ctx, box, glassRadiusKey{}, targetR)
+	}, 200, 100)
+
+	tt.Frame()
+	if gotMix != 0 || gotR != 11 {
+		t.Fatalf("mount frame should snap to initial target: mix=%v r=%v, want (0, 11)", gotMix, gotR)
+	}
+
+	glass, targetR = true, 16
+	tt.Frame()
+	tt.Advance(60 * time.Millisecond)
+	if gotMix <= 0 || gotMix >= 1 || gotR <= 11 || gotR >= 16 {
+		t.Fatalf("mid-transition expected values strictly inside (0,1)/(11,16): mix=%v r=%v", gotMix, gotR)
+	}
+
+	tt.Advance(350 * time.Millisecond)
+	if gotMix != 1 || abs32(gotR-16) > 0.01 {
+		t.Fatalf("post-transition expected near convergence to (1, 16): mix=%v r=%v", gotMix, gotR)
+	}
+	tt.Advance(300 * time.Millisecond)
+	if gotMix != 1 || gotR != 16 {
+		t.Fatalf("settled expected exact (1, 16): mix=%v r=%v", gotMix, gotR)
+	}
+}

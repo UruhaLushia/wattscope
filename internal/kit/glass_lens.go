@@ -220,7 +220,7 @@ func paintLiquidGlass(p *ui.Painter, box ui.Rect, radius float32, spec liquidLen
 		Float(lensDark, darkFlag).
 		Vec4(lensTint, float32(tint.R)/255, float32(tint.G)/255, float32(tint.B)/255, clamp32(float32(tint.A)/255*alpha, 0, 0.92)).
 		Vec3(lensTouch, tx*box.W, ty*box.H, max(minSide*0.75, 22))
-	opticalGlassShader.Draw(p, box, shader.Options{Radius: r, BackdropBlur: blur, Values: values})
+	opticalGlassShader.Draw(p, box, shader.Options{Radius: r, BackdropBlur: blur * alpha, Values: values})
 	lensValues.Put(values)
 }
 
@@ -231,5 +231,12 @@ func paintReducedGlass(p *ui.Painter, box ui.Rect, r float32, spec liquidLensSpe
 	} else if spec.FallbackBg.A > 0 {
 		c = spec.FallbackBg
 	}
+	alpha := spec.Alpha
+	if alpha <= 0 {
+		alpha = 1
+	} else {
+		alpha = clamp32(alpha, 0, 1)
+	}
+	c = scaleAlpha(c, alpha)
 	p.Fill(box, c, r)
 }
