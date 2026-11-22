@@ -3,12 +3,31 @@ package locales
 import (
 	"os"
 	"strings"
+	"sync"
 
 	"golang.org/x/text/language"
 	"golang.org/x/text/language/display"
 )
 
 //go:generate go tool mygo generate ..
+
+var (
+	resolveOnce     sync.Once
+	resolvedLangs   []string
+	resolvedMatcher language.Matcher
+	resolveCache    sync.Map
+)
+
+func initLanguageMatcher() {
+	resolveOnce.Do(func() {
+		resolvedLangs = Catalog.Languages()
+		tags := make([]language.Tag, len(resolvedLangs))
+		for i, lang := range resolvedLangs {
+			tags[i] = language.Make(lang)
+		}
+		resolvedMatcher = language.NewMatcher(tags)
+	})
+}
 
 func LanguageName(tag string) string {
 	switch tag {
@@ -31,12 +50,15 @@ func Resolve(requested string) string {
 	if requested == "" || strings.EqualFold(requested, "auto") {
 		requested = automaticLanguages()
 	}
-	langs := Catalog.Languages()
-	tags := make([]language.Tag, len(langs))
-	for i, lang := range langs {
-		tags[i] = language.Make(lang)
+	switch requested {
+	case "en", "ja", "zh-Hans", "zh-Hant":
+		return requested
 	}
-	matcher := language.NewMatcher(tags)
+	if cached, ok := resolveCache.Load(requested); ok {
+		return cached.(string)
+	}
+	initLanguageMatcher()
+	resolved := "en"
 	for value := range strings.SplitSeq(requested, ":") {
 		// Accept POSIX forms such as zh_CN.UTF-8, and language preference lists.
 		value = strings.TrimSpace(value)
@@ -47,12 +69,14 @@ func Resolve(requested string) string {
 		if err != nil {
 			continue
 		}
-		_, index, confidence := matcher.Match(tag)
+		_, index, confidence := resolvedMatcher.Match(tag)
 		if confidence != language.No {
-			return langs[index]
+			resolved = resolvedLangs[index]
+			break
 		}
 	}
-	return "en"
+	resolveCache.Store(requested, resolved)
+	return resolved
 }
 
 func automaticLanguages() string {
