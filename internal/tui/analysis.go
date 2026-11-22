@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/UruhaLushia/wattscope/internal/pdview"
@@ -67,31 +68,26 @@ func negotiationPanel(p pd.Packet, w int, v View) []string {
 	if x == nil {
 		x = &pd.Analysis{}
 	}
-	step := func(name string, seq uint64, observed bool) string {
+	step := func(name string, observed bool) string {
 		if !observed {
 			return quietStyle.Render("○ " + name)
 		}
-		label := "✓ " + name
-		if seq != 0 {
-			label += fmt.Sprintf(" #%d", seq)
-		}
-		return color(label, positive)
+		return color("✓ "+name, positive)
 	}
-	// Keep long sequence numbers in the border; node widths stay predictable.
-	timeline := step(m.PdCapabilitiesStep(), 0, x.CapabilitiesSequence != 0 || p.Type == "Source_Capabilities" && p.Error == "")
-	timeline += quietStyle.Render(" ── ") + step(m.PdRequestStep(), 0, x.RequestSequence != 0)
-	response := step(m.PdAcceptStep(), 0, x.AcceptSequence != 0)
+	timeline := step(m.PdCapabilitiesStep(), x.CapabilitiesSequence != 0 || p.Type == "Source_Capabilities" && p.Error == "")
+	timeline += quietStyle.Render(" ── ") + step(m.PdRequestStep(), x.RequestSequence != 0)
+	response := step(m.PdAcceptStep(), x.AcceptSequence != 0)
 	if x.Stage == "rejected" {
 		response = color("! "+m.PdRejectStep(), warning)
 	}
 	if x.Stage == "wait" {
 		response = color("Ⅱ "+m.PdWaitStep(), warning)
 	}
-	timeline += quietStyle.Render(" ── ") + response + quietStyle.Render(" ── ") + step(m.PdReadyStep(), 0, x.ReadySequence != 0)
+	timeline += quietStyle.Render(" ── ") + response + quietStyle.Render(" ── ") + step(m.PdReadyStep(), x.ReadySequence != 0)
 	e := pdview.ExplainPacket(m, p)
 	description := e.Summary
 	if x.Request != nil {
-		description = m.PdRelatedRequest(fmt.Sprint(x.RequestSequence), x.Request.Summary())
+		description = m.PdRelatedRequest(strconv.FormatUint(x.RequestSequence, 10), x.Request.Summary())
 	}
 	annotation := e.Summary
 	if len(p.PDOs) > 0 {
@@ -164,7 +160,7 @@ func pdoTable(pdos []pd.PDO, w int, v View) []string {
 		if pdo.MaxV == 0 {
 			voltage = "—"
 		}
-		rows = append(rows, columns(fmt.Sprint(pdo.Position), pdo.Kind, voltage, current, power, fmt.Sprintf("%08X", pdo.Raw)))
+		rows = append(rows, columns(strconv.Itoa(pdo.Position), pdo.Kind, voltage, current, power, fmt.Sprintf("%08X", pdo.Raw)))
 		if pdo.Kind == "SPR AVS" {
 			rows = append(rows, quietStyle.Render(fit(pdo.Summary(), w)))
 		}

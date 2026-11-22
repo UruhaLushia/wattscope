@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -110,7 +111,7 @@ func packetsPage(s backend.Snapshot, w, h int, v View) []string {
 	if v.SourcePath != "" {
 		stateBadge = strong("● "+m.Offline(), accent)
 	}
-	rows := []string{apart(quietStyle.Render(m.PacketCount(fmt.Sprint(len(packets)), fmt.Sprint(v.Packets.Total))), stateBadge, w)}
+	rows := []string{apart(quietStyle.Render(m.PacketCount(strconv.Itoa(len(packets)), strconv.FormatUint(v.Packets.Total, 10))), stateBadge, w)}
 	var filters []string
 	for _, item := range packetFilters(w, v) {
 		filters = append(filters, item.label)
@@ -218,7 +219,7 @@ func packetList(s backend.Snapshot, packets []pd.Packet, selected, w, h int, v V
 	if len(packets) > count {
 		rowWidth -= 2
 	}
-	seqWidth := max(4, len(fmt.Sprint(packets[len(packets)-1].Sequence)))
+	seqWidth := max(4, len(strconv.FormatUint(packets[len(packets)-1].Sequence, 10)))
 	columns := func(seq, elapsed, sop, role, kind, summary string) string {
 		line := fit(seq, seqWidth) + " " + fit(elapsed, 9) + " "
 		if w >= 65 {
@@ -345,7 +346,7 @@ func packetDetails(p pd.Packet, w int, v View) []string {
 		}
 	}
 	if ext := p.Extension; ext != nil && ext.ReassembledHex != "" {
-		rows = append(rows, strong(m.PdChunkReassembled(fmt.Sprint(ext.DataSize)), primary))
+		rows = append(rows, strong(m.PdChunkReassembled(strconv.FormatUint(uint64(ext.DataSize), 10)), primary))
 		rows = append(rows, hexRows(ext.ReassembledHex, w)...)
 	}
 	if len(p.PDOs) == 0 && !p.Extended {
@@ -365,7 +366,7 @@ func packetDetails(p pd.Packet, w int, v View) []string {
 	add(m.Revision(), p.Revision)
 	add(m.PowerRole(), p.PowerRole)
 	add(m.DataRole(), p.DataRole)
-	add(m.MessageId(), fmt.Sprint(p.MessageID))
+	add(m.MessageId(), strconv.FormatUint(uint64(p.MessageID), 10))
 	if p.Simulated {
 		rows = append(rows, color(m.Simulated(), warning))
 	}

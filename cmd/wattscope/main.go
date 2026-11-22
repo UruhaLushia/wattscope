@@ -13,6 +13,10 @@ import (
 )
 
 func main() {
+	os.Exit(runMain())
+}
+
+func runMain() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if os.Getenv("WATTSCOPE_DEBUG") == "1" {
@@ -20,6 +24,7 @@ func main() {
 	}
 	if err := runCommand(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "wattscope:", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

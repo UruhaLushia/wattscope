@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -90,7 +91,8 @@ func navigation(s backend.Snapshot, width, height int, v View) []string {
 	if statusHeight < 4 {
 		return navPanel
 	}
-	rows := append(navPanel, "")
+	rows := navPanel
+	rows = append(rows, "")
 	return append(rows, statusPanel(s, width, statusHeight, v)...)
 }
 
@@ -109,10 +111,10 @@ func statusPanel(s backend.Snapshot, width, height int, v View) []string {
 	if v.SourcePath != "" {
 		lines = append(lines,
 			apart(quietStyle.Render(m.ModeLabel()), color(m.Offline(), accent), inner),
-			apart(quietStyle.Render(m.PacketList()), fmt.Sprint(len(v.Packets.Packets)), inner),
+			apart(quietStyle.Render(m.PacketList()), strconv.Itoa(len(v.Packets.Packets)), inner),
 		)
 		if innerHeight >= 4 {
-			lines = append(lines, divider, apart(quietStyle.Render(m.BadReports()), fmt.Sprint(v.Packets.Invalid), inner))
+			lines = append(lines, divider, apart(quietStyle.Render(m.BadReports()), strconv.FormatUint(v.Packets.Invalid, 10), inner))
 		}
 		return panel(strong(m.StatusHeading(), primary), badge, width, height, lines, border)
 	}
@@ -140,20 +142,20 @@ func statusPanel(s backend.Snapshot, width, height int, v View) []string {
 		lines = append(lines, apart(quietStyle.Render(m.Measured()), duration(s.Statistics.MeasuredSeconds), inner))
 	}
 	if innerHeight >= 12 {
-		lines = append(lines, apart(quietStyle.Render(m.Samples()), fmt.Sprint(s.Statistics.Samples), inner))
+		lines = append(lines, apart(quietStyle.Render(m.Samples()), strconv.FormatUint(s.Statistics.Samples, 10), inner))
 	}
 	if innerHeight >= 14 {
 		csvText := quietStyle.Render("○ " + m.RecordingInactive())
 		if s.Recording.Active {
-			csvText = strong("● "+fmt.Sprint(s.Recording.Samples), danger)
+			csvText = strong("● "+strconv.FormatUint(s.Recording.Samples, 10), danger)
 		} else if s.Recording.Path != "" {
-			csvText = color("✓ "+fmt.Sprint(s.Recording.Samples), positive)
+			csvText = color("✓ "+strconv.FormatUint(s.Recording.Samples, 10), positive)
 		}
 		pdText := quietStyle.Render("○ " + m.RecordingInactive())
 		if v.Packets.Recording.Active {
-			pdText = strong("● "+fmt.Sprint(v.Packets.Recording.Packets), danger)
+			pdText = strong("● "+strconv.FormatUint(v.Packets.Recording.Packets, 10), danger)
 		} else if v.Packets.Recording.Path != "" {
-			pdText = color("✓ "+fmt.Sprint(v.Packets.Recording.Packets), positive)
+			pdText = color("✓ "+strconv.FormatUint(v.Packets.Recording.Packets, 10), positive)
 		}
 		lines = append(lines, divider,
 			apart(quietStyle.Render("CSV"), csvText, inner),
@@ -258,12 +260,12 @@ func workspace(s backend.Snapshot, w, h int, v View) []string {
 	if v.Page == PageOverview && s.Latest != nil && s.Error == "" && v.Message == "" {
 		status = quietStyle.Render(m.HostTotals(fmt.Sprintf("%.4f", s.Statistics.WattHours), fmt.Sprintf("%.3f", s.Statistics.AbsoluteAmpHours*1000)))
 		if l.mainWidth >= 70 {
-			status = apart(status, quietStyle.Render(m.Quality(fmt.Sprint(s.Statistics.Samples), fmt.Sprint(s.InvalidReports))), l.mainWidth)
+			status = apart(status, quietStyle.Render(m.Quality(strconv.FormatUint(s.Statistics.Samples, 10), strconv.FormatUint(s.InvalidReports, 10))), l.mainWidth)
 		}
 	}
 	if v.Page == PagePD || v.SourcePath != "" {
 		if s.Error == "" {
-			status = quietStyle.Render(m.PacketRetention(fmt.Sprint(len(v.Packets.Packets)), fmt.Sprint(v.Packets.Evicted), fmt.Sprint(v.Packets.Invalid)))
+			status = quietStyle.Render(m.PacketRetention(strconv.Itoa(len(v.Packets.Packets)), strconv.FormatUint(v.Packets.Evicted, 10), strconv.FormatUint(v.Packets.Invalid, 10)))
 		}
 		if v.Message != "" && s.Error == "" {
 			status = color(safe(v.Message), accent)

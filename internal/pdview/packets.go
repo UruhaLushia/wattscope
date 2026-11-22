@@ -2,6 +2,7 @@ package pdview
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/UruhaLushia/wattscope/internal/protocol/pd"
@@ -87,18 +88,18 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 		}
 	case "Source_Capabilities_Extended", "Sink_Capabilities_Extended":
 		if caps := p.Capabilities; caps != nil {
-			e.Summary = fmt.Sprintf("SPR PDP %d W", caps.SPR.MaximumW)
+			e.Summary = strconv.FormatUint(uint64(caps.SPR.MaximumW), 10) + " W"
 			if caps.EPR != nil && caps.EPR.MaximumW != 0 {
-				e.Summary += fmt.Sprintf(" · EPR PDP %d W", caps.EPR.MaximumW)
+				e.Summary += " · EPR PDP " + strconv.FormatUint(uint64(caps.EPR.MaximumW), 10) + " W"
 			}
 			e.Fields = append(e.Fields,
 				Field{"VID / PID / XID", fmt.Sprintf("%04X / %04X / %08X", caps.VID, caps.PID, caps.XID)},
 				Field{"FW / HW", fmt.Sprintf("%02X / %02X", caps.Firmware, caps.Hardware)},
 			)
 			if p.Type == "Sink_Capabilities_Extended" {
-				e.Fields = append(e.Fields, Field{"SPR PDP", m.PdPdpRange(fmt.Sprint(caps.SPR.MinimumW), fmt.Sprint(caps.SPR.OperatingW), fmt.Sprint(caps.SPR.MaximumW))})
+				e.Fields = append(e.Fields, Field{"SPR PDP", m.PdPdpRange(strconv.FormatUint(uint64(caps.SPR.MinimumW), 10), strconv.FormatUint(uint64(caps.SPR.OperatingW), 10), strconv.FormatUint(uint64(caps.SPR.MaximumW), 10))})
 				if caps.EPR != nil && caps.EPR.MaximumW != 0 {
-					e.Fields = append(e.Fields, Field{"EPR PDP", m.PdPdpRange(fmt.Sprint(caps.EPR.MinimumW), fmt.Sprint(caps.EPR.OperatingW), fmt.Sprint(caps.EPR.MaximumW))})
+					e.Fields = append(e.Fields, Field{"EPR PDP", m.PdPdpRange(strconv.FormatUint(uint64(caps.EPR.MinimumW), 10), strconv.FormatUint(uint64(caps.EPR.OperatingW), 10), strconv.FormatUint(uint64(caps.EPR.MaximumW), 10))})
 				}
 			}
 		}
@@ -109,17 +110,17 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 	case "Accept":
 		e.Summary = m.PdMeaningAcceptUnknown()
 		if x.RequestSequence != 0 {
-			e.Summary = m.PdMeaningAccept(fmt.Sprint(x.RequestSequence))
+			e.Summary = m.PdMeaningAccept(strconv.FormatUint(x.RequestSequence, 10))
 		}
 	case "PS_RDY":
 		e.Summary = m.PdMeaningReadyUnknown()
 		if x.RequestSequence != 0 {
-			e.Summary = m.PdMeaningReady(fmt.Sprint(x.RequestSequence))
+			e.Summary = m.PdMeaningReady(strconv.FormatUint(x.RequestSequence, 10))
 		}
 	case "GoodCRC":
 		e.Summary = m.PdMeaningAckUnknown()
 		if x.AcknowledgesSequence != 0 {
-			e.Summary = m.PdMeaningAck(fmt.Sprint(x.AcknowledgesSequence), x.AcknowledgesType)
+			e.Summary = m.PdMeaningAck(strconv.FormatUint(x.AcknowledgesSequence, 10), x.AcknowledgesType)
 		}
 	case "Reject":
 		e.Summary = m.PdMeaningReject()
@@ -165,14 +166,14 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 			switch mode.Action {
 			case 1:
 				e.Summary = m.PdEprEnter()
-				e.Fields = append(e.Fields, Field{m.PdEprSinkPower(), fmt.Sprintf("%d W", mode.Data)})
+				e.Fields = append(e.Fields, Field{m.PdEprSinkPower(), strconv.FormatUint(uint64(mode.Data), 10) + " W"})
 			case 2:
 				e.Summary = m.PdEprEnterAck()
 			case 3:
 				e.Summary = m.PdEprEntered()
 			case 4:
 				e.Summary = m.PdEprEnterFailed()
-				e.Fields = append(e.Fields, Field{e.Summary, m.PdEprFailure(fmt.Sprint(mode.Data)) + fmt.Sprintf(" (0x%02X)", mode.Data)})
+				e.Fields = append(e.Fields, Field{e.Summary, m.PdEprFailure(strconv.FormatUint(uint64(mode.Data), 10)) + fmt.Sprintf(" (0x%02X)", mode.Data)})
 			case 5:
 				e.Summary = m.PdEprExit()
 			}
@@ -201,12 +202,12 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 		value := m.ByteCount(int(ext.DataSize))
 		switch {
 		case ext.RequestChunk:
-			value = m.PdChunkRequest(fmt.Sprint(ext.ChunkNumber))
+			value = m.PdChunkRequest(strconv.FormatUint(uint64(ext.ChunkNumber), 10))
 			e.Summary = value
 		case ext.ReassembledHex != "":
-			value = m.PdChunkReassembled(fmt.Sprint(ext.DataSize))
+			value = m.PdChunkReassembled(strconv.FormatUint(uint64(ext.DataSize), 10))
 		case ext.Chunked && len(ext.DataHex)/2 < int(ext.DataSize):
-			value = m.PdChunkPartial(fmt.Sprint(ext.ChunkNumber), fmt.Sprint(ext.DataSize))
+			value = m.PdChunkPartial(strconv.FormatUint(uint64(ext.ChunkNumber), 10), strconv.FormatUint(uint64(ext.DataSize), 10))
 			e.Summary = value
 		}
 		e.Fields = append(e.Fields, Field{m.ExtendedHeader(), value})
@@ -226,7 +227,7 @@ func ExplainPacket(m locales.Messages, p pd.Packet) PacketExplanation {
 	}
 	if r != nil {
 		if p.Type != "Request" && p.Type != "EPR_Request" {
-			e.Details = append(e.Details, m.PdRelatedRequest(fmt.Sprint(x.RequestSequence), r.Summary()))
+			e.Details = append(e.Details, m.PdRelatedRequest(strconv.FormatUint(x.RequestSequence, 10), r.Summary()))
 		}
 		if r.MaximumA > 0 {
 			e.Details = append(e.Details, m.PdCurrentLimit(fmt.Sprintf("%g", r.MaximumA)))

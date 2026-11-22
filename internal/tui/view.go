@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -279,7 +280,7 @@ func signalPanel(s backend.Snapshot, w, h int, v View) []string {
 	}
 	return panel(strong(msgs.VisibleRange(), primary), c.unit, w, h, []string{
 		apart(quietStyle.Render(msgs.Minimum()), minText, w-4), apart(quietStyle.Render(msgs.Average()), meanText, w-4), apart(quietStyle.Render(msgs.Maximum()), maxText, w-4),
-		apart(quietStyle.Render(msgs.Samples()), fmt.Sprint(r.count), w-4),
+		apart(quietStyle.Render(msgs.Samples()), strconv.Itoa(r.count), w-4),
 	}, border)
 }
 
@@ -289,9 +290,9 @@ func sessionPanel(s backend.Snapshot, w, h int, msgs locales.Messages) []string 
 		apart(quietStyle.Render(msgs.Measured()), duration(stats.MeasuredSeconds), w-4),
 		apart(quietStyle.Render(msgs.Energy()), fmt.Sprintf("%.4f Wh", stats.WattHours), w-4),
 		apart(quietStyle.Render(msgs.ChargeThroughput()), fmt.Sprintf("%.3f mAh", stats.AbsoluteAmpHours*1000), w-4),
-		apart(quietStyle.Render(msgs.Samples()), fmt.Sprint(stats.Samples), w-4),
-		apart(quietStyle.Render(msgs.Connections()), fmt.Sprint(s.Connections), w-4),
-		apart(quietStyle.Render(msgs.BadReports()), fmt.Sprint(s.InvalidReports), w-4),
+		apart(quietStyle.Render(msgs.Samples()), strconv.FormatUint(stats.Samples, 10), w-4),
+		apart(quietStyle.Render(msgs.Connections()), strconv.FormatUint(s.Connections, 10), w-4),
+		apart(quietStyle.Render(msgs.BadReports()), strconv.FormatUint(s.InvalidReports, 10), w-4),
 	}, border)
 }
 
@@ -316,7 +317,7 @@ func recordPanel(s backend.Snapshot, w, h int, v View) []string {
 		label = msgs.File()
 	}
 	content := []string{quietStyle.Render(label+"  ") + middle(safe(path), w-4-ansi.StringWidth(label)-2)}
-	content = append(content, quietStyle.Render(msgs.RecordingNote(fmt.Sprint(s.Statistics.Samples))))
+	content = append(content, quietStyle.Render(msgs.RecordingNote(strconv.FormatUint(s.Statistics.Samples, 10))))
 	return panel(title, badge, w, h, content, tone)
 }
 
@@ -372,7 +373,7 @@ func statusLine(s backend.Snapshot, w int, v View) string {
 			fresh = msgs.Receiving()
 		}
 	}
-	quality := msgs.Quality(fmt.Sprint(s.Statistics.Samples), fmt.Sprint(s.InvalidReports))
+	quality := msgs.Quality(strconv.FormatUint(s.Statistics.Samples, 10), strconv.FormatUint(s.InvalidReports, 10))
 	return apart(quietStyle.Render(fresh), quietStyle.Render(quality), w)
 }
 
@@ -533,7 +534,7 @@ func details(s backend.Snapshot, v View, w int) []string {
 			telemetry = append(telemetry, msgs.DeviceEnergy(fmt.Sprintf("%.6f", *s.Latest.WattHours)))
 		}
 		if s.Latest.Group != nil {
-			telemetry = append(telemetry, msgs.DeviceGroup(fmt.Sprint(*s.Latest.Group)))
+			telemetry = append(telemetry, msgs.DeviceGroup(strconv.FormatUint(uint64(*s.Latest.Group), 10)))
 		}
 		if s.Latest.Uptime != nil {
 			telemetry = append(telemetry, msgs.DeviceUptime(duration(float64(*s.Latest.Uptime))))

@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -19,7 +20,7 @@ func NewRegistry(drivers ...Driver) (*Registry, error) {
 	seen := make(map[string]bool)
 	for _, d := range drivers {
 		if d == nil || d.ID() == "" {
-			return nil, fmt.Errorf("driver ID is required")
+			return nil, errors.New("driver ID is required")
 		}
 		if seen[d.ID()] {
 			return nil, fmt.Errorf("duplicate driver %q", d.ID())

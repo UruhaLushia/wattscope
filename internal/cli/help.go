@@ -80,15 +80,16 @@ func localizeCommand(cmd *cobra.Command, m locales.Messages, lang string) {
 		"pd-history":      m.FlagPdHistory(), "k2": m.FlagK2Envelope(), "sop": m.FlagSop(),
 		"pd-output": m.FlagPdOutput(),
 	}
-	if cmd.Name() == "analyze" {
+	switch cmd.Name() {
+	case "analyze":
 		flags["json"] = m.FlagAnalysisJson()
-	} else if cmd.Name() == "capture" {
+	case "capture":
 		flags["output"], flags["json"] = m.FlagCaptureOutput(), m.FlagCaptureJson()
-	} else if cmd.Name() == "decode" {
+	case "decode":
 		flags["json"] = m.FlagCaptureJson()
-	} else if cmd.Name() == "record" {
+	case "record":
 		flags["output"], flags["json"] = m.FlagRecordOutput(), m.FlagRecordJson()
-	} else {
+	default:
 		flags["output"] = m.FlagTuiOutput()
 		if cmd.Name() == "read" {
 			flags["json"] = m.FlagReadJson()

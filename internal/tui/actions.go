@@ -2,7 +2,7 @@ package tui
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -194,6 +194,6 @@ func (m *model) exportPackets() tea.Cmd {
 	m.busy = true
 	path, msgs := recording.NextCapturePath(m.opts.RecordingDir), m.view.messages()
 	return func() tea.Msg {
-		return recordingMsg{msgs.ExportedPackets(fmt.Sprint(len(packets)), path), recording.ExportCapture(path, packets)}
+		return recordingMsg{msgs.ExportedPackets(strconv.Itoa(len(packets)), path), recording.ExportCapture(path, packets)}
 	}
 }

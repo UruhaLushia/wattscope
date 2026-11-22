@@ -3,6 +3,7 @@ package pd
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -46,7 +47,7 @@ func (ext Extended) payloadSize() (int, error) {
 	}
 	if !ext.Chunked {
 		if ext.ChunkNumber != 0 || ext.RequestChunk {
-			return 0, fmt.Errorf("invalid unchunked PD header")
+			return 0, errors.New("invalid unchunked PD header")
 		}
 		return size, nil
 	}
@@ -55,7 +56,7 @@ func (ext Extended) payloadSize() (int, error) {
 	}
 	if ext.RequestChunk {
 		if size != 0 {
-			return 0, fmt.Errorf("PD chunk request has nonzero data size")
+			return 0, errors.New("PD chunk request has nonzero data size")
 		}
 		return 0, nil
 	}

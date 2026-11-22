@@ -127,7 +127,7 @@ func Decode(sop string, raw []byte) Packet {
 	if p.Extended {
 		p.CRC = "unverified"
 		if h>>6&3 < 2 {
-			p.Error = fmt.Sprintf("extended PD message has invalid revision %s", p.Revision)
+			p.Error = "extended PD message has invalid revision " + p.Revision
 			return p
 		}
 		if len(raw) < 4 {

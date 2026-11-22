@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -83,7 +84,7 @@ func newPDCaptureCommand(source *sourceOptions) *cobra.Command {
 				return errors.Join(runErr, err)
 			}
 			v := s.PacketSnapshot(0, 0)
-			fmt.Fprintln(cmd.ErrOrStderr(), msgs.CaptureSaved(fmt.Sprint(v.Recording.Packets), v.Recording.Path))
+			fmt.Fprintln(cmd.ErrOrStderr(), msgs.CaptureSaved(strconv.FormatUint(v.Recording.Packets, 10), v.Recording.Path))
 			if runErr == nil && v.Total == 0 && cmd.Context().Err() == nil {
 				info := s.Snapshot(0).Device
 				switch {
@@ -221,7 +222,7 @@ func newPDAnalyzeCommand(source *sourceOptions) *cobra.Command {
 		if count == 0 {
 			return errors.New(m.EmptyCapture())
 		}
-		fmt.Fprintln(cmd.ErrOrStderr(), m.AnalysisComplete(fmt.Sprint(count)))
+		fmt.Fprintln(cmd.ErrOrStderr(), m.AnalysisComplete(strconv.FormatUint(count, 10)))
 		return nil
 	}}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "")
