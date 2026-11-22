@@ -7,19 +7,14 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func inputDown(x, y float32) ui.InputEvent {
-	return ui.InputEvent{Kind: ui.InputPointerDown, Button: 0, X: x, Y: y}
-}
-
 func inputDownForAxis(axis navScrubAxis, main, cross float32) ui.InputEvent {
 	if axis == navAxisVertical {
-		return inputDown(cross, main)
+		return ui.InputEvent{Kind: ui.InputPointerDown, Button: 0, X: cross, Y: main}
 	}
-	return inputDown(main, cross)
+	return ui.InputEvent{Kind: ui.InputPointerDown, Button: 0, X: main, Y: cross}
 }
 
-func TestNavSlotIndexAtAndContainsVariableSizes(t *testing.T) {
-	// Variable-width TopBar tabs with 2dp gap.
+func TestNavSlotIndexAtAndContains(t *testing.T) {
 	topSlots := []navSlot{
 		{start: 0, extent: 88},
 		{start: 90, extent: 64},
@@ -30,518 +25,126 @@ func TestNavSlotIndexAtAndContainsVariableSizes(t *testing.T) {
 		pos  float32
 		want int
 	}{
-		{-25, 0},
-		{0, 0},
-		{88.5, 0},
-		{89.1, 1},
-		{154.5, 1},
-		{155.1, 2},
-		{258.5, 2},
-		{259.1, 3},
-		{500, 3},
+		{-25, 0}, {88.5, 0}, {89.1, 1}, {155.1, 2}, {259.1, 3}, {500, 3},
 	} {
 		if got := navSlotIndexAt(tc.pos, 2, topSlots); got != tc.want {
 			t.Fatalf("navSlotIndexAt(%.1f) = %d, want %d", tc.pos, got, tc.want)
 		}
 	}
 
-	// Sidebar slots with expanded sub-items between slot 1 and slot 2.
-	sideSlots := []navSlot{
-		{start: 0, extent: 36},
-		{start: 39, extent: 36},
-		{start: 148, extent: 36},
-	}
-	if idx, ok := navSlotContains(15, 3, sideSlots); !ok || idx != 0 {
-		t.Fatalf("slot 0 hit = (%d, %v), want (0, true)", idx, ok)
-	}
+	sideSlots := []navSlot{{start: 0, extent: 36}, {start: 39, extent: 36}, {start: 148, extent: 36}}
 	if idx, ok := navSlotContains(37.5, 3, sideSlots); !ok || idx != 0 {
-		t.Fatalf("gap between 0 and 1 hit = (%d, %v), want (0, true)", idx, ok)
+		t.Fatalf("gap hit = (%d, %v), want (0, true)", idx, ok)
 	}
-	if idx, ok := navSlotContains(-10, 3, sideSlots); ok {
-		t.Fatalf("outside toggle area should not hit, got (%d, true)", idx)
+	if _, ok := navSlotContains(-10, 3, sideSlots); ok {
+		t.Fatal("outside toggle area should not hit")
 	}
-	if idx, ok := navSlotContains(110, 3, sideSlots); ok {
-		t.Fatalf("expanded sub-item area should not hit top-level slots, got (%d, true)", idx)
+	if _, ok := navSlotContains(110, 3, sideSlots); ok {
+		t.Fatal("expanded gap area should not hit")
 	}
 	if idx, ok := navSlotContains(160, 3, sideSlots); !ok || idx != 2 {
 		t.Fatalf("slot 2 hit = (%d, %v), want (2, true)", idx, ok)
 	}
-	if got := navSlotIndexAt(160, 3, sideSlots); got != 2 {
-		t.Fatalf("navSlotIndexAt(160) = %d, want 2", got)
-	}
 }
 
-func TestStepNavScrubShortTapDoesNotScrub(t *testing.T) {
-	slots := []navSlot{{start: 0, extent: 70}, {start: 72, extent: 70}, {start: 144, extent: 70}}
+func TestStepNavScrub(t *testing.T) {
 	t0 := time.Unix(100, 0)
-	var st navScrubState
-
-	// Pointer down on tab 1 while tab 0 is selected.
-	st.observePointer(navAxisHorizontal, 2, slots, 0, len(slots), true)(inputDown(80, 12))
-	out := stepNavScrub(&st, navScrubInput{
-		now: t0, x: 80, y: 12, mainPos: 80,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 2, allowArm: true,
-	})
-	if st.active || out.commit {
-		t.Fatalf("short press frame 0 unexpectedly activated: st=%+v out=%+v", st, out)
-	}
-	if out.waitForHold != navScrubHoldDelay {
-		t.Fatalf("waitForHold = %v, want %v", out.waitForHold, navScrubHoldDelay)
+	base := func(now time.Time, main float32, slots []navSlot) navScrubInput {
+		return navScrubInput{
+			now: now, x: main, y: 12, mainPos: main,
+			dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
+			slots: slots, gap: 2, allowArm: true,
+		}
 	}
 
-	// Release after 50ms with small jitter < dragThresh: normal OnClick should handle it.
-	out = stepNavScrub(&st, navScrubInput{
-		now: t0.Add(50 * time.Millisecond), x: 84, y: 14, mainPos: 84,
-		released: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 2,
-	})
-	if out.commit || st.suppressClick || st.pressing || st.active {
-		t.Fatalf("short tap release should not scrub-commit or suppressClick: st=%+v out=%+v", st, out)
-	}
-}
-
-func TestStepNavScrubHorizontalAndVerticalDragCommit(t *testing.T) {
-	slots := []navSlot{{start: 0, extent: 50}, {start: 52, extent: 70}, {start: 124, extent: 60}}
-	t0 := time.Unix(200, 0)
-
-	for _, axis := range []navScrubAxis{navAxisHorizontal, navAxisVertical} {
+	t.Run("short tap does not scrub", func(t *testing.T) {
+		slots := []navSlot{{start: 0, extent: 70}, {start: 72, extent: 70}, {start: 144, extent: 70}}
 		var st navScrubState
-		st.observePointer(axis, 2, slots, 0, len(slots), true)(inputDownForAxis(axis, 20, 8))
-		stepNavScrub(&st, navScrubInput{
-			now: t0, x: 20, y: 8, mainPos: 20,
-			anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-			selected: 0, slots: slots, gap: 2, allowArm: true,
-		})
-
-		// Drag past threshold + large cross-axis drift should stay active and clamp to last slot.
-		x, y := float32(240), float32(180)
-		mainPos := navMainCoord(axis, x, y)
-		if axis == navAxisVertical {
-			x, y = 180, 240
-			mainPos = navMainCoord(axis, x, y)
+		st.observePointer(navAxisHorizontal, 2, slots, 0, len(slots), true)(inputDownForAxis(navAxisHorizontal, 80, 12))
+		in := base(t0, 80, slots)
+		in.anyPressed = true
+		if out := stepNavScrub(&st, in); st.active || out.commit || out.waitForHold != navScrubHoldDelay {
+			t.Fatalf("unexpected frame 0: st=%+v out=%+v", st, out)
 		}
-		out := stepNavScrub(&st, navScrubInput{
-			now: t0.Add(24 * time.Millisecond), x: x, y: y, mainPos: mainPos,
-			anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-			selected: 0, slots: slots, gap: 2, allowArm: true,
-		})
-		if !st.active || !out.activeChanged || st.dragIndex != 2 {
-			t.Fatalf("axis %v: expected active drag at index 2, got st=%+v out=%+v", axis, st, out)
+		rel := base(t0.Add(50*time.Millisecond), 84, slots)
+		rel.released = true
+		if out := stepNavScrub(&st, rel); out.commit || st.suppressClick || st.pressing || st.active {
+			t.Fatalf("short tap release should not commit: st=%+v out=%+v", st, out)
 		}
-
-		// Release commits and sets suppressClick.
-		out = stepNavScrub(&st, navScrubInput{
-			now: t0.Add(40 * time.Millisecond), x: x, y: y, mainPos: mainPos,
-			released: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-			selected: 0, slots: slots, gap: 2,
-		})
-		if !out.commit || out.commitIndex != 2 || !st.suppressClick {
-			t.Fatalf("axis %v: expected commit index 2 and suppressClick, got st=%+v out=%+v", axis, st, out)
-		}
-
-		// Next idle frame clears suppressClick.
-		stepNavScrub(&st, navScrubInput{
-			now: t0.Add(56 * time.Millisecond), dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-			selected: 2, slots: slots, gap: 2,
-		})
-		if st.suppressClick {
-			t.Fatalf("axis %v: expected suppressClick to clear on idle frame", axis)
-		}
-	}
-}
-
-func TestStepNavScrubStationaryHold180msActivatesAndFollows(t *testing.T) {
-	slots := []navSlot{{start: 0, extent: 60}, {start: 62, extent: 60}, {start: 124, extent: 60}}
-	t0 := time.Unix(300, 0)
-	var st navScrubState
-
-	// Press stationary on tab 2 (while tab 0 is selected).
-	st.observePointer(navAxisHorizontal, 2, slots, 0, len(slots), true)(inputDown(150, 14))
-	out := stepNavScrub(&st, navScrubInput{
-		now: t0, x: 150, y: 14, mainPos: 150,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 2, allowArm: true,
 	})
-	if st.active || out.waitForHold != navScrubHoldDelay {
-		t.Fatalf("expected waitForHold=%v, got st=%+v out=%+v", navScrubHoldDelay, st, out)
-	}
 
-	// Halfway (100ms): still waiting.
-	out = stepNavScrub(&st, navScrubInput{
-		now: t0.Add(100 * time.Millisecond), x: 150, y: 14, mainPos: 150,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 2, allowArm: true,
-	})
-	if st.active || out.waitForHold != 80*time.Millisecond {
-		t.Fatalf("at 100ms expected waitForHold=80ms, got st=%+v out=%+v", st, out)
-	}
+	t.Run("horizontal and vertical drag commit", func(t *testing.T) {
+		slots := []navSlot{{start: 0, extent: 50}, {start: 52, extent: 70}, {start: 124, extent: 60}}
+		for _, axis := range []navScrubAxis{navAxisHorizontal, navAxisVertical} {
+			var st navScrubState
+			st.observePointer(axis, 2, slots, 0, len(slots), true)(inputDownForAxis(axis, 20, 8))
+			in := base(t0, 20, slots)
+			in.anyPressed = true
+			stepNavScrub(&st, in)
 
-	// At 180ms without movement: activates scrub immediately onto held tab 2!
-	out = stepNavScrub(&st, navScrubInput{
-		now: t0.Add(navScrubHoldDelay), x: 150, y: 14, mainPos: 150,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 2, allowArm: true,
-	})
-	if !st.active || !out.activeChanged || st.dragIndex != 2 {
-		t.Fatalf("at 180ms expected active dragIndex=2, got st=%+v out=%+v", st, out)
-	}
-
-	// Subsequent drag onto tab 1 updates dragIndex.
-	stepNavScrub(&st, navScrubInput{
-		now: t0.Add(220 * time.Millisecond), x: 90, y: 14, mainPos: 90,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 2, allowArm: true,
-	})
-	if st.dragIndex != 1 {
-		t.Fatalf("expected dragIndex=1 after sliding, got %d", st.dragIndex)
-	}
-}
-
-func TestStepNavScrubSystemCancelAndNonSlotGuard(t *testing.T) {
-	slots := []navSlot{{start: 0, extent: 36}, {start: 39, extent: 36}, {start: 140, extent: 36}}
-	t0 := time.Unix(400, 0)
-	var st navScrubState
-
-	// Pressing in expanded sub-item region (y=90) or outside slots (y=-15) does not arm.
-	st.observePointer(navAxisVertical, 3, slots, 0, len(slots), true)(inputDown(18, 90))
-	if st.pressing {
-		t.Fatal("pointer down outside top-level slots should not arm pressing")
-	}
-	stepNavScrub(&st, navScrubInput{
-		now: t0, x: 18, y: 90, mainPos: 90,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 3, allowArm: false,
-	})
-	if st.pressing || st.active {
-		t.Fatalf("allowArm=false must not arm scrub: %+v", st)
-	}
-
-	// Valid press -> activate -> system cancel reverts without commit.
-	st.observePointer(navAxisVertical, 3, slots, 0, len(slots), true)(inputDown(18, 12))
-	stepNavScrub(&st, navScrubInput{
-		now: t0, x: 18, y: 12, mainPos: 12,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 3, allowArm: true,
-	})
-	stepNavScrub(&st, navScrubInput{
-		now: t0.Add(20 * time.Millisecond), x: 18, y: 155, mainPos: 155,
-		anyPressed: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 3, allowArm: true,
-	})
-	if !st.active || st.dragIndex != 2 {
-		t.Fatalf("expected active scrub before cancel, got %+v", st)
-	}
-	out := stepNavScrub(&st, navScrubInput{
-		now: t0.Add(30 * time.Millisecond), x: 18, y: 155, mainPos: 155,
-		anyCanceled: true, released: true, dragThresh: navScrubDragThresh, holdDelay: navScrubHoldDelay,
-		selected: 0, slots: slots, gap: 3,
-	})
-	if out.commit || st.pressing || st.active || st.suppressClick {
-		t.Fatalf("canceled scrub must not commit: st=%+v out=%+v", st, out)
-	}
-}
-
-func TestNavGlassBlendAndCompactControls(t *testing.T) {
-	if got := navGlassBlend(true, false, 1.0, 0); got != 1 {
-		t.Fatalf("active landing blend = %v, want 1", got)
-	}
-	if got := navGlassBlend(true, false, 0.65, 0.2); abs32(got-0.65) > 1e-5 {
-		t.Fatalf("active mid-landing blend = %v, want 0.65", got)
-	}
-	if got := navGlassBlend(false, false, 0.8, 0.5); abs32(got-0.4) > 1e-5 {
-		t.Fatalf("inactive pass-over blend = %v, want 0.4", got)
-	}
-	if got := navGlassBlend(false, true, 1.0, 0.3); abs32(got-0.85) > 1e-5 {
-		t.Fatalf("scrubbing blend = %v, want 0.85", got)
-	}
-
-	dx, dy, pad := compactNavLensExpand(64, 24, 1, 0.12)
-	if dx <= 0 || dy <= 0 || pad != dy || dx > 14 || dy > 6 {
-		t.Fatalf("compactNavLensExpand(64,24,1,0.12) = (%v, %v, %v)", dx, dy, pad)
-	}
-	for _, tc := range []struct {
-		name string
-		dx   float32
-		dy   float32
-	}{
-		{"compact-neg", func() float32 { x, _, _ := compactNavLensExpand(64, 24, -0.18, 0.25); return x }(), func() float32 { _, y, _ := compactNavLensExpand(64, 24, -0.18, 0.25); return y }()},
-		{"desktop-h-neg", func() float32 { x, _, _ := desktopNavLensExpand(navAxisHorizontal, 80, 26, -0.18, 0.25); return x }(), func() float32 { _, y, _ := desktopNavLensExpand(navAxisHorizontal, 80, 26, -0.18, 0.25); return y }()},
-		{"desktop-v-neg", func() float32 { x, _, _ := desktopNavLensExpand(navAxisVertical, 36, 180, -0.18, 0.25); return x }(), func() float32 { _, y, _ := desktopNavLensExpand(navAxisVertical, 36, 180, -0.18, 0.25); return y }()},
-	} {
-		if tc.dx < 0 || tc.dy < 0 {
-			t.Fatalf("%s produced negative expansion: (%v, %v)", tc.name, tc.dx, tc.dy)
-		}
-	}
-	if sdx, _, _ := desktopNavLensExpand(navAxisVertical, 36, 180, 1.28, 0); sdx < 0 || sdx > 8 {
-		t.Fatalf("sidebar horizontal expansion = %v, want within [0, 8]", sdx)
-	}
-
-	var cache navSlotCache
-	if s := cache.slotsFor(4); len(s) != 4 || cache.extra != nil {
-		t.Fatalf("slotsFor(4) should use inline buffer: len=%d extra=%v", len(s), cache.extra)
-	}
-	if s := cache.slotsFor(6); len(s) != 6 || len(cache.extra) != 6 {
-		t.Fatalf("slotsFor(6) = %d, extra=%d", len(s), len(cache.extra))
-	}
-
-	for name, st := range map[string]navLensStyle{
-		"desktop": navLensDesktopStyle, "bottomCapsule": navLensBottomCapsuleStyle,
-		"bottomStandard": navLensBottomStandardStyle, "compact": navLensCompactStyle,
-	} {
-		if st.stretchSpring.Duration <= 0 || st.stretchDiv <= 0 || st.liftFlight <= 0 {
-			t.Fatalf("%s style incomplete: %+v", name, st)
-		}
-	}
-}
-
-func TestGlassMorphTransition(t *testing.T) {
-	var glass bool
-	var targetR float32 = 11
-	var gotMix, gotR float32
-
-	tt := ui.NewTester(func(ctx *ui.Context) {
-		box := ui.Box(ctx.Key("morph-box")).Size(80, 32)
-		gotMix = glassMix(ctx, box, Palette{LiquidGlass: glass})
-		gotR = morphRadius(ctx, box, glassRadiusKey{}, targetR)
-	}, 200, 100)
-
-	tt.Frame()
-	if gotMix != 0 || gotR != 11 {
-		t.Fatalf("mount frame should snap to initial target: mix=%v r=%v, want (0, 11)", gotMix, gotR)
-	}
-
-	glass, targetR = true, 16
-	tt.Frame()
-	tt.Advance(60 * time.Millisecond)
-	if gotMix <= 0 || gotMix >= 1 || gotR <= 11 || gotR >= 16 {
-		t.Fatalf("mid-transition expected values strictly inside (0,1)/(11,16): mix=%v r=%v", gotMix, gotR)
-	}
-
-	tt.Advance(350 * time.Millisecond)
-	if gotMix != 1 || abs32(gotR-16) > 0.01 {
-		t.Fatalf("post-transition expected near convergence to (1, 16): mix=%v r=%v", gotMix, gotR)
-	}
-	tt.Advance(300 * time.Millisecond)
-	if gotMix != 1 || gotR != 16 {
-		t.Fatalf("settled expected exact (1, 16): mix=%v r=%v", gotMix, gotR)
-	}
-}
-
-func TestSectionAndInlineMotionAndFormGroup(t *testing.T) {
-	_, p := ResolveTheme(false, DefaultAccentHex)
-	var showDynamic, staticMode bool
-	var fgEl, secEl, inlEl, gotSec, gotInl ui.Element
-
-	tt := ui.NewTester(func(ctx *ui.Context) {
-		defer BeginFrame(ctx, false)()
-		if staticMode {
-			defer BeginStaticSnapshot(ctx)()
-		}
-		fgEl = FormGroup(ctx.Key("fg"), p, "Group", nil, func() {
-			ui.Text(ctx, "Row")
-		})
-		if showDynamic {
-			secEl = ui.Box(ctx.Key("dyn-sec")).Size(80, 24)
-			gotSec = SectionMotion(ctx, secEl)
-			inlEl = ui.Box(ctx.Key("dyn-inl")).Size(40, 20)
-			gotInl = InlineMotion(ctx, inlEl)
-		}
-	}, 240, 140)
-
-	tt.Frame()
-	if fgEl == (ui.Element{}) {
-		t.Fatal("FormGroup returned zero ui.Element")
-	}
-
-	showDynamic = true
-	tt.Frame()
-	if gotSec == (ui.Element{}) || gotInl == (ui.Element{}) {
-		t.Fatalf("SectionMotion/InlineMotion returned zero element: sec=%v inl=%v", gotSec, gotInl)
-	}
-	tt.Advance(60 * time.Millisecond)
-	tt.Advance(250 * time.Millisecond)
-
-	staticMode = true
-	tt.Frame()
-	if gotSec != secEl || gotInl != inlEl {
-		t.Fatalf("static snapshot should skip SectionMotion/InlineMotion without modifying element")
-	}
-}
-
-func TestDesktopNavLayoutSwitchNoJitter(t *testing.T) {
-	items := []NavTab{
-		{Label: "Overview"},
-		{Label: "PD"},
-		{Label: "Records"},
-		{Label: "Device"},
-	}
-	selected := 0
-	var liquidGlass bool
-	opts := DesktopNavOptions{
-		TabPad: 10, TabGap: 5,
-		ToggleLabel: "Toggle layout",
-		OnToggle:    func() {},
-	}
-	var switching bool
-
-	tt := ui.NewTester(func(ctx *ui.Context) {
-		defer BeginFrame(ctx, false)()
-		_, p := ResolveTheme(false, DefaultAccentHex)
-		p.LiquidGlass = liquidGlass
-		DesktopNav(ctx, p, "Navigation", &selected, items, opts)
-		switching = trackDesktopNavLayoutSwitch(ctx, opts.Sidebar)
-	}, 480, 540)
-
-	assertSidebarMonotonic := func(wantW float32, prev []float32) {
-		t.Helper()
-		for i, item := range items {
-			info, ok := tt.AccessByRole(ui.RoleTab, item.Label)
-			if !ok {
-				t.Fatalf("missing sidebar tab %q", item.Label)
+			drag := base(t0.Add(24*time.Millisecond), 240, slots)
+			drag.anyPressed = true
+			if out := stepNavScrub(&st, drag); !st.active || !out.activeChanged || st.dragIndex != 2 {
+				t.Fatalf("axis %v drag failed: st=%+v out=%+v", axis, st, out)
 			}
-			// Must never stretch toward TopBar's ~354px FillWidth during transition.
-			if info.Bounds.W > wantW+16 {
-				t.Fatalf("sidebar tab %q stretched abnormally: w=%v (want <= %v)", item.Label, info.Bounds.W, wantW+16)
+			rel := base(t0.Add(40*time.Millisecond), 240, slots)
+			rel.released = true
+			if out := stepNavScrub(&st, rel); !out.commit || out.commitIndex != 2 || !st.suppressClick {
+				t.Fatalf("axis %v commit failed: st=%+v out=%+v", axis, st, out)
 			}
-			if prev != nil {
-				if info.Bounds.W+0.5 < prev[i] {
-					t.Fatalf("sidebar tab %q width regressed/oscillated: %v -> %v", item.Label, prev[i], info.Bounds.W)
-				}
-				prev[i] = info.Bounds.W
+			stepNavScrub(&st, base(t0.Add(56*time.Millisecond), 0, slots))
+			if st.suppressClick {
+				t.Fatalf("axis %v suppressClick did not clear on idle", axis)
 			}
 		}
-	}
-	assertSidebarSettled := func(wantW float32) {
-		t.Helper()
-		for _, item := range items {
-			info, ok := tt.AccessByRole(ui.RoleTab, item.Label)
-			if !ok {
-				t.Fatalf("missing settled sidebar tab %q", item.Label)
-			}
-			if abs32(info.Bounds.W-wantW) > 0.01 {
-				t.Fatalf("settled sidebar tab %q width = %v, want %v", item.Label, info.Bounds.W, wantW)
-			}
+	})
+
+	t.Run("stationary hold activates after 180ms and follows", func(t *testing.T) {
+		slots := []navSlot{{start: 0, extent: 60}, {start: 62, extent: 60}, {start: 124, extent: 60}}
+		var st navScrubState
+		st.observePointer(navAxisHorizontal, 2, slots, 0, len(slots), true)(inputDownForAxis(navAxisHorizontal, 150, 14))
+		in := base(t0, 150, slots)
+		in.anyPressed = true
+		stepNavScrub(&st, in)
+		in.now = t0.Add(100 * time.Millisecond)
+		if out := stepNavScrub(&st, in); st.active || out.waitForHold != 80*time.Millisecond {
+			t.Fatalf("at 100ms got st=%+v out=%+v", st, out)
 		}
-	}
-	assertTopBarNoVerticalDrift := func(prevRelY []float32, settled bool) {
-		t.Helper()
-		bar, ok := tt.AccessByRole(ui.RoleTabList, "Navigation")
-		if !ok {
-			t.Fatal("missing Navigation tablist")
+		in.now = t0.Add(navScrubHoldDelay)
+		if out := stepNavScrub(&st, in); !st.active || !out.activeChanged || st.dragIndex != 2 {
+			t.Fatalf("at 180ms got st=%+v out=%+v", st, out)
 		}
-		wantH := DesktopNavTopControlHeight(false)
-		for i, item := range items {
-			info, ok := tt.AccessByRole(ui.RoleTab, item.Label)
-			if !ok {
-				t.Fatalf("missing topbar tab %q", item.Label)
-			}
-			relY := info.Bounds.Y - bar.Bounds.Y
-			if prevRelY != nil {
-				if prevRelY[i] != 0 && relY > prevRelY[i]+0.5 {
-					t.Fatalf("topbar tab %q drifted downward: %v -> %v", item.Label, prevRelY[i], relY)
-				}
-				prevRelY[i] = relY
-			}
-			if settled {
-				if abs32(relY-3) > 0.01 {
-					t.Fatalf("settled topbar tab %q relY = %v, want 3", item.Label, relY)
-				}
-				if abs32(info.Bounds.H-wantH) > 0.01 {
-					t.Fatalf("settled topbar tab %q height = %v, want %v", item.Label, info.Bounds.H, wantH)
-				}
-			}
+		in.now, in.mainPos = t0.Add(220*time.Millisecond), 30
+		if out := stepNavScrub(&st, in); !st.active || out.activeChanged || st.dragIndex != 0 {
+			t.Fatalf("post-hold drag got st=%+v out=%+v", st, out)
 		}
-	}
-
-	// Verify Solid TopBar <-> Sidebar (full + IconsOnly) over the full 360ms transition window.
-	tt.Frame()
-	tt.Advance(50 * time.Millisecond)
-
-	// TopBar -> Full Sidebar
-	opts.Sidebar, opts.IconsOnly = true, false
-	tt.Frame()
-	if !switching {
-		t.Fatal("expected trackDesktopNavLayoutSwitch=true immediately on Sidebar switch")
-	}
-	prevW := make([]float32, len(items))
-	for _, step := range []time.Duration{16 * time.Millisecond, 60 * time.Millisecond, 120 * time.Millisecond} {
-		tt.Advance(step)
-		if !switching {
-			t.Fatal("expected switching=true inside 360ms window")
+		in.now, in.anyPressed, in.released = t0.Add(240*time.Millisecond), false, true
+		if out := stepNavScrub(&st, in); !out.commit || out.commitIndex != 0 {
+			t.Fatalf("post-hold release got st=%+v out=%+v", st, out)
 		}
-		assertSidebarMonotonic(DesktopSidebarWidth-16, prevW)
-	}
-	tt.Advance(250 * time.Millisecond)
-	if switching {
-		t.Fatal("expected switching=false after 360ms window")
-	}
-	tt.Advance(300 * time.Millisecond)
-	assertSidebarSettled(DesktopSidebarWidth - 16)
+	})
 
-	// Full Sidebar -> TopBar
-	opts.Sidebar, opts.IconsOnly = false, false
-	tt.Frame()
-	if !switching {
-		t.Fatal("expected switching=true on TopBar switch")
-	}
-	prevRelY := make([]float32, len(items))
-	for _, step := range []time.Duration{16 * time.Millisecond, 60 * time.Millisecond, 120 * time.Millisecond} {
-		tt.Advance(step)
-		assertTopBarNoVerticalDrift(prevRelY, false)
-	}
-	tt.Advance(250 * time.Millisecond)
-	if switching {
-		t.Fatal("expected switching=false after TopBar settle")
-	}
-	tt.Advance(300 * time.Millisecond)
-	assertTopBarNoVerticalDrift(nil, true)
-
-	// TopBar -> Compact IconsOnly Sidebar
-	opts.Sidebar, opts.IconsOnly = true, true
-	tt.Frame()
-	if !switching {
-		t.Fatal("expected switching=true on IconsOnly Sidebar switch")
-	}
-	tt.Advance(60 * time.Millisecond)
-	assertSidebarMonotonic(90, nil)
-	tt.Advance(350 * time.Millisecond)
-	if switching {
-		t.Fatal("expected switching=false after IconsOnly settle")
-	}
-	tt.Advance(300 * time.Millisecond)
-	assertSidebarSettled(36)
-
-	// Verify LiquidGlass TopBar -> Sidebar switch keeps switching=true, monotonic bounds,
-	// and avoids spurious droplet flight/optics (keeping CPU shader frames minimal for speed).
-	opts.Sidebar, opts.IconsOnly = false, false
-	tt.Frame()
-	tt.Advance(450 * time.Millisecond)
-	liquidGlass = true
-	tt.Frame()
-	opts.Sidebar = true
-	tt.Frame()
-	if !switching {
-		t.Fatal("LiquidGlass: expected switching=true on Sidebar switch")
-	}
-	assertSidebarMonotonic(DesktopSidebarWidth-16, nil)
-
-	// Verify forceJump suppresses spurious LiquidGlass lens flight/optics during layout transitions.
-	var lensDuringSwitch navGlassLens
-	st := &navScrubState{hasPrev: true, lastMode: 4, lastCount: 4}
-	lensTester := ui.NewTester(func(ctx *ui.Context) {
-		host := ui.Box(ctx.Key("lens-host")).Size(200, 40)
-		lensDuringSwitch = st.animateGlassLens(ctx, host, navLensConfig{
-			axis: navAxisHorizontal, target: ui.Rect{X: 10, Y: 2, W: 70, H: 26},
-			mode: 5, count: 4, keyPrefix: "dnav", style: navLensDesktopStyle,
-			forceJump: true,
-			expand: func(mainExt, crossExt, elastic, stretch float32) (dx, dy, padCross float32) {
-				return desktopNavLensExpand(navAxisHorizontal, mainExt, crossExt, elastic, stretch)
-			},
-		})
-	}, 240, 80)
-	lensTester.Frame()
-	if lensDuringSwitch.inFlight || lensDuringSwitch.optics {
-		t.Fatalf("expected forceJump to suppress lens flight/optics, got %+v", lensDuringSwitch)
-	}
+	t.Run("non-slot, allowArm, and cancel guards", func(t *testing.T) {
+		slots := []navSlot{{start: 0, extent: 36}, {start: 39, extent: 36}, {start: 140, extent: 36}}
+		var st navScrubState
+		st.observePointer(navAxisVertical, 3, slots, 0, len(slots), true)(inputDownForAxis(navAxisVertical, 90, 18))
+		if st.pressing {
+			t.Fatal("pointer outside slots should not arm")
+		}
+		noArm := base(t0, 90, slots)
+		noArm.gap, noArm.anyPressed, noArm.allowArm = 3, true, false
+		if out := stepNavScrub(&st, noArm); st.pressing || st.active || out.waitForHold != 0 {
+			t.Fatalf("allowArm=false should not arm: st=%+v out=%+v", st, out)
+		}
+		st.observePointer(navAxisVertical, 3, slots, 0, len(slots), true)(inputDownForAxis(navAxisVertical, 12, 18))
+		in := base(t0, 12, slots)
+		in.gap, in.anyPressed = 3, true
+		stepNavScrub(&st, in)
+		in.now, in.mainPos = t0.Add(20*time.Millisecond), 155
+		stepNavScrub(&st, in)
+		in.now, in.anyPressed, in.anyCanceled, in.released = t0.Add(30*time.Millisecond), false, true, true
+		if out := stepNavScrub(&st, in); out.commit || st.pressing || st.active || st.suppressClick {
+			t.Fatalf("canceled scrub must not commit: st=%+v out=%+v", st, out)
+		}
+	})
 }

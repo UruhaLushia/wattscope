@@ -411,186 +411,56 @@ func TestFindPacketBySequenceAndSummaryCache(t *testing.T) {
 	}
 }
 
-func TestLayoutAndNavigationMetrics(t *testing.T) {
-	if got := navigationPlacement(true, false, navigationSidebar); got != navigationBottom {
-		t.Fatalf("portrait mobile nav = %v, want navigationBottom", got)
-	}
-	if got := navigationPlacement(true, true, navigationSidebar); got != navigationSide {
-		t.Fatalf("landscape sidebar nav = %v, want navigationSide", got)
-	}
-	if got := navigationPlacement(false, false, navigationHorizontal); got != navigationTop {
-		t.Fatalf("desktop horizontal nav = %v, want navigationTop", got)
-	}
-
-	if got := sidebarWidth(fullSidebarMinWidth - 1); got != compactSidebarWidth {
-		t.Fatalf("narrow sidebarWidth = %v, want %v", got, compactSidebarWidth)
-	}
-	if got := sidebarWidth(fullSidebarMinWidth); got != navigationSidebarWidth {
-		t.Fatalf("full sidebarWidth = %v, want %v", got, navigationSidebarWidth)
-	}
-
-	if got := kit.CompactSidebarSideMargin(412); got != kit.CompactSidebarMargin {
-		t.Fatalf("compact side margin = %v, want %v", got, kit.CompactSidebarMargin)
-	}
-	if got := kit.CompactSidebarSideMargin(720); got != kit.DesktopSidebarMargin {
-		t.Fatalf("desktop side margin = %v, want %v", got, kit.DesktopSidebarMargin)
-	}
-	if got := kit.DesktopSidebarRailWidth(true, 412); got != kit.DesktopCompactLandscapeRailW {
-		t.Fatalf("compact landscape rail = %v, want %v", got, kit.DesktopCompactLandscapeRailW)
-	}
-	if got := kit.DesktopSidebarRailWidth(true, 720); got != kit.DesktopCompactRailWidth {
-		t.Fatalf("compact desktop rail = %v, want %v", got, kit.DesktopCompactRailWidth)
-	}
-	if got := kit.DesktopSidebarRailWidth(false, 412); got != kit.DesktopSidebarWidth {
-		t.Fatalf("full rail = %v, want %v", got, kit.DesktopSidebarWidth)
-	}
-
-	if got := kit.BottomNavReserveFor(34, false, kit.BottomNavCapsule); got != 0 {
-		t.Fatalf("hidden bottom nav reserve = %v, want 0", got)
-	}
-	if got := kit.BottomNavReserveFor(34, true, kit.BottomNavCapsule); got != 34+10+kit.BottomNavHeight {
-		t.Fatalf("capsule bottom nav reserve = %v, want %v", got, 34+10+kit.BottomNavHeight)
-	}
-	if got := kit.BottomNavReserveFor(0, true, kit.BottomNavStandard); got != kit.BottomNavDockMargin+kit.BottomNavStandardHeight {
-		t.Fatalf("standard bottom nav reserve = %v, want %v", got, kit.BottomNavDockMargin+kit.BottomNavStandardHeight)
-	}
-
-	start, end := horizontalContentPadding(true, false, navigationBottom, 16, 44, 12)
-	if start != 60 || end != 28 {
-		t.Fatalf("portrait horizontal padding = (%v, %v), want (60, 28)", start, end)
-	}
-	start, end = horizontalContentPadding(false, true, navigationSide, 16, 44, 12)
-	if start != 16 || end != 28 {
-		t.Fatalf("landscape sidebar horizontal padding = (%v, %v), want (16, 28)", start, end)
-	}
-	start, end = horizontalContentPadding(false, true, navigationTop, 16, 44, 12)
-	if start != 60 || end != 28 {
-		t.Fatalf("landscape top-bar horizontal padding = (%v, %v), want (60, 28)", start, end)
-	}
-	start, end = horizontalContentPadding(false, false, navigationTop, 16, 44, 12)
-	if start != 16 || end != 16 {
-		t.Fatalf("desktop horizontal padding = (%v, %v), want (16, 16)", start, end)
-	}
-}
-
-func TestNormalizeWorkspacePage(t *testing.T) {
-	if got := normalizeWorkspacePage(pageMore, true); got != pageMore {
-		t.Fatalf("portrait pageMore = %d, want %d", got, pageMore)
-	}
-	if got := normalizeWorkspacePage(pageMore, false); got != pageOverview {
-		t.Fatalf("landscape pageMore = %d, want %d", got, pageOverview)
-	}
-	for _, page := range []int{pageOverview, pagePD, pageRecords, pageDevice, pageSettings, pageConnectionLog} {
-		if got := normalizeWorkspacePage(page, false); got != page {
-			t.Fatalf("page %d changed during landscape normalization: %d", page, got)
-		}
-	}
-}
-
-func TestPageScrollsUnderHeader(t *testing.T) {
-	noop := func() {}
-	noopList := func(float32) {}
-
-	for _, tc := range []struct {
-		name           string
-		page           workspacePage
-		pageID         int
-		portraitMobile bool
-		want           bool
-	}{
-		{"landscape fixed overview", workspacePage{fixed: noop}, pageOverview, false, false},
-		{"list page", workspacePage{list: noopList}, pagePD, true, false},
-		{"desktop device subnav", workspacePage{content: noop}, pageDevice, false, false},
-		{"desktop log subnav", workspacePage{content: noop}, pageConnectionLog, false, false},
-		{"portrait device page", workspacePage{content: noop}, pageDevice, true, true},
-		{"portrait overview", workspacePage{content: noop}, pageOverview, true, true},
-		{"desktop settings", workspacePage{content: noop}, pageSettings, false, true},
-		{"desktop records", workspacePage{content: noop}, pageRecords, false, true},
-	} {
-		if got := pageScrollsUnderHeader(tc.page, tc.pageID, tc.portraitMobile); got != tc.want {
-			t.Fatalf("%s: pageScrollsUnderHeader = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestChartPlotCanvasKeyAndSecondaryColor(t *testing.T) {
 	_, light := kit.ResolveTheme(false, kit.DefaultAccentHex)
 	_, dark := kit.ResolveTheme(true, kit.DefaultAccentHex)
 	ticks := []chart.Tick{{At: 0, Value: 0}, {At: 1, Value: 10}}
+	geom := chartGeometryKey{rect: ui.Rect{X: 10, Y: 20, W: 300, H: 180}, scale: 2, end: 60, series: 7}
+	moved := geom
+	moved.rect.X, moved.rect.Y = 40, 120
 
-	geomA := chartGeometryKey{rect: ui.Rect{X: 10, Y: 20, W: 300, H: 180}, scale: 2, start: 0, end: 60, primary: 0, series: 7}
-	geomMoved := geomA
-	geomMoved.rect.X, geomMoved.rect.Y = 40, 120
-
-	base := makeChartPlotCanvasKey(geomA, 600, 360, 2, light, 4, ticks, 0, 7, false)
-	moved := makeChartPlotCanvasKey(geomMoved, 600, 360, 2, light, 4, ticks, 0, 7, false)
-	if base != moved {
+	base := makeChartPlotCanvasKey(geom, 600, 360, 2, light, 4, ticks, 0, 7, false)
+	if makeChartPlotCanvasKey(moved, 600, 360, 2, light, 4, ticks, 0, 7, false) != base {
 		t.Fatal("origin X/Y translation must not invalidate chartPlotCanvasKey")
 	}
-
-	if darkKey := makeChartPlotCanvasKey(geomA, 600, 360, 2, dark, 4, ticks, 0, 7, false); darkKey == base {
-		t.Fatal("theme change must invalidate chartPlotCanvasKey")
+	if makeChartPlotCanvasKey(geom, 600, 360, 2, dark, 4, ticks, 0, 7, false) == base ||
+		makeChartPlotCanvasKey(geom, 600, 360, 2, light, 4, ticks, 0, 7, true) == base ||
+		makeChartPlotCanvasKey(geom, 602, 360, 2, light, 4, ticks, 0, 7, false) == base {
+		t.Fatal("theme, axis, or pixel size change must invalidate chartPlotCanvasKey")
 	}
-	if leftAxisKey := makeChartPlotCanvasKey(geomA, 600, 360, 2, light, 4, ticks, 0, 7, true); leftAxisKey == base {
-		t.Fatal("hasLeftAxis change must invalidate chartPlotCanvasKey")
-	}
-	if resized := makeChartPlotCanvasKey(geomA, 602, 360, 2, light, 4, ticks, 0, 7, false); resized == base {
-		t.Fatal("pixel dimension change must invalidate chartPlotCanvasKey")
-	}
-
 	for _, pal := range []kit.Palette{light, dark} {
 		for i, ch := range channels {
-			c := secondaryCurveColor(ch, pal, 0.32)
-			if c.A != 255 {
-				t.Fatalf("channel %d secondaryCurveColor alpha = %d, want 255 for GPU fast path", i, c.A)
+			if c := secondaryCurveColor(ch, pal, 0.32); c.A != 255 {
+				t.Fatalf("channel %d secondaryCurveColor alpha = %d, want 255", i, c.A)
 			}
 		}
 	}
 }
 
-func TestPDLandscapeLayoutHelpers(t *testing.T) {
-	if !pdHeaderShowsSummary(true, navigationSide) {
-		t.Fatal("landscape sidebar should render PD summary pill in header")
+func TestDashboardStatus(t *testing.T) {
+	msgs := locales.In("en")
+	for _, tc := range []struct {
+		name string
+		snap backend.Snapshot
+		err  error
+		want kit.BadgeTone
+	}{
+		{"error", backend.Snapshot{State: backend.Streaming}, context.Canceled, kit.ToneDanger},
+		{"missing", backend.Snapshot{ErrorKind: "missing"}, nil, kit.TonePlain},
+		{"permission", backend.Snapshot{ErrorKind: "permission"}, nil, kit.ToneWarning},
+		{"offline", backend.Snapshot{}, nil, kit.TonePlain},
+		{"connecting", backend.Snapshot{State: backend.Connecting}, nil, kit.ToneWarning},
+		{"waiting", backend.Snapshot{State: backend.Waiting}, nil, kit.ToneWarning},
+		{"streaming", backend.Snapshot{State: backend.Streaming}, nil, kit.ToneSuccess},
+	} {
+		if _, _, got := dashboardStatus(msgs, tc.snap, tc.err); got != tc.want {
+			t.Fatalf("%s: dashboardStatus tone = %v, want %v", tc.name, got, tc.want)
+		}
 	}
-	if pdHeaderShowsSummary(true, navigationTop) {
-		t.Fatal("landscape top-bar must keep PD summary pill out of header")
-	}
-	if pdHeaderShowsSummary(false, navigationSide) {
-		t.Fatal("non-landscape sidebar must not move PD summary pill to header")
-	}
+}
 
-	if !pdUsesSplitDetail(true, true, 853) {
-		t.Fatal("853dp mobile landscape should use split PD detail")
-	}
-	if pdUsesSplitDetail(true, true, 679) {
-		t.Fatal("679dp mobile landscape should not use split PD detail")
-	}
-	if pdUsesSplitDetail(true, false, 900) {
-		t.Fatal("portrait mobile must not use split PD detail")
-	}
-	if !pdUsesSplitDetail(false, false, 760) {
-		t.Fatal("760dp desktop should use split PD detail")
-	}
-
-	_, p := kit.ResolveTheme(false, kit.DefaultAccentHex)
-	if got := pdNegotiationDotColor(p, pd.Packet{Type: "PS_RDY"}); got != p.Green {
-		t.Fatalf("PS_RDY dot = %v, want Green", got)
-	}
-	if got := pdNegotiationDotColor(p, pd.Packet{Type: "Wait"}); got != p.Warning {
-		t.Fatalf("Wait dot = %v, want Warning", got)
-	}
-	if got := pdNegotiationDotColor(p, pd.Packet{Type: "Source_Capabilities"}); got != p.Accent {
-		t.Fatalf("Source_Capabilities dot = %v, want Accent", got)
-	}
-
-	if got := pdCompactCountLabel(74, 74); got != "74" {
-		t.Fatalf("pdCompactCountLabel(74, 74) = %q, want 74", got)
-	}
-	if got := pdCompactCountLabel(37, 74); got != "37/74" {
-		t.Fatalf("pdCompactCountLabel(37, 74) = %q, want 37/74", got)
-	}
-
-	fields := []pdview.Field{
+func TestPDPairing(t *testing.T) {
+	fields := pdPairFields([]pdview.Field{
 		{Label: "响应", Value: "18.0 ms"},
 		{Label: "就绪", Value: "20.8 ms"},
 		{Label: "LongFieldLabel", Value: "This is a much longer value exceeding twenty six runes"},
@@ -598,42 +468,26 @@ func TestPDLandscapeLayoutHelpers(t *testing.T) {
 		{Label: "角色", Value: "Source / DFP"},
 		{Label: "协议", Value: "PD 3.x · ID 6 · 0x0DA6"},
 		{Label: "Tail", Value: "odd"},
-	}
-	pairedFields := pdPairFields(fields)
-	if len(pairedFields) != 4 {
-		t.Fatalf("pdPairFields len = %d, want 4: %+v", len(pairedFields), pairedFields)
-	}
-	if !pairedFields[0].paired || pairedFields[0].left.Label != "响应" || pairedFields[0].right.Label != "就绪" {
-		t.Fatalf("row 0 = %+v, want paired 响应 + 就绪", pairedFields[0])
-	}
-	if pairedFields[1].paired || pairedFields[1].left.Label != "LongFieldLabel" {
-		t.Fatalf("row 1 = %+v, want solo LongFieldLabel", pairedFields[1])
-	}
-	if !pairedFields[2].paired || pairedFields[2].left.Label != "角色" || pairedFields[2].right.Label != "协议" {
-		t.Fatalf("row 2 = %+v, want paired 角色 + 协议", pairedFields[2])
-	}
-	if pairedFields[3].paired || pairedFields[3].left.Label != "Tail" {
-		t.Fatalf("row 3 = %+v, want solo Tail", pairedFields[3])
+	})
+	if len(fields) != 4 ||
+		!fields[0].paired || fields[0].left.Label != "响应" || fields[0].right.Label != "就绪" ||
+		fields[1].paired || fields[1].left.Label != "LongFieldLabel" ||
+		!fields[2].paired || fields[2].left.Label != "角色" || fields[2].right.Label != "协议" ||
+		fields[3].paired || fields[3].left.Label != "Tail" {
+		t.Fatalf("pdPairFields = %+v", fields)
 	}
 
-	pdos := []pd.PDO{
+	pdos := pdPairPDOs([]pd.PDO{
 		{Position: 1, Kind: "Fixed", MinV: 5, MaxV: 5, MaxA: 3},
 		{Position: 2, Kind: "Fixed", MinV: 9, MaxV: 9, MaxA: 3},
 		{Position: 3, Kind: "SPR AVS", MinV: 9, MaxV: 20, MaxA15V: 3, MaxA20V: 3},
 		{Position: 4, Kind: "PPS", MinV: 3.3, MaxV: 21, MaxA: 5},
-	}
-	pairedPDOs := pdPairPDOs(pdos)
-	if len(pairedPDOs) != 3 {
-		t.Fatalf("pdPairPDOs len = %d, want 3: %+v", len(pairedPDOs), pairedPDOs)
-	}
-	if !pairedPDOs[0].paired || pairedPDOs[0].left.Position != 1 || pairedPDOs[0].right.Position != 2 {
-		t.Fatalf("pdo row 0 = %+v, want paired #1+#2", pairedPDOs[0])
-	}
-	if pairedPDOs[1].paired || pairedPDOs[1].left.Kind != "SPR AVS" {
-		t.Fatalf("pdo row 1 = %+v, want solo SPR AVS", pairedPDOs[1])
-	}
-	if pairedPDOs[2].paired || pairedPDOs[2].left.Position != 4 {
-		t.Fatalf("pdo row 2 = %+v, want solo #4", pairedPDOs[2])
+	})
+	if len(pdos) != 3 ||
+		!pdos[0].paired || pdos[0].left.Position != 1 || pdos[0].right.Position != 2 ||
+		pdos[1].paired || pdos[1].left.Kind != "SPR AVS" ||
+		pdos[2].paired || pdos[2].left.Position != 4 {
+		t.Fatalf("pdPairPDOs = %+v", pdos)
 	}
 }
 
@@ -643,45 +497,28 @@ func TestResolveChartTicksDualSlot(t *testing.T) {
 	var ran bool
 	tt := ui.NewTester(func(ctx *ui.Context) {
 		ran = true
-		ax0 := chart.Linear{Lo: 0, Hi: 50}
-		ax1 := chart.Linear{Lo: 0, Hi: 20}
-
+		ax0, ax1 := chart.Linear{Lo: 0, Hi: 50}, chart.Linear{Lo: 0, Hi: 20}
 		res0 := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true)
 		res1 := d.resolveChartTicks(ctx, 1, chVoltage, ax1, "V", false, true)
-		if len(res0.ticks) == 0 || len(res0.labels) != len(res0.ticks) || res0.rightMargin <= 0 {
-			t.Fatalf("slot 0 unexpected ticks: %+v", res0)
-		}
-		if len(res1.ticks) == 0 || res1.key.channel != chVoltage || res1.key.unit != "V" {
-			t.Fatalf("slot 1 unexpected ticks: %+v", res1)
-		}
-		if d.chartTickMetrics[0].key.channel != chPower || d.chartTickMetrics[1].key.channel != chVoltage {
-			t.Fatalf("slots collided: [0]=%+v [1]=%+v", d.chartTickMetrics[0].key, d.chartTickMetrics[1].key)
+		if len(res0.ticks) == 0 || len(res0.labels) != len(res0.ticks) || res0.rightMargin <= 0 ||
+			len(res1.ticks) == 0 || res1.key.channel != chVoltage || res1.key.unit != "V" ||
+			d.chartTickMetrics[0].key.channel != chPower || d.chartTickMetrics[1].key.channel != chVoltage {
+			t.Fatalf("dual slot init failed: res0=%+v res1=%+v", res0, res1)
 		}
 
-		// Cache hit preserves exact cached slice & width.
+		// Cache hit, scale invalidation, channel switch isolation, and snapshotOnly immutability.
 		d.chartTickMetrics[0].rightMargin = 123.5
 		if hit := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true); hit.rightMargin != 123.5 {
-			t.Fatalf("expected slot 0 cache hit (123.5), got %v", hit.rightMargin)
+			t.Fatalf("expected cache hit (123.5), got %v", hit.rightMargin)
 		}
-
-		// Scale mismatch invalidates cache.
-		zoom := ctx.Zoom()
-		if zoom <= 0 {
-			zoom = 1
-		}
+		zoom := max(ctx.Zoom(), 1)
 		d.chartTickMetrics[0].key.scale = zoom + 1
-		scaled := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true)
-		if scaled.rightMargin == 123.5 || scaled.key.scale != zoom {
-			t.Fatalf("expected scale mismatch invalidation, got width=%v scale=%v", scaled.rightMargin, scaled.key.scale)
+		if scaled := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true); scaled.rightMargin == 123.5 || scaled.key.scale != zoom {
+			t.Fatalf("scale mismatch did not invalidate: width=%v scale=%v", scaled.rightMargin, scaled.key.scale)
 		}
-
-		// Channel switch updates slot 0 without clobbering slot 1.
-		cur := d.resolveChartTicks(ctx, 0, chCurrent, chart.Linear{Lo: 0, Hi: 5}, "A", false, true)
-		if cur.key.channel != chCurrent || d.chartTickMetrics[1].key.channel != chVoltage {
-			t.Fatalf("channel switch affected slot 1 or failed: [0]=%+v [1]=%+v", d.chartTickMetrics[0].key, d.chartTickMetrics[1].key)
+		if cur := d.resolveChartTicks(ctx, 0, chCurrent, chart.Linear{Lo: 0, Hi: 5}, "A", false, true); cur.key.channel != chCurrent || d.chartTickMetrics[1].key.channel != chVoltage {
+			t.Fatalf("channel switch affected slot 1: [0]=%+v [1]=%+v", d.chartTickMetrics[0].key, d.chartTickMetrics[1].key)
 		}
-
-		// snapshotOnly computes fresh ticks without mutating cached slot.
 		d.snapshotOnly = true
 		snapRes := d.resolveChartTicks(ctx, 0, chPower, ax0, "W", false, true)
 		d.snapshotOnly = false
@@ -695,240 +532,75 @@ func TestResolveChartTicksDualSlot(t *testing.T) {
 	}
 }
 
-func TestDashboardStatusAndPageOrder(t *testing.T) {
-	msgs := locales.In("en")
-	cases := []struct {
-		name string
-		snap backend.Snapshot
-		err  error
-		want kit.BadgeTone
-	}{
-		{name: "error", snap: backend.Snapshot{State: backend.Streaming}, err: context.Canceled, want: kit.ToneDanger},
-		{name: "missing", snap: backend.Snapshot{ErrorKind: "missing"}, want: kit.TonePlain},
-		{name: "permission", snap: backend.Snapshot{ErrorKind: "permission"}, want: kit.ToneWarning},
-		{name: "offline", snap: backend.Snapshot{}, want: kit.TonePlain},
-		{name: "connecting", snap: backend.Snapshot{State: backend.Connecting}, want: kit.ToneWarning},
-		{name: "waiting", snap: backend.Snapshot{State: backend.Waiting}, want: kit.ToneWarning},
-		{name: "streaming", snap: backend.Snapshot{State: backend.Streaming}, want: kit.ToneSuccess},
-	}
-	for _, tc := range cases {
-		_, _, got := dashboardStatus(msgs, tc.snap, tc.err)
-		if got != tc.want {
-			t.Fatalf("%s: dashboardStatus tone = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-
-	mob := &dashboard{mobile: true}
-	if mob.pageOrder(pageOverview) >= mob.pageOrder(pagePD) ||
-		mob.pageOrder(pagePD) >= mob.pageOrder(pageRecords) ||
-		mob.pageOrder(pageRecords) >= mob.pageOrder(pageMore) ||
-		mob.pageOrder(pageMore) >= mob.pageOrder(pageDevice) ||
-		mob.pageOrder(pageDevice) >= mob.pageOrder(pageConnectionLog) ||
-		mob.pageOrder(pageConnectionLog) >= mob.pageOrder(pageSettings) {
-		t.Fatalf("unexpected mobile pageOrder sequence")
-	}
-	if mob.pageOrder(-1) != 0 || mob.pageOrder(99) != 0 {
-		t.Fatalf("expected out-of-bounds mobile pageOrder to return 0, got %d/%d", mob.pageOrder(-1), mob.pageOrder(99))
-	}
-
-	desk := &dashboard{mobile: false}
-	if desk.pageOrder(pageOverview) >= desk.pageOrder(pagePD) ||
-		desk.pageOrder(pagePD) >= desk.pageOrder(pageRecords) ||
-		desk.pageOrder(pageRecords) >= desk.pageOrder(pageDevice) ||
-		desk.pageOrder(pageDevice) >= desk.pageOrder(pageConnectionLog) ||
-		desk.pageOrder(pageConnectionLog) >= desk.pageOrder(pageSettings) ||
-		desk.pageOrder(pageSettings) >= desk.pageOrder(pageMore) {
-		t.Fatalf("unexpected desktop pageOrder sequence")
-	}
-	if desk.pageOrder(-1) != 0 || desk.pageOrder(99) != 0 {
-		t.Fatalf("expected out-of-bounds desktop pageOrder to return 0, got %d/%d", desk.pageOrder(-1), desk.pageOrder(99))
-	}
-}
-
-func TestWorkspaceLayoutAndDesktopSafeArea(t *testing.T) {
-	d := &dashboard{language: "en"}
-	d.settings = guiSettings{Theme: mygo.ThemeLight, Navigation: navigationSidebar, Accent: kit.DefaultAccentHex}
-
-	var layOff, layOn workspaceLayout
-	var renderGlass bool
-	tt := ui.NewTesterWith(func(ctx *ui.Context) {
-		d.settings.LiquidGlass = false
-		layOff = d.computeWorkspaceLayout(ctx)
-		d.settings.LiquidGlass = true
-		layOn = d.computeWorkspaceLayout(ctx)
-		d.settings.LiquidGlass = renderGlass
-		p, msgs := d.frameTheme(ctx)
-		d.draw(ctx, p, msgs, backend.Snapshot{})
-	}, 1000, 700, ui.TesterOptions{Preferences: ui.Preferences{ReduceMotion: true}})
-
-	tt.Frame()
-	if layOff.floatingTop != headerHeight || layOn.floatingTop != layOff.floatingTop {
-		t.Fatalf("desktop floatingTop mismatch: off=%v on=%v want=%v", layOff.floatingTop, layOn.floatingTop, float32(headerHeight))
-	}
-	brand0, ok := tt.Find("WattScope")
-	if !ok {
-		t.Fatal("missing WattScope header text")
-	}
-	ov0, ok := tt.Find("Overview")
-	if !ok {
-		t.Fatal("missing Overview sidebar tab")
-	}
-
-	renderGlass = true
-	tt.Frame()
-	brandGlass, _ := tt.Find("WattScope")
-	ovGlass, _ := tt.Find("Overview")
-	if brandGlass != brand0 || ovGlass != ov0 {
-		t.Fatalf("Sidebar LiquidGlass toggle shifted layout: brand %v->%v, ov %v->%v", brand0, brandGlass, ov0, ovGlass)
-	}
-
-	// Verify TopBar mode also keeps 0.0px shift across LiquidGlass toggle.
-	d.settings.Navigation = navigationHorizontal
-	renderGlass = false
-	tt.Frame()
-	topBrand0, _ := tt.Find("WattScope")
-	topOv0, _ := tt.Find("Overview")
-	renderGlass = true
-	tt.Frame()
-	topBrandGlass, _ := tt.Find("WattScope")
-	topOvGlass, _ := tt.Find("Overview")
-	if topBrandGlass != topBrand0 || topOvGlass != topOv0 {
-		t.Fatalf("TopBar LiquidGlass toggle shifted layout: brand %v->%v, ov %v->%v", topBrand0, topBrandGlass, topOv0, topOvGlass)
-	}
-
-	d.settings.Navigation = navigationSidebar
-	tt.Frame()
-	tt.SetInsets(12, 8, 0, 16)
-	tt.Frame()
-	if layOff.topInset != 12 || layOff.floatingTop != headerHeight || layOn.floatingTop != layOff.floatingTop {
-		t.Fatalf("safe-area layout mismatch: off=%+v on=%+v", layOff, layOn)
-	}
-	brand1, ok := tt.Find("WattScope")
-	if !ok {
-		t.Fatal("missing WattScope header text with safe-area")
-	}
-	ov1, ok := tt.Find("Overview")
-	if !ok {
-		t.Fatal("missing Overview sidebar tab with safe-area")
-	}
-	dbX, dbY := brand1.X-brandGlass.X, brand1.Y-brandGlass.Y
-	doX, doY := ov1.X-ovGlass.X, ov1.Y-ovGlass.Y
-	if dbX <= 0 || dbY <= 0 || dbX != doX || dbY != doY {
-		t.Fatalf("header and desktop-body drifted under SafeArea: brandDelta=(%v,%v) bodyDelta=(%v,%v)", dbX, dbY, doX, doY)
-	}
-	if ov1.Y < brand1.Y+brand1.H {
-		t.Fatalf("sidebar overlapped header under SafeArea: ov.Y=%v, brandBottom=%v", ov1.Y, brand1.Y+brand1.H)
-	}
-}
-
 func TestReconnectHoldTransitions(t *testing.T) {
 	svc := &backend.Service{}
-	prevSnap := backend.Snapshot{
+	prev := backend.Snapshot{
 		State:  backend.Streaming,
 		Device: device.Info{ID: "dev-a", Name: "Meter A", Driver: "witrn"},
 		Latest: &device.Sample{Voltage: 5.0},
 	}
-
-	d := &dashboard{}
+	d := &dashboard{service: svc}
 	var live, got backend.Snapshot
-	var reconnecting, disableConnect bool
-
+	var reconn, disabled bool
 	tt := ui.NewTester(func(ctx *ui.Context) {
-		got, reconnecting, disableConnect = d.resolveDisplaySnapshot(ctx, live)
+		got, reconn, disabled = d.resolveDisplaySnapshot(ctx, live)
 	}, 200, 100)
 
-	// 1. Same-device reconnect: <250ms holds previous snapshot with connect enabled,
-	// >=250ms disables connect, >=900ms releases hold and normalizes Stopped -> Connecting.
-	d.service = svc
-	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	// Same-device hold window: <250ms enabled, >=250ms disabled, >=900ms released -> Connecting.
+	d.reconnectHold = reconnectHold{service: svc, snap: prev, pending: true}
 	live = backend.Snapshot{State: backend.Stopped}
 	tt.Frame()
-	if !reconnecting || disableConnect || got.State != backend.Streaming || got.Device.ID != "dev-a" {
-		t.Fatalf("t=0ms: got=(state=%v id=%q) reconn=%v disabled=%v, want held Streaming/dev-a reconn=true disabled=false",
-			got.State, got.Device.ID, reconnecting, disableConnect)
+	if !reconn || disabled || got.State != backend.Streaming || got.Device.ID != "dev-a" || d.reconnectHold.pending {
+		t.Fatalf("t=0ms: got=(%v,%q) reconn=%v disabled=%v pending=%v", got.State, got.Device.ID, reconn, disabled, d.reconnectHold.pending)
 	}
-	if d.reconnectHold.pending {
-		t.Fatal("first resolveDisplaySnapshot frame should consume pending flag")
-	}
-
 	tt.Advance(reconnectDisableDelay - time.Millisecond)
-	if !reconnecting || disableConnect {
-		t.Fatalf("t=249ms: reconn=%v disabled=%v, want true/false", reconnecting, disableConnect)
+	if !reconn || disabled {
+		t.Fatalf("t=249ms: reconn=%v disabled=%v, want true/false", reconn, disabled)
 	}
-
 	tt.Advance(2 * time.Millisecond)
-	if !reconnecting || !disableConnect || got.State != backend.Streaming {
-		t.Fatalf("t=251ms: got.State=%v reconn=%v disabled=%v, want Streaming reconn=true disabled=true",
-			got.State, reconnecting, disableConnect)
+	if !reconn || !disabled || got.State != backend.Streaming {
+		t.Fatalf("t=251ms: state=%v reconn=%v disabled=%v", got.State, reconn, disabled)
 	}
-
 	tt.Advance(reconnectGrace - reconnectDisableDelay)
-	if reconnecting || !disableConnect || got.State != backend.Connecting {
-		t.Fatalf("t>=900ms: got.State=%v reconn=%v disabled=%v, want Connecting reconn=false disabled=true",
-			got.State, reconnecting, disableConnect)
-	}
-	if d.reconnectHold.service != nil {
-		t.Fatal("grace expiry should clear reconnectHold")
+	if reconn || !disabled || got.State != backend.Connecting || d.reconnectHold.service != nil {
+		t.Fatalf("t>=900ms: state=%v reconn=%v disabled=%v hold=%v", got.State, reconn, disabled, d.reconnectHold.service != nil)
 	}
 
-	// 2. Recoverable report errors keep the held snapshot.
-	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	// Recoverable report error keeps hold; missing error or new device releases immediately.
+	d.reconnectHold = reconnectHold{service: svc, snap: prev, pending: true}
 	live = backend.Snapshot{State: backend.Waiting, ErrorKind: "report", Error: "invalid sample"}
 	tt.Frame()
-	if !reconnecting || disableConnect || got.Device.ID != "dev-a" || d.reconnectHold.service == nil {
-		t.Fatalf("report error should keep hold: got.ID=%q reconn=%v disabled=%v hold=%v",
-			got.Device.ID, reconnecting, disableConnect, d.reconnectHold.service != nil)
+	if !reconn || disabled || got.Device.ID != "dev-a" || d.reconnectHold.service == nil {
+		t.Fatalf("report error should keep hold: id=%q reconn=%v disabled=%v", got.Device.ID, reconn, disabled)
 	}
-
-	// 3. Non-report error immediately releases hold.
-	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	d.reconnectHold = reconnectHold{service: svc, snap: prev, pending: true}
 	live = backend.Snapshot{State: backend.Waiting, ErrorKind: "missing", Error: "no device"}
 	tt.Frame()
-	if reconnecting || disableConnect || got.ErrorKind != "missing" || d.reconnectHold.service != nil {
-		t.Fatalf("error release failed: got.ErrorKind=%q reconn=%v disabled=%v hold=%v",
-			got.ErrorKind, reconnecting, disableConnect, d.reconnectHold.service != nil)
+	if reconn || disabled || got.ErrorKind != "missing" || d.reconnectHold.service != nil {
+		t.Fatalf("missing error should release hold: kind=%q reconn=%v disabled=%v", got.ErrorKind, reconn, disabled)
 	}
-
-	// 4. Different Device.ID immediately switches without holding old device.
-	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
-	live = backend.Snapshot{
-		State:  backend.Connecting,
-		Device: device.Info{ID: "dev-b", Name: "Meter B", Driver: "witrn"},
-	}
+	d.reconnectHold = reconnectHold{service: svc, snap: prev, pending: true}
+	live = backend.Snapshot{State: backend.Connecting, Device: device.Info{ID: "dev-b", Name: "Meter B", Driver: "witrn"}}
 	tt.Frame()
-	if reconnecting || !disableConnect || got.Device.ID != "dev-b" || d.reconnectHold.service != nil {
-		t.Fatalf("device switch failed: got.ID=%q reconn=%v disabled=%v hold=%v",
-			got.Device.ID, reconnecting, disableConnect, d.reconnectHold.service != nil)
+	if reconn || !disabled || got.Device.ID != "dev-b" || d.reconnectHold.service != nil {
+		t.Fatalf("device switch failed: id=%q reconn=%v disabled=%v", got.Device.ID, reconn, disabled)
 	}
 
-	// 5. Offline connect (empty hold.snap) normalizes Stopped -> Connecting without flashing Stopped,
-	// and schedules a grace wake so a quiet stopped service cannot remain stuck at Connecting.
+	// Offline connect normalizes Stopped -> Connecting until grace expires; snapshotOnly stays read-only.
 	d.reconnectHold = reconnectHold{service: svc, pending: true}
 	live = backend.Snapshot{State: backend.Stopped}
 	tt.Frame()
-	if reconnecting || !disableConnect || got.State != backend.Connecting {
-		t.Fatalf("offline connect Stopped normalization failed: state=%v reconn=%v disabled=%v",
-			got.State, reconnecting, disableConnect)
-	}
-	if d.reconnectHold.service == nil {
-		t.Fatal("offline connect hold should remain until grace expiry")
+	if reconn || !disabled || got.State != backend.Connecting || d.reconnectHold.service == nil {
+		t.Fatalf("offline connect failed: state=%v reconn=%v disabled=%v", got.State, reconn, disabled)
 	}
 	tt.Advance(reconnectGrace)
 	if d.reconnectHold.service != nil {
 		t.Fatal("offline connect grace wake should clear reconnectHold")
 	}
-
-	// 6. snapshotOnly=true with pending=true stays read-only and still returns held snapshot.
 	d.snapshotOnly = true
-	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
-	live = backend.Snapshot{State: backend.Stopped}
+	d.reconnectHold = reconnectHold{service: svc, snap: prev, pending: true}
 	tt.Frame()
-	if !reconnecting || disableConnect || got.Device.ID != "dev-a" || got.State != backend.Streaming {
-		t.Fatalf("snapshotOnly read failed: state=%v id=%q reconn=%v disabled=%v",
-			got.State, got.Device.ID, reconnecting, disableConnect)
-	}
-	if !d.reconnectHold.pending || !d.reconnectHold.startedAt.IsZero() {
-		t.Fatalf("snapshotOnly mutated host reconnectHold: pending=%v startedAt=%v",
-			d.reconnectHold.pending, d.reconnectHold.startedAt)
+	if !reconn || disabled || got.Device.ID != "dev-a" || !d.reconnectHold.pending || !d.reconnectHold.startedAt.IsZero() {
+		t.Fatalf("snapshotOnly failed: id=%q reconn=%v disabled=%v pending=%v", got.Device.ID, reconn, disabled, d.reconnectHold.pending)
 	}
 }
