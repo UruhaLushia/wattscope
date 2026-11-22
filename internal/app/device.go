@@ -277,10 +277,17 @@ func (view *connectionLogView) snapshot(logs *diagnostics.Buffer, level slog.Lev
 	return view.entries
 }
 
+func (d *dashboard) connectionLogEntries() []diagnostics.Entry {
+	if d.snapshotOnly && d.logView.level == d.logLevel && (d.logView.revision != 0 || d.logs == nil) {
+		return d.logView.entries
+	}
+	return d.logView.snapshot(d.logs, d.logLevel)
+}
+
 func (d *dashboard) connectionLogPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages, bottomPadding float32) {
 	ctx.After(500 * time.Millisecond)
 	touch := d.touchUI()
-	entries := d.logView.snapshot(d.logs, d.logLevel)
+	entries := d.connectionLogEntries()
 	kit.NarrowColumn(ctx, func() {
 		levels := [...]struct {
 			minimum slog.Level
@@ -336,7 +343,7 @@ func (d *dashboard) connectionLogPage(ctx *ui.Context, p kit.Palette, msgs local
 					kit.EmptyState(ctx, p, kit.IconActivity, title, "", nil)
 					return
 				}
-				ui.List(ctx.Key("log-entries"), &d.logView.list, len(entries)).FillWidth().Grow(1).MinHeight(0).Scrollbars(false).
+				ui.List(ctx.Key("log-entries"), d.logListState(), len(entries)).FillWidth().Grow(1).MinHeight(0).Scrollbars(false).
 					Padding(0, 0, bottomPadding, 0).
 					ItemKey(func(index int) any { return entries[index].Sequence }).
 					Rows(func(row ui.ListRow) {

@@ -117,12 +117,16 @@ func (d *dashboard) packetSnapshot() backend.PacketSnapshot {
 		return *view.held
 	}
 	if d.service != nil {
+		if d.snapshotOnly {
+			return view.live
+		}
 		data := d.service.PacketSnapshot(0, 0)
 		if data.Oldest != view.live.Oldest || data.Total != view.live.Total {
 			view.live = d.service.PacketSnapshot(0, -1)
 			return view.live
 		}
 		data.Packets = view.live.Packets
+		view.live = data
 		return data
 	}
 	return backend.PacketSnapshot{}
@@ -288,7 +292,7 @@ func (d *dashboard) preparePDFrame(msgs locales.Messages, landscape bool, width 
 		summary:       summary,
 		capsText:      capsText,
 		splitDetail:   pdUsesSplitDetail(d.mobile, landscape, width),
-		canReturnLive: view.offline == nil && len(visible) > 0 && (view.held != nil || view.selected != 0 || !view.list.AtEnd()),
+		canReturnLive: view.offline == nil && len(visible) > 0 && (view.held != nil || view.selected != 0 || !d.packetListAtEnd()),
 	}
 }
 
@@ -871,16 +875,17 @@ func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages
 			view.row = idx
 		}
 	}
+	listState := d.packetListState()
 	if f.splitDetail {
-		view.list.Selected = &view.row
-		view.list.Choose(view.row)
+		listState.Selected = &view.row
+		listState.Choose(view.row)
 	} else {
-		view.list.Selected = nil
+		listState.Selected = nil
 	}
-	view.list.Label = func(i int) string {
+	listState.Label = func(i int) string {
 		return fmt.Sprintf("#%d %s", f.visible[i].Sequence, f.visible[i].Type)
 	}
-	view.list.FollowEnd = view.offline == nil && view.held == nil && view.selected == 0 && !view.expanded
+	listState.FollowEnd = view.offline == nil && view.held == nil && view.selected == 0 && !view.expanded
 
 	renderFollowFAB := func() {
 		if !landscape || !f.canReturnLive {
@@ -896,7 +901,7 @@ func (d *dashboard) pdPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages
 	}
 	renderListBox := func(box ui.Element) {
 		box.Children(func() {
-			list := ui.List(ctx.Key("packets"), &view.list, len(f.visible)).Fill()
+			list := ui.List(ctx.Key("packets"), listState, len(f.visible)).Fill()
 			switch {
 			case f.splitDetail && landscape:
 				list.Padding(4, 4, max(4, bottomPadding), 4)

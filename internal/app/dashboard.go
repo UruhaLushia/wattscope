@@ -210,6 +210,7 @@ func (d *dashboard) view(ctx *ui.Context) {
 	stage := ui.Box(ctx.Key("theme-stage")).Absolute().Top(0).Right(0).Bottom(0).Left(0)
 	stage.Children(func() {
 		if reveal != nil {
+			d.warmRevealListData(msgs)
 			oldTheme, oldP := kit.ResolveTheme(!p.Dark, d.settings.Accent)
 			oldP.LiquidGlass = p.LiquidGlass
 			oldSnap := d.snapshotForReveal(!p.Dark)
@@ -220,6 +221,8 @@ func (d *dashboard) view(ctx *ui.Context) {
 					oldSnap.draw(ctx, oldP, msgs, snapshot)
 				})
 			})
+		} else {
+			d.revealLists = nil
 		}
 		host := ui.Box(ctx.Key("workspace-host")).Fill().ZIndex(1)
 		if reveal != nil {
@@ -235,6 +238,13 @@ func (d *dashboard) view(ctx *ui.Context) {
 }
 
 func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
+	if d.revealLists == nil {
+		d.revealLists = &revealListStates{}
+	}
+	syncRevealListState(&d.revealLists.packets, &d.packets.list)
+	syncRevealListState(&d.revealLists.log, &d.logView.list)
+	d.revealLists.packetsAtEnd = listAtEndOrUnlaid(&d.packets.list)
+
 	snap := &dashboard{
 		meterAccessState: d.meterAccessState,
 		ctx:              d.ctx,
@@ -279,11 +289,70 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 		reconnecting:     d.reconnecting,
 		connectDisabled:  d.connectDisabled,
 		snapshotOnly:     true,
+		revealLists:      d.revealLists,
 	}
 	snap.packets.expanded = false
-	snap.packets.list.Handle = ui.Handle{}
-	snap.logView.list.Handle = ui.Handle{}
+	snap.packets.list = ui.ListState{}
+	snap.logView.list = ui.ListState{}
 	return snap
+}
+
+type revealListStates struct {
+	packets      ui.ListState
+	packetsAtEnd bool
+	log          ui.ListState
+}
+
+func (d *dashboard) packetListState() *ui.ListState {
+	if d.snapshotOnly && d.revealLists != nil {
+		return &d.revealLists.packets
+	}
+	return &d.packets.list
+}
+
+func (d *dashboard) logListState() *ui.ListState {
+	if d.snapshotOnly && d.revealLists != nil {
+		return &d.revealLists.log
+	}
+	return &d.logView.list
+}
+
+func (d *dashboard) packetListAtEnd() bool {
+	if d.snapshotOnly && d.revealLists != nil {
+		return d.revealLists.packetsAtEnd
+	}
+	return listAtEndOrUnlaid(d.packetListState())
+}
+
+func listAtEndOrUnlaid(s *ui.ListState) bool {
+	if s.AtEnd() {
+		return true
+	}
+	first, last := s.Visible()
+	return last < first
+}
+
+func syncRevealListState(dst, src *ui.ListState) {
+	if src.AtEnd() {
+		dst.ScrollToEnd()
+		return
+	}
+	if first, last := src.Visible(); last >= first {
+		dst.ScrollTo(first, ui.Start)
+		return
+	}
+	*dst = ui.ListState{}
+}
+
+func (d *dashboard) warmRevealListData(msgs locales.Messages) {
+	switch d.page {
+	case pagePD:
+		data := d.packetSnapshot()
+		d.packets.visiblePackets(msgs, data.Packets)
+		d.packets.summaryState(data.Packets)
+	case pageConnectionLog:
+		d.logView.snapshot(d.logs, d.logLevel)
+	}
 }
 
 func (d *dashboard) resolveDisplaySnapshot(ctx *ui.Context, live backend.Snapshot) (display backend.Snapshot, reconnecting, disableConnect bool) {

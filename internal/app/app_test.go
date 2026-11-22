@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"strings"
@@ -603,4 +604,244 @@ func TestReconnectHoldTransitions(t *testing.T) {
 	if !reconn || disabled || got.Device.ID != "dev-a" || !d.reconnectHold.pending || !d.reconnectHold.startedAt.IsZero() {
 		t.Fatalf("snapshotOnly failed: id=%q reconn=%v disabled=%v pending=%v", got.Device.ID, reconn, disabled, d.reconnectHold.pending)
 	}
+}
+
+func TestSnapshotForRevealIsolatesListState(t *testing.T) {
+	const (
+		canvasW = 220
+		canvasH = 180
+		listX   = float32(72)
+	)
+	cases := []struct {
+		name  string
+		tag   string
+		count int
+		pick  func(*dashboard) *ui.ListState
+		raw   func(*dashboard) *ui.ListState
+		atEnd bool
+	}{
+		{
+			name:  "packets_end",
+			tag:   "pkt",
+			count: 48,
+			pick:  func(d *dashboard) *ui.ListState { return d.packetListState() },
+			raw:   func(d *dashboard) *ui.ListState { return &d.packets.list },
+			atEnd: true,
+		},
+		{
+			name:  "packets_mid",
+			tag:   "pkt",
+			count: 48,
+			pick:  func(d *dashboard) *ui.ListState { return d.packetListState() },
+			raw:   func(d *dashboard) *ui.ListState { return &d.packets.list },
+			atEnd: false,
+		},
+		{
+			name:  "log_end",
+			tag:   "log",
+			count: 20,
+			pick:  func(d *dashboard) *ui.ListState { return d.logListState() },
+			raw:   func(d *dashboard) *ui.ListState { return &d.logView.list },
+			atEnd: true,
+		},
+		{
+			name:  "log_mid",
+			tag:   "log",
+			count: 20,
+			pick:  func(d *dashboard) *ui.ListState { return d.logListState() },
+			raw:   func(d *dashboard) *ui.ListState { return &d.logView.list },
+			atEnd: false,
+		},
+	}
+
+	msgs := locales.In("en")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &dashboard{}
+			live := tc.pick(d)
+			selected := tc.count - 1
+			if !tc.atEnd {
+				selected = 10
+			}
+			live.Selected = &selected
+			if tc.atEnd {
+				live.ScrollToEnd()
+			} else {
+				live.ScrollTo(10, ui.Start)
+			}
+
+			renderList := func(ctx *ui.Context, key string, state *ui.ListState, prefix string) {
+				ui.Row(ctx).Fill().Children(func() {
+					ui.Box(ctx).Width(listX).FillHeight()
+					ui.Box(ctx).Grow(1).FillHeight().MinHeight(0).Clip().Children(func() {
+						ui.List(ctx.Key(key), state, tc.count).Fill().Clip().
+							ItemKey(func(i int) any { return i }).
+							Rows(func(row ui.ListRow) {
+								ui.Text(row.Context, fmt.Sprintf("%s-%s-%d", prefix, tc.tag, row.Index)).
+									SingleLine().Height(28)
+							})
+					})
+				})
+			}
+
+			showReveal := false
+			var lastSnap *dashboard
+			tt := ui.NewTester(func(ctx *ui.Context) {
+				stage := ui.Box(ctx.Key("theme-stage")).Absolute().Top(0).Right(0).Bottom(0).Left(0)
+				stage.Children(func() {
+					if showReveal {
+						d.warmRevealListData(msgs)
+						snap := d.snapshotForReveal(false)
+						lastSnap = snap
+						snapList := tc.pick(snap)
+						snapSel := selected
+						snapList.Selected = &snapSel
+						if !tc.atEnd {
+							snapList.FollowEnd = true
+						}
+						ui.Box(ctx.Key("theme-reveal-alternate")).Absolute().Fill().ZIndex(0).
+							PassThrough().IgnoreInput(true).AccessHidden(true).Children(func() {
+							renderList(ctx, "snap-"+tc.tag, snapList, "snap")
+						})
+					} else {
+						d.revealLists = nil
+					}
+					ui.Box(ctx.Key("workspace-host")).Fill().ZIndex(1).Children(func() {
+						renderList(ctx, "live-"+tc.tag, tc.pick(d), "live")
+					})
+				})
+			}, canvasW, canvasH)
+
+			// First pass: lay out the single live list so Visible()/AtEnd() are populated.
+			tt.Frame()
+			if live.AtEnd() != tc.atEnd {
+				t.Fatalf("single list AtEnd=%v, want %v", live.AtEnd(), tc.atEnd)
+			}
+			firstBefore, lastBefore := live.Visible()
+			if tc.atEnd && lastBefore != tc.count-1 {
+				t.Fatalf("single list at end visible=(%d,%d), want last=%d", firstBefore, lastBefore, tc.count-1)
+			}
+			if !tc.atEnd && (firstBefore != 10 || lastBefore >= tc.count-1) {
+				t.Fatalf("single list mid-scroll visible=(%d,%d), want first=10 and last<%d", firstBefore, lastBefore, tc.count-1)
+			}
+
+			// Render multiple consecutive reveal frames and verify revealLists reuse + isolation.
+			showReveal = true
+			var wantRevealLists *revealListStates
+			var wantSnapList *ui.ListState
+			for frame := range 3 {
+				tt.Frame()
+				if lastSnap == nil || d.revealLists == nil {
+					t.Fatalf("frame %d: reveal state not populated (lastSnap=%v revealLists=%v)", frame, lastSnap != nil, d.revealLists != nil)
+				}
+				snapList := tc.pick(lastSnap)
+				if frame == 0 {
+					wantRevealLists = d.revealLists
+					wantSnapList = snapList
+				} else if d.revealLists != wantRevealLists || snapList != wantSnapList {
+					t.Fatalf("frame %d: revealLists was not reused (got %p/%p, want %p/%p)", frame, d.revealLists, snapList, wantRevealLists, wantSnapList)
+				}
+				if snapList == live || tc.raw(lastSnap) == snapList {
+					t.Fatalf("frame %d: snapshot list state was not isolated from live/raw fields", frame)
+				}
+				if snapList.AtEnd() != tc.atEnd || live.AtEnd() != tc.atEnd {
+					t.Fatalf("frame %d: AtEnd mismatch: snap=%v live=%v want=%v", frame, snapList.AtEnd(), live.AtEnd(), tc.atEnd)
+				}
+				snapFirst, snapLast := snapList.Visible()
+				liveFirst, liveLast := live.Visible()
+				if snapFirst != liveFirst || snapLast != liveLast {
+					t.Fatalf("frame %d: visible range mismatch: snap=(%d,%d) live=(%d,%d)", frame, snapFirst, snapLast, liveFirst, liveLast)
+				}
+				if !tc.atEnd && (snapFirst != 10 || snapLast >= tc.count-1) {
+					t.Fatalf("frame %d: snapshot jumped away from mid-scroll row 10: snap=(%d,%d)", frame, snapFirst, snapLast)
+				}
+				for _, row := range []int{liveFirst, selected, liveLast} {
+					for _, prefix := range []string{"snap", "live"} {
+						label := fmt.Sprintf("%s-%s-%d", prefix, tc.tag, row)
+						r, ok := tt.Find(label)
+						if !ok || r.W <= 0 || r.H <= 0 {
+							t.Fatalf("frame %d: row %q missing or zero-sized: ok=%v rect=%+v", frame, label, ok, r)
+						}
+						if r.X < listX || r.X >= listX*1.5 {
+							t.Fatalf("frame %d: row %q shifted horizontally out of list bounds: rect=%+v (listX=%v)", frame, label, r, listX)
+						}
+					}
+				}
+			}
+
+			// End reveal: revealLists must be released cleanly while live list keeps rendering.
+			showReveal = false
+			tt.Frame()
+			if d.revealLists != nil {
+				t.Fatalf("expected d.revealLists released after reveal ends, got %p", d.revealLists)
+			}
+			rLive, okLive := tt.Find(fmt.Sprintf("live-%s-%d", tc.tag, selected))
+			if !okLive || rLive.W <= 0 || rLive.H <= 0 || rLive.X < listX || rLive.X >= listX*1.5 {
+				t.Fatalf("live row invalid after reveal ended: ok=%v rect=%+v", okLive, rLive)
+			}
+		})
+	}
+
+	t.Run("live_pd_canReturnLive_isolation", func(t *testing.T) {
+		packets := make([]pd.Packet, 48)
+		for i := range packets {
+			packets[i] = pd.Packet{Sequence: uint64(i + 1), Elapsed: float64(i) * 0.1, SOP: "SOP", Type: "GoodCRC"}
+		}
+		d := &dashboard{page: pagePD, service: &backend.Service{}}
+		d.packets.live = backend.PacketSnapshot{Packets: packets}
+
+		// 1. Before first layout: unlaid live list must not trigger canReturnLive on live or snapshot.
+		d.warmRevealListData(msgs)
+		snap := d.snapshotForReveal(false)
+		if !d.packetListAtEnd() || !snap.packetListAtEnd() {
+			t.Fatalf("unlaid list should report atEnd=true: live=%v snap=%v", d.packetListAtEnd(), snap.packetListAtEnd())
+		}
+		liveFrame := d.preparePDFrame(msgs, false, 1200)
+		snapFrame := snap.preparePDFrame(msgs, false, 1200)
+		if len(liveFrame.visible) != len(packets) || len(snapFrame.visible) != len(packets) {
+			t.Fatalf("unexpected visible packet counts: live=%d snap=%d want=%d", len(liveFrame.visible), len(snapFrame.visible), len(packets))
+		}
+		if liveFrame.canReturnLive || snapFrame.canReturnLive {
+			t.Fatalf("unlaid live PD should have canReturnLive=false: live=%v snap=%v", liveFrame.canReturnLive, snapFrame.canReturnLive)
+		}
+
+		// 2. Laid out at end: canReturnLive stays false.
+		tt := ui.NewTester(func(ctx *ui.Context) {
+			ui.List(ctx.Key("live-pd"), d.packetListState(), len(packets)).Fill().Rows(func(row ui.ListRow) {
+				ui.Text(row.Context, fmt.Sprintf("#%d", row.Index+1)).SingleLine().Height(28)
+			})
+		}, canvasW, canvasH)
+		d.packetListState().ScrollToEnd()
+		tt.Frame()
+		if !d.packets.list.AtEnd() {
+			t.Fatal("expected live packets list at end after ScrollToEnd")
+		}
+		d.warmRevealListData(msgs)
+		snap = d.snapshotForReveal(false)
+		liveFrame = d.preparePDFrame(msgs, false, 1200)
+		snapFrame = snap.preparePDFrame(msgs, false, 1200)
+		if !snap.packetListAtEnd() || liveFrame.canReturnLive || snapFrame.canReturnLive {
+			t.Fatalf("at-end live PD should have canReturnLive=false: snapAtEnd=%v live=%v snap=%v", snap.packetListAtEnd(), liveFrame.canReturnLive, snapFrame.canReturnLive)
+		}
+
+		// 3. Laid out and scrolled away from end: canReturnLive is true on both live and snapshot.
+		d.packetListState().ScrollTo(10, ui.Start)
+		tt.Frame()
+		if d.packets.list.AtEnd() {
+			t.Fatal("expected live packets list not at end after ScrollTo(10)")
+		}
+		d.warmRevealListData(msgs)
+		snap = d.snapshotForReveal(false)
+		liveFrame = d.preparePDFrame(msgs, false, 1200)
+		snapFrame = snap.preparePDFrame(msgs, false, 1200)
+		if snap.packetListAtEnd() || !liveFrame.canReturnLive || !snapFrame.canReturnLive {
+			t.Fatalf("scrolled-up live PD should have canReturnLive=true: snapAtEnd=%v live=%v snap=%v", snap.packetListAtEnd(), liveFrame.canReturnLive, snapFrame.canReturnLive)
+		}
+
+		// 4. Release revealLists when reveal ends.
+		d.revealLists = nil
+		if d.revealLists != nil || d.packetListState() != &d.packets.list || d.logListState() != &d.logView.list {
+			t.Fatal("revealLists cleanup did not restore direct live list state")
+		}
+	})
 }

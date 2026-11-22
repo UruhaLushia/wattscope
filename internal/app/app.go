@@ -93,6 +93,7 @@ type dashboard struct {
 	themeReveal      kit.ThemeReveal
 	themeChanges     []themeChange
 	snapshotOnly     bool
+	revealLists      *revealListStates
 	reconnectHold    reconnectHold
 	reconnecting     bool
 	connectDisabled  bool
