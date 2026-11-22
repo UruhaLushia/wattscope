@@ -147,40 +147,52 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 		sub = ""
 	}
 
+	renderIdentity := func() {
+		kit.IconBadge(ctx, kit.IconCpu, 44, p.AccentSoft, p.AccentText)
+		ui.Column(ctx).Grow(1).Basis(180).MinWidth(140).Gap(3).Children(func() {
+			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(8).Children(func() {
+				ui.Text(ctx, title).FontSize(16).FontWeight(700)
+				if status != "" {
+					kit.Badge(ctx, p, status, statusBadgeTone)
+				}
+			})
+			if sub != "" {
+				ui.Text(ctx, sub).FontSize(12).TextColor(p.Muted).Wrap()
+			}
+		})
+	}
+	renderActions := func() {
+		if runtime.GOOS == "linux" && snap.ErrorKind == "permission" {
+			kit.ActionButton(ctx.Key("meter-permissions"), p, kit.VariantSecondary, kit.IconShield, msgs.GuiMeterAccess(), touch, func() {
+				d.goPage(pageSettings)
+			})
+		}
+		conn := d.connectButton(ctx, p, msgs, "connect", snap, !snap.Device.Simulated, touch, d.connect)
+		scan := kit.ActionButton(ctx.Key("scan"), p, kit.VariantSecondary, kit.IconRefresh, msgs.GuiFindMeters(), touch, func() {
+			d.scanMeters(msgs, false)
+		}).Disabled(d.busy)
+		if d.mobile {
+			conn.Grow(1)
+			scan.Grow(1)
+		}
+	}
+
 	kit.NarrowColumn(ctx, func() {
 		kit.Card(ctx, p).Gap(12).Children(func() {
-			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(12).Children(func() {
-				kit.IconBadge(ctx, kit.IconCpu, 44, p.AccentSoft, p.AccentText)
-				ui.Column(ctx).Grow(1).Basis(180).MinWidth(140).Gap(3).Children(func() {
-					ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(8).Children(func() {
-						ui.Text(ctx, title).FontSize(16).FontWeight(700)
-						if status != "" {
-							kit.Badge(ctx, p, status, statusBadgeTone)
-						}
-					})
-					if sub != "" {
-						ui.Text(ctx, sub).FontSize(12).TextColor(p.Muted).Wrap()
-					}
+			if d.mobile {
+				ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(12).Children(renderIdentity)
+			} else {
+				ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).AlignContent(ui.Center).Justify(ui.SpaceBetween).Gap(12).Children(func() {
+					ui.Row(ctx).Grow(1).Basis(220).MinWidth(180).AlignItems(ui.Center).Gap(12).Children(renderIdentity)
+					ui.Row(ctx).Shrink(0).MaxWidthPercent(100).Wrap().Gap(8).AlignItems(ui.Center).Justify(ui.End).Children(renderActions)
 				})
-			})
+			}
 			if detail != "" {
 				ui.Text(ctx, detail).FillWidth().FontSize(12).TextColor(p.Muted).Wrap()
 			}
-			kit.ActionBar(ctx).Children(func() {
-				if runtime.GOOS == "linux" && snap.ErrorKind == "permission" {
-					kit.ActionButton(ctx.Key("meter-permissions"), p, kit.VariantSecondary, kit.IconShield, msgs.GuiMeterAccess(), touch, func() {
-						d.goPage(pageSettings)
-					})
-				}
-				conn := d.connectButton(ctx, p, msgs, "connect", snap, !snap.Device.Simulated, touch, d.connect)
-				scan := kit.ActionButton(ctx.Key("scan"), p, kit.VariantSecondary, kit.IconRefresh, msgs.GuiFindMeters(), touch, func() {
-					d.scanMeters(msgs, false)
-				}).Disabled(d.busy)
-				if d.mobile {
-					conn.Grow(1)
-					scan.Grow(1)
-				}
-			})
+			if d.mobile {
+				kit.ActionBar(ctx).Children(renderActions)
+			}
 		})
 
 		if len(d.meters) > 0 {
@@ -212,9 +224,7 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 
 		if snap.State == backend.Streaming && hasTelemetry(snap.Latest) {
 			kit.FormGroup(ctx, p, msgs.GuiTelemetry(), nil, func() {
-				ui.Column(ctx).FillWidth().Children(func() {
-					d.deviceTelemetry(ctx, p, msgs, snap.Latest)
-				})
+				d.deviceTelemetry(ctx, p, msgs, snap.Latest)
 			})
 		}
 	})
@@ -233,7 +243,7 @@ func (d *dashboard) deviceSubnav(ctx *ui.Context, p kit.Palette, msgs locales.Me
 	padStart, padEnd := horizontalContentPadding(d.isPortraitMobile(ctx), landscape, position, padX, leftInset, rightInset)
 	ui.Column(ctx.Key("device-subnav")).FillWidth().Shrink(0).Padding(padTop, padEnd, 6, padStart).Children(func() {
 		kit.NarrowColumn(ctx, func() {
-			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(12).Children(func() {
+			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).AlignContent(ui.Center).Gap(12).Children(func() {
 				if !d.mobile {
 					ui.Text(ctx, msgs.GuiDevice()).FontSize(18).FontWeight(750).SingleLine().Role(ui.RoleHeading).Level(2)
 				}

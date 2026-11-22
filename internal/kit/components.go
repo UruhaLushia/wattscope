@@ -102,7 +102,7 @@ func SectionTitle(ctx *ui.Context, title string) {
 }
 
 func sectionHeader(ctx *ui.Context, p Palette, title string, trailing func()) {
-	ui.Row(ctx).FillWidth().MinHeight(24).AlignItems(ui.Center).Gap(8).Children(func() {
+	ui.Row(ctx).FillWidth().MinHeight(24).Padding(0, 0, 0, 4).AlignItems(ui.Center).Gap(8).Children(func() {
 		AnimatedLabel(ctx, title).FontSize(11).FontWeight(650).LetterSpacing(.4).TextColor(p.Muted).Grow(1)
 		if trailing != nil {
 			trailing()
@@ -163,22 +163,17 @@ func kvRow(ctx *ui.Context, p Palette, label, value string, mobile bool, trailin
 	if value == "" && trailing == nil {
 		return
 	}
+	minH, padY := float32(42), float32(8)
 	if mobile {
-		ui.Row(ctx).FillWidth().MinHeight(46).Padding(10, 0).Gap(12).AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-			ui.Text(ctx, label).FontSize(13).FontWeight(500).TextColor(p.Muted).Shrink(0)
-			if value != "" {
-				ui.Text(ctx, value).FontSize(13).FontWeight(600).FontFeatures("tnum").
-					Grow(1).MinWidth(0).Wrap().TextAlign(ui.End).Selectable()
-			}
-			if trailing != nil {
-				trailing()
-			}
-		})
-		return
+		minH, padY = 46, 10
 	}
-	ui.Row(ctx).FillWidth().Wrap().MinHeight(42).Padding(8, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Text(ctx, label).FontSize(12).FontWeight(600).TextColor(p.Muted).MinWidth(104).Shrink(0)
-		ui.Text(ctx, value).FontSize(13).Grow(1).Basis(160).MinWidth(0).Selectable()
+	ui.Row(ctx).FillWidth().MinHeight(minH).Padding(padY, 0).Gap(16).
+		AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+		ui.Text(ctx, label).FontSize(13).FontWeight(500).TextColor(p.Muted).Shrink(0)
+		if value != "" {
+			ui.Text(ctx, value).FontSize(13).FontWeight(550).FontFeatures("tnum").
+				Grow(1).MinWidth(0).Wrap().TextAlign(ui.End).Selectable()
+		}
 		if trailing != nil {
 			trailing()
 		}
