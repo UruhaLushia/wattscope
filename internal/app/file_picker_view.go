@@ -31,7 +31,7 @@ type filePickerViewState struct {
 func (d *dashboard) pickerView(ctx *ui.Context) {
 	ui.Overlay(ctx, func() {})
 	d.drainUIQueue()
-	_, palette, msgs := d.frameTheme(ctx)
+	palette, msgs := d.frameTheme(ctx)
 	d.picker.ui.draw(ctx, palette, msgs, &d.picker.data, filePickerActions{
 		Navigate: d.browsePickerDirectory,
 		Create:   func(name string) { d.createPickerFolder(msgs, name) },

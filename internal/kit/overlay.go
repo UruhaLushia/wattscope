@@ -20,8 +20,8 @@ type MenuItem struct {
 	OnSelect func()
 }
 
-func SurfaceChrome(el ui.Element, p Palette, radius float32) ui.Element {
-	return GlassFloating(el, p, radius, 0.1, ui.Color{}, false, p.Surface, p.Line.Mix(p.Text, 0.08)).
+func SurfaceChrome(ctx *ui.Context, el ui.Element, p Palette, radius float32) ui.Element {
+	return GlassFloating(ctx, el, p, radius, 0.1, ui.Color{}, false, p.Surface, p.Line.Mix(p.Text, 0.08)).
 		Shadow(0, 10, 28, 0, p.Shadow)
 }
 
@@ -147,7 +147,7 @@ func MenuPopup(ctx *ui.Context, p Palette, menu ui.MenuParts, anchor ui.Element,
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0).
 			Scrollbars(false).Width(panelW).Padding(6).Gap(2)
 		PopupMotion(panel)
-		SurfaceChrome(panel, p, RadiusXL)
+		SurfaceChrome(ctx, panel, p, RadiusXL)
 
 		itemMinH, fontSize, padY, padX := menuItemMetrics(touch, false)
 		for i, item := range items {
@@ -179,7 +179,7 @@ func optionMenuPopup(ctx *ui.Context, p Palette, trigger ui.Element, open *bool,
 		panelW := adaptiveMenuWidth(ctx, items, false, true)
 		panel.AttachTo(trigger, ui.AnchorTopEnd, ui.AnchorTopEnd).Margin(-topInset-3, -formGroupInset-3, 0, 0).
 			Scrollbars(false).Width(panelW).Padding(5, 6).Gap(1)
-		SurfaceChrome(panel, p, RadiusXL)
+		SurfaceChrome(ctx, panel, p, RadiusXL)
 		OptionMenuMotion(panel)
 
 		itemMinH, fontSize, padY, padX := menuItemMetrics(false, true)
@@ -323,18 +323,18 @@ func Popover(ctx *ui.Context, p Palette, anchor ui.Element, open *bool, originX,
 	ui.PopoverBase(ctx, anchor, open, func(panel ui.Element) {
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0)
 		PopupMotion(panel)
-		SurfaceChrome(panel, p, RadiusL)
+		SurfaceChrome(ctx, panel, p, RadiusL)
 		build(panel)
 	})
 }
 
 func Dialog(ctx *ui.Context, p Palette, open *bool, maxWidth, maxHeight float32, content func()) {
 	width, height := ctx.Size()
-	_, _, bottomInset, _ := ctx.SafeArea()
+	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
 	ui.DialogBase(ctx, open, func(back, panel ui.Element) {
 		BackdropMotion(back, p)
-		panelWidth := min(max(240, width-32), maxWidth)
-		panelHeight := min(max(200, height-bottomInset-40), maxHeight)
+		panelWidth := min(max(240, width-leftInset-rightInset-32), maxWidth)
+		panelHeight := min(max(200, height-topInset-bottomInset-40), maxHeight)
 		pad := float32(20)
 		if width < 480 {
 			pad = 16
@@ -343,7 +343,7 @@ func Dialog(ctx *ui.Context, p Palette, open *bool, maxWidth, maxHeight float32,
 		if p.LiquidGlass {
 			dialogRadius = RadiusXL
 		}
-		GlassFloating(ModalMotion(panel).Width(panelWidth).MaxHeight(panelHeight).Padding(pad).Gap(14),
+		GlassFloating(ctx, ModalMotion(panel).Width(panelWidth).MaxHeight(panelHeight).Padding(pad).Gap(14),
 			p, dialogRadius, 0.15, ui.Color{}, false, p.Surface, p.Line).
 			Shadow(0, 14, 36, 0, p.Shadow).
 			Children(content)
@@ -355,9 +355,10 @@ func BottomSheet(ctx *ui.Context, p Palette, open *bool, maxHeightFrac float32, 
 	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
 	ui.DialogBase(ctx, open, func(back, panel ui.Element) {
 		BackdropMotion(back, p).AlignItems(ui.Stretch).Justify(ui.End)
-		maxH := max(260, (height-topInset-24)*maxHeightFrac)
+		availH := max(160, height-topInset-24)
+		maxH := min(availH, max(260, availH*maxHeightFrac))
 		SheetMotion(panel).FillWidth().MaxHeight(maxH).
-			Padding(0, max(16, rightInset), max(16, bottomInset), max(16, leftInset)).Gap(10).
+			Padding(0, rightInset+16, max(16, bottomInset+8), leftInset+16).Gap(10).
 			Radius(RadiusL+6, RadiusL+6, 0, 0).
 			Shadow(0, -8, 28, 0, p.Shadow)
 		if p.LiquidGlass {

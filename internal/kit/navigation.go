@@ -15,15 +15,55 @@ const (
 )
 
 const (
-	BottomNavHeight         float32 = 56
-	BottomNavStandardHeight float32 = 58
-	BottomNavDockMargin     float32 = 16
-	DesktopTopNavHeight     float32 = 32
-	desktopTopNavControl    float32 = 26
-	DesktopSidebarWidth     float32 = 196
-	DesktopCompactRailWidth float32 = 60
-	DesktopSidebarMargin    float32 = 12
+	BottomNavHeight              float32 = 56
+	BottomNavStandardHeight      float32 = 58
+	BottomNavDockMargin          float32 = 16
+	DesktopTopNavHeight          float32 = 32
+	MobileTopNavHeight           float32 = 38
+	desktopTopNavControl         float32 = 26
+	mobileTopNavControl          float32 = 32
+	DesktopSidebarWidth          float32 = 196
+	DesktopCompactRailWidth      float32 = 60
+	DesktopCompactLandscapeRailW float32 = 52
+	DesktopSidebarMargin         float32 = 12
+	CompactSidebarMargin         float32 = 8
+	compactSidebarMaxHeight      float32 = 520
 )
+
+// CompactSidebarSideMargin returns the outer inset margin of the floating sidebar card.
+func CompactSidebarSideMargin(winH float32) float32 {
+	if winH > 0 && winH < compactSidebarMaxHeight {
+		return CompactSidebarMargin
+	}
+	return DesktopSidebarMargin
+}
+
+// DesktopSidebarRailWidth returns the width of the floating sidebar rail for the given mode and window height.
+func DesktopSidebarRailWidth(iconsOnly bool, winH float32) float32 {
+	if !iconsOnly {
+		return DesktopSidebarWidth
+	}
+	if winH > 0 && winH < compactSidebarMaxHeight {
+		return DesktopCompactLandscapeRailW
+	}
+	return DesktopCompactRailWidth
+}
+
+// DesktopNavTopBarHeight returns the height of the floating top navigation capsule.
+func DesktopNavTopBarHeight(touch bool) float32 {
+	if touch {
+		return MobileTopNavHeight
+	}
+	return DesktopTopNavHeight
+}
+
+// DesktopNavTopControlHeight returns the control/tab height inside the top navigation capsule.
+func DesktopNavTopControlHeight(touch bool) float32 {
+	if touch {
+		return mobileTopNavControl
+	}
+	return desktopTopNavControl
+}
 
 func BottomNavHeightFor(style BottomNavStyle) float32 {
 	if style == BottomNavStandard {
@@ -68,15 +108,16 @@ func navShadowColor(p Palette, strong bool) ui.Color {
 	return ui.RGBA(15, 23, 42, 0.08)
 }
 
-func navBarChrome(bar ui.Element, p Palette, radius, clarity float32, fallbackBg, fallbackBorder ui.Color, strongShadow bool) ui.Element {
+func navBarChrome(ctx *ui.Context, bar ui.Element, p Palette, radius, clarity float32, fallbackBg, fallbackBorder ui.Color, strongShadow bool) {
 	if p.LiquidGlass {
 		bar.Shadow(0, 4, 16, 0, navShadowColor(p, strongShadow))
-		return glassFloatingUnclipped(bar, p, radius, clarity, ui.Color{}, fallbackBg, fallbackBorder)
+		glassFloatingUnclipped(ctx, bar, p, radius, clarity, ui.Color{}, fallbackBg, fallbackBorder)
+		return
 	}
 	if strongShadow || !p.Dark {
 		bar.Shadow(0, 4, 16, 0, navShadowColor(p, strongShadow))
 	}
-	return GlassFloating(bar, p, radius, clarity, ui.Color{}, false, fallbackBg, fallbackBorder)
+	GlassFloating(ctx, bar, p, radius, clarity, ui.Color{}, false, fallbackBg, fallbackBorder)
 }
 
 func navInactiveOverlayColors(p Palette, standard bool) (hoverBg, pressBg ui.Color) {
@@ -89,264 +130,308 @@ func navInactiveOverlayColors(p Palette, standard bool) (hoverBg, pressBg ui.Col
 	return ui.RGBA(15, 23, 42, 0.045), ui.RGBA(15, 23, 42, 0.085)
 }
 
+type DesktopNavOptions struct {
+	Sidebar       bool
+	IconsOnly     bool
+	Touch         bool
+	TabPad        float32
+	TabGap        float32
+	OnToggle      func()
+	ToggleLabel   string
+	ToggleTooltip string
+}
+
 // DesktopNav renders desktop navigation as either a floating header capsule or
 // an Apple-style floating inset sidebar card, keeping element identity alive
 // across transitions so every destination flies cleanly between layouts.
-func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items []NavTab, sidebar, iconsOnly bool, tabPad, tabGap float32, onToggle func(), toggleLabel, toggleTooltip string) {
+func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items []NavTab, opts DesktopNavOptions) {
 	if selected == nil {
 		var scratch int
 		selected = &scratch
 	}
 	navKey, selKey := "top-pages", "top-nav-selection"
-	if sidebar {
+	if opts.Sidebar {
 		navKey, selKey = "side-pages", "side-nav-selection"
 	}
 
 	tabs := ui.TabsBase(ctx.Key(navKey), selected, len(items))
-	bar := tabs.List.Label(label).Transition(navMatchTransition(navPanelMatchKey{}, true))
-
-	if sidebar {
-		railW := DesktopSidebarWidth
-		if iconsOnly {
-			railW = DesktopCompactRailWidth
+	bar := tabs.List.Label(label)
+	if !IsOrientationRotating(ctx) {
+		bar.Transition(navMatchTransition(ctx, navPanelMatchKey{}, true))
+	} else {
+		startPose := ui.Pose{Y: -10, Scale: 0.94, Fade: 0.65}
+		if opts.Sidebar {
+			startPose = ui.Pose{X: -16, Scale: 0.94, Fade: 0.65}
 		}
+		ApplyRotateEnterPose(ctx, bar.TransformOrigin(0.5, 0.5), "rot-dnav", startPose, MotionRotatePanel)
+	}
+	_, winH := ctx.Size()
+	compactSidebar := opts.Sidebar && winH > 0 && winH < compactSidebarMaxHeight
+	sideTabH, subRowH := float32(36), float32(30)
+	if compactSidebar {
+		sideTabH, subRowH = 34, 28
+	}
+	topBarH := DesktopNavTopBarHeight(opts.Touch)
+	topCtrlH := DesktopNavTopControlHeight(opts.Touch)
+
+	if opts.Sidebar {
+		railW := DesktopSidebarRailWidth(opts.IconsOnly, winH)
 		sideRadius := RadiusL + 2
 		if p.LiquidGlass {
 			sideRadius = RadiusXL
 		}
+		sideMargin, sidePad, sideGap := CompactSidebarSideMargin(winH), float32(8), float32(3)
+		if compactSidebar {
+			sidePad, sideGap = 6, 2
+			if opts.IconsOnly {
+				sideRadius = RadiusM + sidePad
+			}
+		}
 		bar.Column().Width(railW).Shrink(0).
-			Margin(DesktopSidebarMargin, 0, DesktopSidebarMargin, DesktopSidebarMargin).
-			Padding(8).Gap(3)
-		navBarChrome(bar, p, sideRadius, 0.22, p.Surface, p.LineSoft, true)
-		if iconsOnly {
+			Margin(sideMargin, 0, sideMargin, sideMargin).
+			Padding(sidePad).Gap(sideGap)
+		navBarChrome(ctx, bar, p, sideRadius, 0.22, p.Surface, p.LineSoft, true)
+		if opts.IconsOnly {
 			bar.AlignItems(ui.Center)
 		} else {
 			bar.AlignItems(ui.Start)
 		}
 	} else {
 		topRadius := RadiusM
-		if p.LiquidGlass {
+		if p.LiquidGlass || opts.Touch {
 			// Interpolate from the visible corner radius during layout changes.
-			topRadius = DesktopTopNavHeight / 2
+			topRadius = topBarH / 2
 		}
-		bar.Row().Height(DesktopTopNavHeight).Shrink(0).AlignItems(ui.Center).
+		bar.Row().Height(topBarH).Shrink(0).AlignItems(ui.Center).
 			Padding(3).Gap(2)
-		navBarChrome(bar, p, topRadius, 0, p.Track, p.LineSoft, false)
-		if !iconsOnly {
+		navBarChrome(ctx, bar, p, topRadius, 0, p.Track, p.LineSoft, false)
+		if opts.Touch {
+			bar.Margin(0, 0, 0, 4)
+		} else if !opts.IconsOnly {
 			bar.Margin(0, 0, 0, 6)
 		}
 	}
 
 	bar.Children(func() {
-		if onToggle != nil {
-			toggleIcon, toggleSize := IconSidebar, desktopTopNavControl
-			toggleRadius := RadiusS
-			if p.LiquidGlass {
-				toggleRadius = toggleSize / 2
-			}
-			if sidebar {
-				toggleIcon, toggleSize = IconTopBar, 28
-				if p.LiquidGlass {
-					toggleRadius = RadiusM + 2
-				}
-			}
-			toggle := ui.ButtonBase(ctx.Key("nav-toggle")).Size(toggleSize, toggleSize).
-				Shrink(0).Radius(toggleRadius).Center().
-				Label(toggleLabel).Tooltip(toggleTooltip).
-				Transition(navMatchTransition(navToggleMatchKey{}, false)).
-				OnClick(onToggle)
-			if sidebar {
-				if iconsOnly {
-					toggle.Margin(0, 0, 4, 0)
-				} else {
-					toggle.Margin(0, 0, 4, 5)
-				}
-			}
-			bg, fg := ui.Transparent, p.Muted
-			switch {
-			case toggle.Pressed():
-				bg, fg = p.Press, p.Text
-			case toggle.Hovered() || toggle.FocusVisible():
-				bg, fg = p.Hover, p.Text
-			}
-			toggle.Children(func() {
-				GlassPillControl(ctx.Key("ntog-state"), toggle, p, toggleRadius, ui.Color{}, false, bg, 0, ui.Transparent, 0.95)
-				pop := float32(0)
-				if toggle.Pressed() {
-					pop = 1
-				}
-				GlassIconPop(ui.Icon(ctx, toggleIcon).FontSize(15).
-					TextColor(toggle.AnimateColor("ntog-fg", fg, MotionFast)), p, pop)
-			})
+		if opts.OnToggle != nil {
+			desktopNavToggle(ctx, p, opts, compactSidebar, topCtrlH)
 		}
 
 		tabRadius := RadiusS
 		switch {
-		case sidebar && p.LiquidGlass:
+		case opts.Sidebar && p.LiquidGlass:
 			tabRadius = RadiusM + 2
-		case sidebar:
+		case opts.Sidebar:
 			tabRadius = RadiusM
-		case p.LiquidGlass:
-			tabRadius = desktopTopNavControl / 2
+		case p.LiquidGlass || opts.Touch:
+			tabRadius = topCtrlH / 2
 		}
-		for index, item := range items {
-			entry := item
-			hasChildren := sidebar && !iconsOnly && len(entry.Children) > 0
+		for index, entry := range items {
+			hasChildren := opts.Sidebar && !opts.IconsOnly && len(entry.Children) > 0
 			open := hasChildren && (index == *selected || entry.Selected >= 0)
 			active := index == *selected && !hasChildren
-			buildTab := func() {
-				tab := tabs.Tab(index).Label(entry.Label).
-					Radius(tabRadius).AlignItems(ui.Center).Gap(tabGap).
-					Background(ui.Transparent).
-					Transition(navMatchTransition(navTabMatchKey{index: index}, false)).
-					OnClick(func() {
-						if entry.OnSelect != nil {
-							entry.OnSelect()
-						}
-					})
-				if hasChildren {
-					tab.Expanded(open)
-				}
-
-				if sidebar {
-					if iconsOnly {
-						tab.Size(36, 36).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
-					} else {
-						tab.FillWidth().Height(36).Padding(0, 10)
-					}
-				} else {
-					if iconsOnly {
-						tab.Size(desktopTopNavControl, desktopTopNavControl).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
-					} else {
-						tab.Height(desktopTopNavControl).Padding(0, tabPad).Shrink(0)
-					}
-				}
-
-				var bg ui.Color
-				fg, weight := p.Muted, 550
-				switch {
-				case active && tab.Pressed():
-					tab.ZIndex(0)
-					fg = p.TrackOnInk.Alpha(0.90)
-				case active:
-					tab.ZIndex(0)
-					fg = p.TrackOnInk
-				case open && tab.Pressed():
-					tab.ZIndex(1)
-					bg, fg, weight = p.Press, p.AccentText, 600
-				case open && (tab.Hovered() || tab.FocusVisible()):
-					tab.ZIndex(1)
-					bg, fg, weight = p.Hover, p.AccentText, 600
-				case open:
-					tab.ZIndex(1)
-					fg, weight = p.AccentText, 600
-				case tab.Pressed():
-					tab.ZIndex(1)
-					bg, fg = p.Press, p.Text
-				case tab.Hovered() || tab.FocusVisible():
-					tab.ZIndex(1)
-					bg, fg = p.Hover, p.Text
-				default:
-					tab.ZIndex(1)
-				}
-
-				tab.Children(func() {
-					if active {
-						GlassSelectionPill(ctx.Key(selKey), tab, p, tabRadius, p.TrackOn, selKey, !sidebar)
-					} else {
-						GlassPillControl(ctx.Key("tab-state"), tab, p, tabRadius, ui.Color{}, false, bg, 0, ui.Transparent, 0.95)
-					}
-					if entry.Icon != nil {
-						iconSize := float32(15)
-						if sidebar {
-							iconSize = 17
-						}
-						pop := float32(0)
-						if tab.Pressed() {
-							pop = 1
-						}
-						GlassIconPop(ui.Icon(ctx, entry.Icon).FontSize(iconSize).
-							TextColor(tab.AnimateColor("tab-fg", fg, MotionNav)), p, pop)
-					}
-					if iconsOnly {
-						return
-					}
-					AnimatedLabel(ctx, entry.Label).FontSize(13).FontWeight(weight).SingleLine().Shrink(0).
-						TextColor(tab.AnimateColor("tab-text", fg, MotionNav))
-				})
-			}
-
 			if !hasChildren {
-				buildTab()
+				desktopNavTab(ctx, p, tabs.Tab(index), index, entry, opts, tabRadius, sideTabH, topCtrlH, selKey, active, false, false)
 				continue
 			}
 
 			ui.Column(ctx.Key("sec-" + entry.Label)).FillWidth().Gap(0).Children(func() {
-				buildTab()
-
-				if !open {
-					return
+				desktopNavTab(ctx, p, tabs.Tab(index), index, entry, opts, tabRadius, sideTabH, topCtrlH, selKey, active, true, open)
+				if open {
+					desktopNavSubItems(ctx, p, entry, subRowH)
 				}
-				const (
-					subRowH   float32 = 30
-					subRowGap float32 = 3
-				)
-				subMotion := ui.ElementTransition{
-					Position:  true,
-					Animation: &MotionRail,
-					Enter:     &ui.Motion{Collapse: true},
-					Exit:      &ui.Motion{Collapse: true},
-				}
-				ui.Column(ctx.Key("sub-wrap")).FillWidth().
-					Padding(2, 0, 2, 28).Gap(subRowGap).Transition(subMotion).
-					Children(func() {
-						ui.Box(ctx.Key("sub-track")).Absolute().Left(18).Top(4).Bottom(4).Width(1).
-							Background(p.LineSoft).PassThrough()
-						if entry.Selected >= 0 && entry.Selected < len(entry.Children) {
-							indY := float32(2) + float32(entry.Selected)*(subRowH+subRowGap) + (subRowH-16)/2
-							ui.Box(ctx.Key("sub-indicator")).Absolute().Left(17.5).Top(0).Width(2).Height(16).
-								Radius(RadiusFull).Background(p.Accent).PassThrough().
-								AnimatePose(ui.Pose{Y: indY}, LayoutAnimation(MotionRail))
-						}
-						for subIdx, sub := range entry.Children {
-							child := sub
-							subActive := entry.Selected == subIdx
-							subRow := ui.ButtonBase(ctx.Key(subIdx)).Role(ui.RoleTab).AccessSelected(subActive).
-								FillWidth().Height(subRowH).Padding(0, 10).Radius(RadiusS).
-								AlignItems(ui.Center).Justify(ui.Start).Label(child.Label).
-								Background(ui.Transparent).
-								OnClick(func() {
-									if child.OnSelect != nil {
-										child.OnSelect()
-									}
-								})
-							subBg, subFg, subWeight := ui.Transparent, p.Muted, 500
-							switch {
-							case subActive && subRow.Pressed():
-								subBg, subFg, subWeight = p.Press, p.AccentText, 650
-							case subActive:
-								subFg, subWeight = p.AccentText, 650
-							case subRow.Pressed():
-								subBg, subFg = p.Press, p.Text
-							case subRow.Hovered() || subRow.FocusVisible():
-								subBg, subFg = p.Hover, p.Text
-							}
-							subAnim := MotionRail
-							subAnim.Delay = time.Duration(subIdx) * 16 * time.Millisecond
-							subRow.Transition(ui.ElementTransition{
-								Position:  true,
-								Animation: &subAnim,
-								Enter:     &ui.Motion{Y: -4},
-							}).Children(func() {
-								GlassPillControl(ctx.Key("bg"), subRow, p, RadiusS, ui.Color{}, false, subBg, 0, ui.Transparent, 0.96)
-								AnimatedLabel(ctx, child.Label).FontSize(12.5).FontWeight(subWeight).SingleLine().
-									TextColor(subRow.AnimateColor("sub-fg", subFg, MotionFast))
-							})
-						}
-					})
 			})
 		}
 	})
+}
+
+func desktopNavToggle(ctx *ui.Context, p Palette, opts DesktopNavOptions, compactSidebar bool, topCtrlH float32) {
+	toggleIcon, toggleSize := IconSidebar, topCtrlH
+	toggleRadius := RadiusS
+	if p.LiquidGlass || opts.Touch {
+		toggleRadius = toggleSize / 2
+	}
+	if opts.Sidebar {
+		toggleIcon, toggleSize = IconTopBar, 28
+		if compactSidebar && opts.IconsOnly {
+			toggleSize = 30
+		}
+		if p.LiquidGlass {
+			toggleRadius = RadiusM + 2
+		}
+	}
+	toggle := ui.ButtonBase(ctx.Key("nav-toggle")).Size(toggleSize, toggleSize).
+		Shrink(0).Radius(toggleRadius).Center().
+		Label(opts.ToggleLabel).Tooltip(opts.ToggleTooltip).
+		Transition(navMatchTransition(ctx, navToggleMatchKey{}, false)).
+		OnClick(opts.OnToggle)
+	if opts.Sidebar {
+		marginBot := float32(4)
+		if compactSidebar && opts.IconsOnly {
+			marginBot = 2
+		}
+		if opts.IconsOnly {
+			toggle.Margin(0, 0, marginBot, 0)
+		} else {
+			toggle.Margin(0, 0, marginBot, 5)
+		}
+	}
+	bg, fg := ui.Transparent, p.Muted
+	switch {
+	case toggle.Pressed():
+		bg, fg = p.Press, p.Text
+	case toggle.Hovered() || toggle.FocusVisible():
+		bg, fg = p.Hover, p.Text
+	}
+	toggle.Children(func() {
+		GlassPillControl(ctx.Key("ntog-state"), toggle, p, toggleRadius, ui.Color{}, false, bg, 0, ui.Transparent, 0.95)
+		pop := float32(0)
+		if toggle.Pressed() {
+			pop = 1
+		}
+		GlassIconPop(ctx, ui.Icon(ctx, toggleIcon).FontSize(15).
+			TextColor(toggle.AnimateColor("ntog-fg", fg, MotionFast)), p, pop)
+	})
+}
+
+func desktopNavTab(
+	ctx *ui.Context,
+	p Palette,
+	tab ui.Element,
+	index int,
+	entry NavTab,
+	opts DesktopNavOptions,
+	tabRadius, sideTabH, topCtrlH float32,
+	selKey string,
+	active, hasChildren, open bool,
+) {
+	tab = tab.Label(entry.Label).
+		Radius(tabRadius).AlignItems(ui.Center).Gap(opts.TabGap).
+		Background(ui.Transparent).
+		Transition(navMatchTransition(ctx, navTabMatchKey{index: index}, false)).
+		OnClick(entry.OnSelect)
+	if hasChildren {
+		tab.Expanded(open)
+	}
+
+	if opts.Sidebar {
+		if opts.IconsOnly {
+			tab.Size(sideTabH, sideTabH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
+		} else {
+			tab.FillWidth().Height(sideTabH).Padding(0, 10)
+		}
+	} else {
+		if opts.IconsOnly {
+			tab.Size(topCtrlH, topCtrlH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
+		} else {
+			tab.Height(topCtrlH).Padding(0, opts.TabPad).Shrink(0)
+		}
+	}
+
+	var bg ui.Color
+	fg, weight := p.Muted, 550
+	switch {
+	case active && tab.Pressed():
+		tab.ZIndex(0)
+		fg = p.TrackOnInk.Alpha(0.90)
+	case active:
+		tab.ZIndex(0)
+		fg = p.TrackOnInk
+	case open && tab.Pressed():
+		tab.ZIndex(1)
+		bg, fg, weight = p.Press, p.AccentText, 600
+	case open && (tab.Hovered() || tab.FocusVisible()):
+		tab.ZIndex(1)
+		bg, fg, weight = p.Hover, p.AccentText, 600
+	case open:
+		tab.ZIndex(1)
+		fg, weight = p.AccentText, 600
+	case tab.Pressed():
+		tab.ZIndex(1)
+		bg, fg = p.Press, p.Text
+	case tab.Hovered() || tab.FocusVisible():
+		tab.ZIndex(1)
+		bg, fg = p.Hover, p.Text
+	default:
+		tab.ZIndex(1)
+	}
+
+	tab.Children(func() {
+		if active {
+			GlassSelectionPill(ctx.Key(selKey), tab, p, tabRadius, p.TrackOn, selKey, !opts.Sidebar)
+		} else {
+			GlassPillControl(ctx.Key("tab-state"), tab, p, tabRadius, ui.Color{}, false, bg, 0, ui.Transparent, 0.95)
+		}
+		if entry.Icon != nil {
+			iconSize := float32(15)
+			if opts.Sidebar {
+				iconSize = 17
+			}
+			pop := float32(0)
+			if tab.Pressed() {
+				pop = 1
+			}
+			GlassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(iconSize).
+				TextColor(tab.AnimateColor("tab-fg", fg, MotionNav)), p, pop)
+		}
+		if opts.IconsOnly {
+			return
+		}
+		AnimatedLabel(ctx, entry.Label).FontSize(13).FontWeight(weight).SingleLine().Shrink(0).
+			TextColor(tab.AnimateColor("tab-text", fg, MotionNav))
+	})
+}
+
+func desktopNavSubItems(ctx *ui.Context, p Palette, entry NavTab, subRowH float32) {
+	const subRowGap float32 = 3
+	subMotion := ui.ElementTransition{
+		Position:  true,
+		Animation: &MotionRail,
+		Enter:     &ui.Motion{Collapse: true},
+		Exit:      &ui.Motion{Collapse: true},
+	}
+	ui.Column(ctx.Key("sub-wrap")).FillWidth().
+		Padding(2, 0, 2, 28).Gap(subRowGap).Transition(subMotion).
+		Children(func() {
+			ui.Box(ctx.Key("sub-track")).Absolute().Left(18).Top(4).Bottom(4).Width(1).
+				Background(p.LineSoft).PassThrough()
+			if entry.Selected >= 0 && entry.Selected < len(entry.Children) {
+				indY := float32(2) + float32(entry.Selected)*(subRowH+subRowGap) + (subRowH-16)/2
+				ui.Box(ctx.Key("sub-indicator")).Absolute().Left(17.5).Top(0).Width(2).Height(16).
+					Radius(RadiusFull).Background(p.Accent).PassThrough().
+					AnimatePose(ui.Pose{Y: indY}, LayoutAnimation(ctx, MotionRail))
+			}
+			for subIdx, child := range entry.Children {
+				subActive := entry.Selected == subIdx
+				subRow := ui.ButtonBase(ctx.Key(subIdx)).Role(ui.RoleTab).AccessSelected(subActive).
+					FillWidth().Height(subRowH).Padding(0, 10).Radius(RadiusS).
+					AlignItems(ui.Center).Justify(ui.Start).Label(child.Label).
+					Background(ui.Transparent).
+					OnClick(child.OnSelect)
+				subBg, subFg, subWeight := ui.Transparent, p.Muted, 500
+				switch {
+				case subActive && subRow.Pressed():
+					subBg, subFg, subWeight = p.Press, p.AccentText, 650
+				case subActive:
+					subFg, subWeight = p.AccentText, 650
+				case subRow.Pressed():
+					subBg, subFg = p.Press, p.Text
+				case subRow.Hovered() || subRow.FocusVisible():
+					subBg, subFg = p.Hover, p.Text
+				}
+				subAnim := MotionRail
+				subAnim.Delay = time.Duration(subIdx) * 16 * time.Millisecond
+				subRow.Transition(ui.ElementTransition{
+					Position:  true,
+					Animation: &subAnim,
+					Enter:     &ui.Motion{Y: -4},
+				}).Children(func() {
+					GlassPillControl(ctx.Key("bg"), subRow, p, RadiusS, ui.Color{}, false, subBg, 0, ui.Transparent, 0.96)
+					AnimatedLabel(ctx, child.Label).FontSize(12.5).FontWeight(subWeight).SingleLine().
+						TextColor(subRow.AnimateColor("sub-fg", subFg, MotionFast))
+				})
+			}
+		})
 }
 
 type NavTab struct {
@@ -502,11 +587,18 @@ func mnbRubberBand(overscroll, limit float32) float32 {
 	return limit * float32(math.Tanh(float64(overscroll)/float64(limit*2.5)))
 }
 
+type BottomNavigationBarOptions struct {
+	Style       BottomNavStyle
+	BottomInset float32
+	LeftInset   float32
+	RightInset  float32
+}
+
 // BottomNavigationBar renders a centered floating navigation bar above the bottom
 // safe area in either compact Capsule style (active tab unfolds label) or Standard
 // style (equal icon-above-label tabs with a sliding glass highlight pill). Holding
 // and dragging horizontally scrubs the active indicator pill across destinations.
-func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected *int, items []NavTab, style BottomNavStyle, bottomInset, leftInset, rightInset float32) {
+func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected *int, items []NavTab, opts BottomNavigationBarOptions) {
 	if len(items) == 0 {
 		return
 	}
@@ -514,10 +606,10 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		var scratch int
 		selected = &scratch
 	}
-	standard := style == BottomNavStandard
+	standard := opts.Style == BottomNavStandard
 	standardGlass := standard && p.LiquidGlass
 	capsuleGlass := !standard && p.LiquidGlass
-	barHeight := BottomNavHeightFor(style)
+	barHeight := BottomNavHeightFor(opts.Style)
 	barPad, barGap := bottomNavPad, bottomNavGap
 	if standard {
 		barPad, barGap = bottomNavStdPad, bottomNavStdGap
@@ -528,7 +620,9 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 
 	dock := ui.Row(ctx.Key(key+"-dock")).Absolute().Left(0).Right(0).Bottom(0).ZIndex(10).
 		Justify(ui.Center).AlignItems(ui.End).PassThrough().
-		Padding(0, 12, bottomNavDockGap(bottomInset), 12)
+		Padding(0, opts.RightInset+12, opts.BottomInset+bottomNavDockGap(opts.BottomInset), opts.LeftInset+12).
+		TransformOrigin(0.5, 0.85)
+	ApplyRotateEnterPose(ctx, dock, "rot-mnb", ui.Pose{Y: 20, Scale: 0.94, Fade: 0.70}, MotionRotatePanel)
 
 	barSolid := ui.Hex("#f7fafc").Mix(p.Accent, 0.07)
 	barBg := barSolid.Alpha(0.90)
@@ -556,12 +650,12 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 		tabs := ui.TabsBase(ctx.Key(key), selected, len(items))
 		bar := tabs.List.Label(label).Row().Shrink(0).Height(barHeight).AlignItems(ui.Center).
 			Padding(barPad).Gap(barGap).
-			Draggable(nil, ui.DraggableOptions{Axis: ui.Horizontal, Bounds: &ui.Rect{}, Rigid: true}).
-			Transition(ui.ElementTransition{
-				Position: true, Size: true, Animation: &MotionNav,
-			})
+			Draggable(nil, ui.DraggableOptions{Axis: ui.Horizontal, Bounds: &ui.Rect{}, Rigid: true})
+		if !IsStaticSnapshot(ctx) {
+			bar.Transition(ui.ElementTransition{Colors: true, Shadows: true, Animation: &MotionNavPanel})
+		}
 		if !p.LiquidGlass {
-			navBarChrome(bar, p, RadiusFull, 0, barBg, barBorder, true)
+			navBarChrome(ctx, bar, p, RadiusFull, 0, barBg, barBorder, true)
 		} else if !standard && !p.Dark {
 			bar.Shadow(0, 2, 12, 0, ui.RGBA(12, 18, 30, 0.065))
 		}
@@ -663,7 +757,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 			}
 			var barW float32
 			if standard {
-				barW = layoutStandardBottomNav(ctx, slots, leftInset, rightInset)
+				barW = layoutStandardBottomNav(ctx, slots, opts.LeftInset, opts.RightInset)
 				bar.Width(barW)
 			} else {
 				barW = layoutBottomNav(slots, barPad, barGap, bottomNavInactiveW, curIdx, st.widths[curIdx])
@@ -756,7 +850,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 			pillCheckLeft, pillCheckW := pillLeft, pillW
 			var lens bottomNavLens
 			if p.LiquidGlass {
-				st.applyDockGlass(bar, p, barW, barHeight, anyPressed || st.active, standard)
+				st.applyDockGlass(ctx, bar, p, barW, barHeight, anyPressed || st.active, standard)
 				lens = st.animateLens(ctx, bar, ui.Rect{X: pillLeft, Y: barPad, W: pillW, H: tabHeight}, standard, len(items), tabEls[displayIndex].Pressed())
 				pillCheckLeft, pillCheckW = lens.left, lens.width
 
@@ -837,16 +931,17 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				if standardGlass {
 					tab.ZIndex(2)
 				} else {
-					if active || coveredByPill {
+					switch {
+					case active || coveredByPill:
 						tab.ZIndex(3)
 						iconPop = lens.alpha
-					} else if tapPressed && p.LiquidGlass {
+					case tapPressed && p.LiquidGlass:
 						tab.ZIndex(3)
 						iconPop = 1.0
-					} else {
+					default:
 						tab.ZIndex(1)
 					}
-					if capsuleGlass && !StaticSnapshot {
+					if capsuleGlass && !IsStaticSnapshot(ctx) {
 						tabScale := float32(1)
 						tabScaleAnim := MotionGlassRelease
 						if iconPop > 0.005 {
@@ -920,7 +1015,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 						}
 					}
 					if entry.Icon != nil {
-						GlassIconPop(ui.Icon(ctx, entry.Icon).FontSize(bottomNavIconSize).Shrink(0).
+						GlassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(bottomNavIconSize).Shrink(0).
 							TextColor(tab.AnimateColor("mnb-fg", fg, colorAnim)), p, iconPop*0.18)
 					}
 					if standard {
@@ -949,13 +1044,14 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					}
 				})
 				if capsuleGlass && tapPressed {
-					interaction := trackGlassInteraction(tab)
+					snap := IsStaticSnapshot(ctx)
+					interaction := trackGlassInteraction(tab, snap)
 					dx, dy := bottomNavLensExpand(slot.width, tabHeight, interaction.elastic, 0, false)
 					tapBox := expandGlass(ui.Rect{X: slot.left, Y: barPad, W: slot.width, H: tabHeight}, dx, dy)
 					tap := ui.Box(ctx.Key(mnbTapKey(index))).Absolute().Left(tapBox.X).Top(tapBox.Y).
 						Width(tapBox.W).Height(tapBox.H).ZIndex(2).Radius(RadiusFull).PassThrough()
 					bottomNavLensShadow(tap, p.Dark, interaction.glow, false)
-					drawBottomNavGlass(tap, liquidLensSpec{
+					drawBottomNavGlass(ctx, tap, liquidLensSpec{
 						Alpha: interaction.glow, Glow: interaction.glow, ZoomY: 0.86, Touch: interaction.touch, ClearLens: true,
 					})
 				}
@@ -974,7 +1070,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 					if p.Dark {
 						veil = ui.RGBA(34, 40, 54, 0.24*lens.alpha)
 					}
-					drawBottomNavGlass(lens.box(ctx.Key(selKey+"-warp"), 1), liquidLensSpec{
+					drawBottomNavGlass(ctx, lens.box(ctx.Key(selKey+"-warp"), 1), liquidLensSpec{
 						Alpha: 1, Tint: veil, Zoom: 1 / lensZoom, ZoomY: barScaleY / lensZoom, WarpOnly: true,
 					})
 					spec.Zoom = standardZoom
@@ -982,7 +1078,7 @@ func BottomNavigationBar(ctx *ui.Context, p Palette, key, label string, selected
 				} else {
 					spec.ZoomY = 0.86
 				}
-				drawBottomNavGlass(lens.box(ctx.Key(selKey+"-lens"), z), spec)
+				drawBottomNavGlass(ctx, lens.box(ctx.Key(selKey+"-lens"), z), spec)
 			}
 		})
 	})
@@ -1006,8 +1102,8 @@ func bottomNavLensShadow(el ui.Element, dark bool, amount float32, standard bool
 	el.Shadow(0, 1.5*amount, 8*amount, 0, ui.RGBA(12, 18, 30, alpha*min(amount, 1)))
 }
 
-func drawBottomNavGlass(el ui.Element, spec liquidLensSpec) {
-	if StaticSnapshot || spec.Alpha <= 0.005 {
+func drawBottomNavGlass(ctx *ui.Context, el ui.Element, spec liquidLensSpec) {
+	if IsStaticSnapshot(ctx) || spec.Alpha <= 0.005 {
 		return
 	}
 	el.Draw(func(p *ui.Painter, box ui.Rect) {
@@ -1026,9 +1122,10 @@ func bottomNavLensExpand(width, height, elastic, stretch float32, standard bool)
 	return dx, dy
 }
 
-func (s *mnbDragState) applyDockGlass(bar ui.Element, p Palette, width, height float32, pressed, standard bool) {
+func (s *mnbDragState) applyDockGlass(ctx *ui.Context, bar ui.Element, p Palette, width, height float32, pressed, standard bool) {
+	snap := IsStaticSnapshot(ctx)
 	var progress float32
-	if !StaticSnapshot {
+	if !snap {
 		var target float32
 		if pressed {
 			target = 1
@@ -1049,11 +1146,15 @@ func (s *mnbDragState) applyDockGlass(bar ui.Element, p Palette, width, height f
 		touch.X = clamp32(s.lastX/width, 0.06, 0.94)
 		touch.Y = clamp32(s.lastY/max(height, 1), 0.1, 0.9)
 	}
-	bar.Radius(RadiusFull).Material(dockGlass{glassInteraction{
+	interaction := glassInteraction{
 		elastic: clamp32(progress, -0.2, 1.25),
 		glow:    glow,
 		touch:   touch,
-	}})
+	}
+	bar.Radius(RadiusFull).Material(dockGlass{
+		glassInteraction: interaction,
+		staticSnapshot:   snap,
+	})
 	if !p.Dark {
 		if standard {
 			g := clamp32(glow, 0, 1)
@@ -1083,7 +1184,7 @@ func (s *mnbDragState) animateLens(ctx *ui.Context, bar ui.Element, target ui.Re
 	left, width := target.X, target.W
 	var stretch, lift float32
 	var inFlight bool
-	if StaticSnapshot || ScaleReflow || !s.hasPrev || s.lastStandard != standard || s.lastCount != count {
+	if IsStaticSnapshot(ctx) || IsScaleReflow(ctx) || !s.hasPrev || s.lastStandard != standard || s.lastCount != count {
 		bar.Jump("mnb-px", left)
 		bar.Jump("mnb-pw", width)
 		bar.Jump("mnb-stretch", 0)

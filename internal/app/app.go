@@ -32,6 +32,7 @@ type dashboard struct {
 	language         string
 	mobile           bool
 	settings         guiSettings
+	settingsKey      string
 	dark             bool
 	lastBarStyle     mygo.BarStyle
 	androidHidden    atomic.Bool
@@ -174,7 +175,7 @@ func Run(parent context.Context, source session.Source, language, directory stri
 	return err
 }
 
-func (d *dashboard) notify(title, description, kind string) {
+func (d *dashboard) notify(title, kind string) {
 	if title == "" {
 		return
 	}
@@ -183,11 +184,10 @@ func (d *dashboard) notify(title, description, kind string) {
 		timeout = 6 * time.Second
 	}
 	t := ui.Toast{
-		ID:          title + "\x00" + description,
-		Title:       title,
-		Description: description,
-		Type:        kind,
-		Timeout:     timeout,
+		ID:      title,
+		Title:   title,
+		Type:    kind,
+		Timeout: timeout,
 	}
 	for i := range d.toasts {
 		if d.toasts[i].ID == t.ID {
@@ -311,7 +311,7 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 		if d.service == nil {
 			d.err = err
 		}
-		d.notify(err.Error(), "", "error")
+		d.notify(err.Error(), "error")
 		return
 	}
 	if d.cancel != nil {

@@ -52,14 +52,14 @@ func (d *dashboard) runJob(run func(context.Context) (func(), string, error)) {
 		dispatch(func() {
 			d.busy = false
 			if err != nil {
-				d.notify(err.Error(), "", "error")
+				d.notify(err.Error(), "error")
 				return
 			}
 			if apply != nil {
 				apply()
 			}
 			if message != "" {
-				d.notify(message, "", "success")
+				d.notify(message, "success")
 			}
 		})
 	})

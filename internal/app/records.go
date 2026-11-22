@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strconv"
 
 	"github.com/UruhaLushia/wattscope/internal/backend"
 	"github.com/UruhaLushia/wattscope/internal/kit"
@@ -43,12 +44,12 @@ func (d *dashboard) csvButton(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 	}).Disabled(d.service == nil || d.busy)
 }
 
-func (d *dashboard) captureButton(ctx *ui.Context, p kit.Palette, msgs locales.Messages, state backend.CaptureRecording, touch bool) {
+func (d *dashboard) captureButton(ctx *ui.Context, p kit.Palette, msgs locales.Messages, state backend.CaptureRecording, touch bool) ui.Element {
 	label, icon, variant := msgs.PdRecordStart(), kit.IconRecord, kit.VariantSecondary
 	if state.Active {
 		label, icon, variant = msgs.PdRecordStop(), kit.IconStop, kit.VariantDanger
 	}
-	kit.ActionButton(ctx.Key("capture"), p, variant, icon, label, touch, func() {
+	return kit.ActionButton(ctx.Key("capture"), p, variant, icon, label, touch, func() {
 		service := d.service
 		dir, err := d.recordDir()
 		d.runJob(func(ctx context.Context) (func(), string, error) {
@@ -109,7 +110,7 @@ func (d *dashboard) exportPackets(msgs locales.Messages, visible []pd.Packet) {
 				path = target
 			}
 		}
-		return nil, msgs.ExportedPackets(fmt.Sprint(len(visible)), path), nil
+		return nil, msgs.ExportedPackets(strconv.Itoa(len(visible)), path), nil
 	})
 }
 
@@ -135,7 +136,7 @@ func (d *dashboard) checkPD(msgs locales.Messages) {
 }
 
 func (d *dashboard) recordsPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot) {
-	touch := d.touchUI(ctx)
+	touch := d.touchUI()
 	var capture backend.CaptureRecording
 	if d.service != nil {
 		capture = d.service.PacketSnapshot(0, 0).Recording
@@ -149,14 +150,14 @@ func (d *dashboard) recordsPage(ctx *ui.Context, p kit.Palette, msgs locales.Mes
 				kit.SectionTitle(ctx, msgs.ActionRecord())
 			})
 			kit.Divider(ctx, p)
-			d.recordRow(ctx, p, msgs, "CSV", snap.Recording.Path, snap.Recording.Active, touch, func() {
+			d.recordRow(ctx, p, msgs, "CSV", snap.Recording.Path, snap.Recording.Active, func() {
 				if snap.Recording.Path != "" && !snap.Recording.Active {
 					d.saveCopyButton(ctx, p, msgs, "CSV", snap.Recording.Path, touch)
 				}
 				d.csvButton(ctx, p, msgs, snap.Recording, touch)
 			})
 			kit.Divider(ctx, p)
-			d.recordRow(ctx, p, msgs, msgs.PagePd(), capture.Path, capture.Active, touch, func() {
+			d.recordRow(ctx, p, msgs, msgs.PagePd(), capture.Path, capture.Active, func() {
 				kit.ActionButton(ctx.Key("open"), p, kit.VariantSecondary, kit.IconFolder, msgs.GuiOpenCapture(), touch, func() {
 					d.openCapture(msgs)
 				}).Disabled(d.busy)
@@ -194,7 +195,7 @@ func (d *dashboard) saveCopyButton(ctx *ui.Context, p kit.Palette, msgs locales.
 	}).Disabled(d.busy)
 }
 
-func (d *dashboard) recordRow(ctx *ui.Context, p kit.Palette, msgs locales.Messages, title, path string, active bool, touch bool, controls func()) {
+func (d *dashboard) recordRow(ctx *ui.Context, p kit.Palette, msgs locales.Messages, title, path string, active bool, controls func()) {
 	tone := kit.TonePlain
 	status := msgs.GuiIdle()
 	switch {
@@ -203,7 +204,7 @@ func (d *dashboard) recordRow(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 	case path != "":
 		status, tone = msgs.RecordingSaved(), kit.ToneSuccess
 	}
-	if d.mobile {
+	if d.isPortraitMobile(ctx) {
 		ui.Column(ctx).FillWidth().Padding(6, 0).Gap(10).Children(func() {
 			ui.Column(ctx).FillWidth().Gap(4).Children(func() {
 				ui.Row(ctx).FillWidth().AlignItems(ui.Center).Justify(ui.SpaceBetween).Gap(8).Children(func() {
@@ -238,12 +239,8 @@ func (d *dashboard) sessionCard(ctx *ui.Context, p kit.Palette, msgs locales.Mes
 		ui.Row(ctx).FillWidth().MinHeight(28).AlignItems(ui.Center).Gap(8).Children(func() {
 			kit.SectionTitle(ctx, msgs.GuiSession())
 			ui.Spacer(ctx)
-			kit.ActionButton(ctx.Key("clear-session"), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), touch, func() {
-				d.resetChartView()
-				if d.service != nil {
-					d.service.ResetStatistics()
-				}
-			}).Height(28).Padding(0, 8).Disabled(d.service == nil)
+			kit.ActionButton(ctx.Key("clear-session"), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), touch, d.clearSession).
+				Height(28).Padding(0, 8).Disabled(d.service == nil)
 		})
 		kit.Divider(ctx, p)
 		ui.Row(ctx).FillWidth().Wrap().Gap(12).AlignItems(ui.Center).Children(func() {

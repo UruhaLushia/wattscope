@@ -328,6 +328,15 @@ func IconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, si
 	if p.LiquidGlass {
 		radius = RadiusFull
 	}
+	return iconActionButton(ctx, p, icon, label, size, radius, active, onClick)
+}
+
+// RoundIconActionButton renders an icon-only action button with circular pill corners.
+func RoundIconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, size float32, active bool, onClick func()) ui.Element {
+	return iconActionButton(ctx, p, icon, label, size, RadiusFull, active, onClick)
+}
+
+func iconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, size, radius float32, active bool, onClick func()) ui.Element {
 	el := ui.ButtonBase(ctx).Size(size, size).Shrink(0).Radius(radius).Center().Label(label).Tooltip(label).OnClick(onClick)
 	bg, fg := ui.Transparent, p.Muted
 	switch {
@@ -350,7 +359,7 @@ func IconActionButton(ctx *ui.Context, p Palette, icon *ui.SVG, label string, si
 		if !el.IsDisabled() && el.Pressed() {
 			pop = 1
 		}
-		GlassIconPop(ui.Icon(ctx, icon).FontSize(16).TextColor(el.AnimateColor("icon-fg", fg, MotionFast)), p, pop)
+		GlassIconPop(ctx, ui.Icon(ctx, icon).FontSize(16).TextColor(el.AnimateColor("icon-fg", fg, MotionFast)), p, pop)
 	})
 }
 
@@ -439,12 +448,13 @@ func ColorSwatch(ctx *ui.Context, p Palette, color ui.Color, selected bool, onCl
 }
 
 func ToastViewport(ctx *ui.Context, p Palette, bottom float32, centered bool) {
+	topInset, rightInset, _, leftInset := ctx.SafeArea()
 	ui.ToastViewportBase(ctx, func(viewport ui.Element, toasts []ui.Toast) {
 		align := ui.End
 		if centered {
 			align = ui.Center
 		}
-		viewport.Padding(16, 16, bottom, 16).Gap(8).AlignItems(align).Justify(ui.End)
+		viewport.Padding(max(16, topInset+8), max(16, rightInset+12), bottom, max(16, leftInset+12)).Gap(8).AlignItems(align).Justify(ui.End)
 		for index := range toasts {
 			notice := toasts[index]
 			parts := ui.ToastBase(ctx, notice)
@@ -453,7 +463,7 @@ func ToastViewport(ctx *ui.Context, p Palette, bottom float32, centered bool) {
 			if p.LiquidGlass {
 				toastRadius = RadiusXL
 			}
-			GlassFloating(parts.Root.Width(340).MaxWidthPercent(94).Row().AlignItems(ui.Center).Gap(10).
+			GlassFloating(ctx, parts.Root.Width(340).MaxWidthPercent(94).Row().AlignItems(ui.Center).Gap(10).
 				Padding(10, 12, 10, 14), p, toastRadius, 0.1, ui.Color{}, true, p.Surface, p.Line).
 				Shadow(0, 8, 24, 0, p.Shadow)
 			parts.Root.Children(func() {

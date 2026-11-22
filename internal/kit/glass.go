@@ -21,25 +21,26 @@ func GlassPanel(el ui.Element, p Palette, radius, clarity float32, fallbackBg, f
 	return ApplyCardShadow(GlassSurface(el.Radius(radius), p, clarity, fallbackBg, fallbackBorder), p)
 }
 
-func GlassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	return glassFloating(el, p, radius, clarity, tint, interactive, true, fallbackBg, fallbackBorder)
+func GlassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
+	return glassFloating(ctx, el, p, radius, clarity, tint, interactive, true, fallbackBg, fallbackBorder)
 }
 
-func glassFloatingUnclipped(el ui.Element, p Palette, radius, clarity float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
-	return glassFloating(el, p, radius, clarity, tint, false, false, fallbackBg, fallbackBorder)
+func glassFloatingUnclipped(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
+	return glassFloating(ctx, el, p, radius, clarity, tint, false, false, fallbackBg, fallbackBorder)
 }
 
-func glassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive, clip bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
+func glassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity float32, tint ui.Color, interactive, clip bool, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	el.Radius(radius)
 	if clip && (!p.LiquidGlass || !interactive) {
 		el.Clip()
 	}
 	if p.LiquidGlass {
+		snap := IsStaticSnapshot(ctx)
 		base := glass.Glass{Tint: tint, Clarity: clarity}
 		if interactive {
-			return el.Material(trackGlassInteraction(el).material(base))
+			return el.Material(trackGlassInteraction(el, snap).material(base, snap))
 		}
-		return el.Material(staticGlass{base: base})
+		return el.Material(staticGlass{base: base, staticSnapshot: snap})
 	}
 	el.Background(fallbackBg)
 	if fallbackBorder.A > 0 {
@@ -48,12 +49,13 @@ func glassFloating(el ui.Element, p Palette, radius, clarity float32, tint ui.Co
 	return el
 }
 
-func GlassFloatingButton(el ui.Element, p Palette, radius float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
+func GlassFloatingButton(ctx *ui.Context, el ui.Element, p Palette, radius float32, tint ui.Color, fallbackBg, fallbackBorder ui.Color) ui.Element {
 	if !p.LiquidGlass {
-		return GlassFloating(el, p, radius, 0, tint, false, fallbackBg, fallbackBorder)
+		return GlassFloating(ctx, el, p, radius, 0, tint, false, fallbackBg, fallbackBorder)
 	}
-	state := trackGlassInteraction(el)
-	if !StaticSnapshot {
+	snap := IsStaticSnapshot(ctx)
+	state := trackGlassInteraction(el, snap)
+	if !snap {
 		anim := MotionGlassRelease
 		if el.Pressed() && !el.IsDisabled() {
 			anim = MotionGlassPress
@@ -64,6 +66,7 @@ func GlassFloatingButton(el ui.Element, p Palette, radius float32, tint ui.Color
 	return el.Radius(radius).Material(interactiveGlass{
 		base:             glass.Glass{Tint: tint},
 		glassInteraction: state,
+		staticSnapshot:   snap,
 	})
 }
 

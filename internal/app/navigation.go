@@ -24,17 +24,20 @@ const (
 	navigationBottom
 )
 
+type navHeaderTitleMatchKey struct{}
+type headerTitleKey struct{ landscape bool }
+type statusPillWrapKey struct{ landscape bool }
+
 const (
 	fullSidebarMinWidth    = 680
+	mobileSidebarMinAvailW = 960
 	navigationSidebarWidth = kit.DesktopSidebarWidth + kit.DesktopSidebarMargin
 	compactSidebarWidth    = kit.DesktopCompactRailWidth + kit.DesktopSidebarMargin
 	workspacePadding       = 16
 	headerHeight           = 44
 	mobileHeaderHeight     = 50
-	bottomBarHeight        = kit.BottomNavHeight
 	headerLeading          = 16
 	headerGap              = 8
-	topNavHeight           = 26
 	navTabPadding          = 10
 	navLabelGap            = 7
 	navTabGap              = 2
@@ -47,17 +50,55 @@ type workspacePage struct {
 	icon    *ui.SVG
 	content func()
 	list    func(bottomPadding float32)
+	fixed   func()
 	overlay func()
 }
 
-func navigationPlacement(mobile bool, preference string) navigationPosition {
-	if mobile {
+func (d *dashboard) isLandscape(ctx *ui.Context) bool {
+	if !d.mobile || ctx == nil {
+		return false
+	}
+	w, h := ctx.Size()
+	return w > h && w >= 560
+}
+
+func (d *dashboard) isPortraitMobile(ctx *ui.Context) bool {
+	return d.mobile && !d.isLandscape(ctx)
+}
+
+func horizontalContentPadding(portraitMobile, landscape bool, position navigationPosition, padX, leftInset, rightInset float32) (start, end float32) {
+	start, end = padX, padX
+	switch {
+	case portraitMobile:
+		return leftInset + padX, rightInset + padX
+	case landscape:
+		if position != navigationSide {
+			start = leftInset + padX
+		}
+		return start, rightInset + padX
+	default:
+		return start, end
+	}
+}
+
+func navigationPlacement(mobile, landscape bool, preference string) navigationPosition {
+	if mobile && !landscape {
 		return navigationBottom
 	}
 	if preference == navigationSidebar {
 		return navigationSide
 	}
 	return navigationTop
+}
+
+func (d *dashboard) sidebarWidthFor(ctx *ui.Context) float32 {
+	width, winH := ctx.Size()
+	if d.mobile {
+		_, rightInset, _, leftInset := ctx.SafeArea()
+		iconsOnly := width-leftInset-rightInset < mobileSidebarMinAvailW
+		return kit.DesktopSidebarRailWidth(iconsOnly, winH) + kit.CompactSidebarSideMargin(winH)
+	}
+	return sidebarWidth(width)
 }
 
 func sidebarWidth(width float32) float32 {
@@ -73,10 +114,17 @@ func isMobileSubpage(page int) bool {
 
 func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pages []workspacePage, position navigationPosition, name, status string, tone ui.Color) {
 	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
+	landscape := d.isLandscape(ctx)
+	portraitMobile := d.isPortraitMobile(ctx)
 	keyboardOpen := d.mobile && bottomInset > keyboardAtLeast
 	hasBottomBar := position == navigationBottom && !keyboardOpen
 
-	if !d.snapshotOnly && d.mobile && isMobileSubpage(d.page) {
+	if !portraitMobile && d.page == pageMore {
+		d.page = pageOverview
+		d.activePage.Store(int32(d.page))
+	}
+
+	if !d.snapshotOnly && portraitMobile && isMobileSubpage(d.page) {
 		goBack := func() {
 			if d.hasOpenMenu() {
 				d.closeAllMenus()
@@ -93,154 +141,39 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 		topPages = pages[:pageMore]
 	}
 
-	horizontalAnim := position == navigationTop || position == navigationBottom
-
 	root := ui.Column(ctx).Fill()
 	if !d.mobile {
 		kit.CanvasBackdrop(root, p).Padding(topInset, rightInset, 0, leftInset)
+	} else {
+		kit.CanvasBackdrop(root, p)
 	}
 	navStyle := d.bottomBarStyle()
 	navReserve := kit.BottomNavReserveFor(bottomInset, hasBottomBar, navStyle)
+	activeHeaderHeight := float32(headerHeight)
+	if d.mobile {
+		activeHeaderHeight = float32(mobileHeaderHeight)
+	}
 	floatingTop := float32(0)
 	if p.LiquidGlass {
 		if d.mobile {
-			floatingTop = mobileHeaderHeight + topInset
+			floatingTop = activeHeaderHeight + topInset
 		} else {
-			floatingTop = headerHeight
+			floatingTop = activeHeaderHeight
 		}
 	}
 
 	root.Children(func() {
 		mobileTitle := pages[d.page].label
-		if d.page == pageDevice {
+		if portraitMobile && d.page == pageDevice {
 			mobileTitle = msgs.GuiDeviceInfo()
 		}
-
-		pageContent := func() {
-			page := pages[d.page]
-			contentFloatingTop := floatingTop
-			if !d.mobile && (d.page == pageDevice || d.page == pageConnectionLog) {
-				d.deviceSubnav(ctx, p, msgs, floatingTop)
-				contentFloatingTop = 0
-			}
-			motionWrap := ui.Column(ctx.Key(d.page)).Fill().MinWidth(0).MinHeight(0)
-			if !d.snapshotOnly {
-				kit.NavigationPageMotion(motionWrap, horizontalAnim, d.pageDirection)
-			}
-			motionWrap.Children(func() {
-				if page.list != nil {
-					padY, padX, gap := float32(16), float32(20), float32(12)
-					if d.mobile {
-						padY, padX, gap = 10, 14, 10
-					}
-					padY += contentFloatingTop
-					padBottom := padY
-					listBottom := float32(0)
-					inStart, inEnd := padX, padX
-					if d.mobile {
-						inStart, inEnd = max(padX, leftInset), max(padX, rightInset)
-						if hasBottomBar {
-							padBottom, listBottom = 0, navReserve+padY-contentFloatingTop
-						}
-					}
-					ui.Column(ctx).Fill().MinWidth(0).MinHeight(0).
-						Padding(padY, inEnd, padBottom, inStart).
-						Gap(gap).Children(func() { page.list(listBottom) })
-					return
-				}
-
-				padY, padX, colGap := float32(16), float32(20), float32(16)
-				if d.mobile {
-					padY, padX, colGap = 12, 14, 12
-				}
-				padBottom := padY + 6
-				if hasBottomBar {
-					padBottom = navReserve + 12
-				}
-				padY += contentFloatingTop
-				inStart, inEnd := padX, padX
-				if d.mobile {
-					inStart, inEnd = max(padX, leftInset), max(padX, rightInset)
-				}
-				scroll := ui.Scroll(ctx.Key(d.page)).Scrollbars(false).Fill().MinWidth(0).MinHeight(0).TrackScroll(&d.scroll)
-				if contentFloatingTop > 0 || navReserve > 0 {
-					scroll.ScrollbarInsets(contentFloatingTop, 0, navReserve)
-				}
-				scroll.Children(func() {
-					ui.Column(ctx).FillWidth().Shrink(0).
-						Padding(padY, inEnd, padBottom, inStart).
-						Gap(colGap).Children(func() {
-						kit.FormColumn(ctx, func() {
-							ui.Column(ctx).FillWidth().Gap(colGap).Children(page.content)
-						})
-					})
-				})
-			})
+		renderContent := func() {
+			d.renderPageContent(ctx, p, msgs, pages, position, portraitMobile, landscape, hasBottomBar, floatingTop, navReserve, rightInset, bottomInset, leftInset)
 		}
-
-		if d.mobile {
-			bottomCanvasMargin := float32(0)
-			if hasBottomBar {
-				bottomCanvasMargin = -bottomInset
-			}
-			topCanvasMargin := float32(0)
-			if p.LiquidGlass {
-				topCanvasMargin = -topInset
-			}
-			if !p.LiquidGlass {
-				d.mobileTopBar(ctx, p, msgs, mobileTitle, name, status, tone, topInset, rightInset, leftInset)
-				if hasBottomBar {
-					d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, bottomInset, leftInset, rightInset)
-				}
-			}
-			canvas := ui.Column(ctx.Key("mobile-body")).FillWidth().Grow(1).MinHeight(0).Clip().
-				Margin(topCanvasMargin, -rightInset, bottomCanvasMargin, -leftInset)
-			canvas.Children(func() {
-				pageContent()
-				if isMobileSubpage(d.page) {
-					rail := ui.Box(ctx.Key("edge-back")).Absolute().Left(0).Top(floatingTop).Bottom(0).Width(20).ZIndex(8).
-						Draggable(nil, ui.DraggableOptions{
-							Axis:   ui.Horizontal,
-							Bounds: &ui.Rect{},
-							Rigid:  true,
-						})
-					px, _, _ := rail.PointerPosition()
-					if _, _, held := rail.Dragged(); held && px >= 68 {
-						d.goPage(pageMore)
-					}
-				}
-			})
-			if p.LiquidGlass {
-				kit.GlassScrollEdge(ctx, p, -topInset, mobileHeaderHeight+topInset+10, 8)
-				d.mobileTopBar(ctx, p, msgs, mobileTitle, name, status, tone, topInset, rightInset, leftInset)
-				if hasBottomBar {
-					d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, bottomInset, leftInset, rightInset)
-				}
-			}
+		if portraitMobile {
+			d.renderPortraitWorkspace(ctx, p, msgs, pages, mobileTitle, name, status, tone, hasBottomBar, floatingTop, topInset, rightInset, bottomInset, leftInset, renderContent)
 		} else {
-			if !p.LiquidGlass {
-				d.desktopHeader(ctx, p, msgs, name, status, tone, topPages)
-			}
-			ui.Row(ctx.Key("desktop-body")).FillWidth().Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-				if position == navigationSide {
-					if p.LiquidGlass {
-						ui.Box(ctx).FillHeight().Padding(headerHeight, 0, 0, 0).Children(func() {
-							d.pageNavigation(ctx, p, msgs, pages[:pageMore], navigationSide, false, navTabPadding, navLabelGap)
-						})
-					} else {
-						d.pageNavigation(ctx, p, msgs, pages[:pageMore], navigationSide, false, navTabPadding, navLabelGap)
-					}
-				}
-				desktopContent := kit.CanvasBackdrop(ui.Column(ctx.Key("desktop-content")).Grow(1).MinWidth(0).MinHeight(0).FillHeight(), p)
-				if !d.snapshotOnly {
-					desktopContent.Transition(kit.SideContentTransition)
-				}
-				desktopContent.Children(pageContent)
-			})
-			if p.LiquidGlass {
-				kit.GlassScrollEdge(ctx, p, 0, headerHeight+10, 8)
-				d.desktopHeader(ctx, p, msgs, name, status, tone, topPages)
-			}
+			d.renderDesktopWorkspace(ctx, p, msgs, pages, topPages, position, landscape, mobileTitle, name, status, tone, floatingTop, bottomInset, leftInset, renderContent)
 		}
 	})
 
@@ -257,6 +190,188 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 	}
 }
 
+func (d *dashboard) renderPageContent(
+	ctx *ui.Context,
+	p kit.Palette,
+	msgs locales.Messages,
+	pages []workspacePage,
+	position navigationPosition,
+	portraitMobile, landscape, hasBottomBar bool,
+	floatingTop, navReserve, rightInset, bottomInset, leftInset float32,
+) {
+	page := pages[d.page]
+	contentFloatingTop := floatingTop
+	if !portraitMobile && (d.page == pageDevice || d.page == pageConnectionLog) {
+		d.deviceSubnav(ctx, p, msgs, position, floatingTop, leftInset, rightInset)
+		contentFloatingTop = 0
+	}
+	horizontalAnim := position == navigationTop || position == navigationBottom
+	motionWrap := ui.Column(ctx.Key(d.page)).Fill().MinWidth(0).MinHeight(0)
+	if !d.snapshotOnly {
+		kit.NavigationPageMotion(motionWrap, horizontalAnim, d.pageDirection)
+	}
+	motionWrap.Children(func() {
+		if page.list != nil || page.fixed != nil {
+			basePadY, padX, gap := float32(16), float32(20), float32(12)
+			switch {
+			case portraitMobile:
+				basePadY, padX, gap = 10, 14, 10
+			case landscape:
+				basePadY, padX, gap = 8, 12, 10
+			}
+			padTop := basePadY + contentFloatingTop
+			padBottom := basePadY
+			innerBottom := float32(0)
+			inStart, inEnd := horizontalContentPadding(portraitMobile, landscape, position, padX, leftInset, rightInset)
+			switch {
+			case portraitMobile:
+				if hasBottomBar {
+					padBottom, innerBottom = 0, navReserve+basePadY
+				} else {
+					padBottom = bottomInset + basePadY
+				}
+			case landscape:
+				if page.fixed != nil {
+					padBottom = bottomInset + 8
+				} else {
+					padBottom, innerBottom = 0, max(basePadY, bottomInset+8)
+				}
+			}
+			container := ui.Column(ctx).Fill().MinWidth(0).MinHeight(0).
+				Padding(padTop, inEnd, padBottom, inStart).
+				Gap(gap)
+			if page.fixed != nil {
+				container.Children(page.fixed)
+			} else {
+				container.Children(func() { page.list(innerBottom) })
+			}
+			return
+		}
+
+		padY, padX, colGap := float32(16), float32(20), float32(16)
+		switch {
+		case portraitMobile:
+			padY, padX, colGap = 12, 14, 12
+		case landscape:
+			padY, padX, colGap = 10, 12, 10
+		}
+		padBottom := padY + 6
+		switch {
+		case hasBottomBar:
+			padBottom = navReserve + 12
+		case portraitMobile:
+			padBottom = bottomInset + padY + 6
+		case landscape:
+			padBottom = max(padY, bottomInset+8)
+		}
+		padTop := padY + contentFloatingTop
+		inStart, inEnd := horizontalContentPadding(portraitMobile, landscape, position, padX, leftInset, rightInset)
+		scroll := ui.Scroll(ctx.Key(d.page)).Scrollbars(false).Fill().MinWidth(0).MinHeight(0).TrackScroll(&d.scroll)
+		if contentFloatingTop > 0 || navReserve > 0 {
+			scroll.ScrollbarInsets(contentFloatingTop, 0, navReserve)
+		}
+		scroll.Children(func() {
+			ui.Column(ctx).FillWidth().Shrink(0).
+				Padding(padTop, inEnd, padBottom, inStart).
+				Gap(colGap).Children(func() {
+				kit.FormColumn(ctx, func() {
+					ui.Column(ctx).FillWidth().Gap(colGap).Children(page.content)
+				})
+			})
+		})
+	})
+}
+
+func (d *dashboard) renderPortraitWorkspace(
+	ctx *ui.Context,
+	p kit.Palette,
+	msgs locales.Messages,
+	pages []workspacePage,
+	mobileTitle, name, status string,
+	tone ui.Color,
+	hasBottomBar bool,
+	floatingTop, topInset, rightInset, bottomInset, leftInset float32,
+	pageContent func(),
+) {
+	if !p.LiquidGlass {
+		d.mobileTopBar(ctx, p, msgs, mobileTitle, name, status, tone, topInset, rightInset, leftInset)
+		if hasBottomBar {
+			d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, bottomInset, leftInset, rightInset)
+		}
+	}
+	canvas := ui.Column(ctx.Key("mobile-body")).Grow(1).MinWidth(0).MinHeight(0).Clip()
+	if !d.snapshotOnly {
+		kit.ApplyRotateEnterPose(ctx, canvas.TransformOrigin(0.5, 0.35), "rot-mob", ui.Pose{Y: 12, Scale: 0.965, Fade: 0.55}, kit.MotionRotate)
+	}
+	canvas.Children(func() {
+		pageContent()
+		if isMobileSubpage(d.page) {
+			rail := ui.Box(ctx.Key("edge-back")).Absolute().Left(leftInset).Top(floatingTop).Bottom(0).Width(20).ZIndex(8).
+				Draggable(nil, ui.DraggableOptions{
+					Axis:   ui.Horizontal,
+					Bounds: &ui.Rect{},
+					Rigid:  true,
+				})
+			px, _, _ := rail.PointerPosition()
+			if _, _, held := rail.Dragged(); held && px >= 68 {
+				d.goPage(pageMore)
+			}
+		}
+	})
+	if p.LiquidGlass {
+		kit.GlassScrollEdge(ctx, p, 0, floatingTop+10, 8)
+		d.mobileTopBar(ctx, p, msgs, mobileTitle, name, status, tone, topInset, rightInset, leftInset)
+		if hasBottomBar {
+			d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, bottomInset, leftInset, rightInset)
+		}
+	}
+}
+
+func (d *dashboard) renderDesktopWorkspace(
+	ctx *ui.Context,
+	p kit.Palette,
+	msgs locales.Messages,
+	pages, topPages []workspacePage,
+	position navigationPosition,
+	landscape bool,
+	mobileTitle, name, status string,
+	tone ui.Color,
+	floatingTop, bottomInset, leftInset float32,
+	pageContent func(),
+) {
+	if !p.LiquidGlass {
+		d.desktopHeader(ctx, p, msgs, mobileTitle, name, status, tone, topPages)
+	}
+	body := ui.Row(ctx.Key("desktop-body")).Grow(1).MinWidth(0).MinHeight(0).AlignItems(ui.Stretch)
+	if d.mobile && !d.snapshotOnly {
+		kit.ApplyRotateEnterPose(ctx, body.TransformOrigin(0.5, 0.35), "rot-desk", ui.Pose{Y: 10, Scale: 0.965, Fade: 0.55}, kit.MotionRotate)
+	}
+	body.Children(func() {
+		if position == navigationSide {
+			sideWrap := ui.Box(ctx).FillHeight().ZIndex(2)
+			if p.LiquidGlass || landscape {
+				var sideLeft, sideBottom float32
+				if landscape {
+					sideLeft, sideBottom = leftInset, bottomInset
+				}
+				sideWrap.Padding(floatingTop, 0, sideBottom, sideLeft)
+			}
+			sideWrap.Children(func() {
+				d.pageNavigation(ctx, p, msgs, pages[:pageMore], navigationSide, false)
+			})
+		}
+		desktopContent := ui.Column(ctx.Key("desktop-content")).Grow(1).MinWidth(0).MinHeight(0).FillHeight()
+		if !d.snapshotOnly && !kit.IsOrientationRotating(ctx) {
+			desktopContent.Transition(kit.SideContentTransition)
+		}
+		desktopContent.Children(pageContent)
+	})
+	if p.LiquidGlass {
+		kit.GlassScrollEdge(ctx, p, 0, floatingTop+10, 8)
+		d.desktopHeader(ctx, p, msgs, mobileTitle, name, status, tone, topPages)
+	}
+}
+
 func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locales.Messages, name, status string, tone ui.Color, compactLabel, iconsOnly bool) ui.Element {
 	fullStatus := name
 	if status != "" {
@@ -266,90 +381,140 @@ func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locale
 	if compactLabel && status != "" {
 		statusLabel = status
 	}
-	pillHeight := kit.DesktopTopNavHeight
-	if d.mobile {
-		pillHeight = 36
-	}
-	pill := ui.ButtonBase(ctx.Key("status-pill")).Height(pillHeight).Shrink(0).
-		Radius(kit.RadiusFull).AlignItems(ui.Center).
-		Label(fullStatus).
-		OnClick(func() {
-			d.deviceMenuOpen = !d.deviceMenuOpen
-			if d.deviceMenuOpen {
-				d.scanMeters(msgs, true)
+	pillHeight := d.headerLayoutMetrics(ctx).pillHeight
+	var pill ui.Element
+	buildPill := func() {
+		pill = ui.ButtonBase(ctx.Key("status-pill")).Height(pillHeight).Shrink(0).
+			Radius(kit.RadiusFull).AlignItems(ui.Center).
+			Label(fullStatus).
+			OnClick(func() {
+				d.deviceMenuOpen = !d.deviceMenuOpen
+				if d.deviceMenuOpen {
+					d.scanMeters(msgs, true)
+				}
+			})
+		if iconsOnly {
+			pill.Size(pillHeight, pillHeight).Justify(ui.Center)
+		} else {
+			pill.Padding(0, 12).Gap(6)
+		}
+		if iconsOnly || statusLabel != fullStatus {
+			pill.Tooltip(fullStatus)
+		}
+		pillBg := p.Inset
+		if pill.Pressed() {
+			pillBg = p.Press
+		} else if pill.Hovered() || pill.FocusVisible() {
+			pillBg = p.SurfaceHi
+		}
+		if !d.mobile {
+			kit.ControlMotion(pill)
+		}
+		if p.LiquidGlass {
+			kit.GlassFloatingButton(ctx, pill, p, kit.RadiusFull, ui.Color{}, pillBg, p.LineSoft)
+		} else {
+			pill.Background(pill.AnimateColor("pill-bg", pillBg, kit.MotionFast)).Border(1, p.LineSoft)
+		}
+		pill.Children(func() {
+			kit.StatusDot(ctx, tone, 7)
+			if !iconsOnly {
+				kit.AnimatedLabel(ctx, statusLabel).FontSize(12).FontWeight(600).SingleLine().
+					MaxWidth(170).TextColor(p.Text)
 			}
 		})
-	if iconsOnly {
-		pill.Size(pillHeight, pillHeight).Justify(ui.Center)
+	}
+	if d.mobile && !d.snapshotOnly {
+		wrap := ui.Box(ctx.Key(statusPillWrapKey{landscape: d.isLandscape(ctx)})).Shrink(0).TransformOrigin(0.5, 0.5)
+		kit.ApplyRotateEnterPose(ctx, wrap, "rot-pill", ui.Pose{X: 16, Scale: 0.93, Fade: 0.65}, kit.MotionRotate)
+		wrap.Children(buildPill)
 	} else {
-		pill.Padding(0, 12).Gap(6)
+		buildPill()
 	}
-	if iconsOnly || statusLabel != fullStatus {
-		pill.Tooltip(fullStatus)
-	}
-	pillBg := p.Inset
-	if pill.Pressed() {
-		pillBg = p.Press
-	} else if pill.Hovered() || pill.FocusVisible() {
-		pillBg = p.SurfaceHi
-	}
-	kit.ControlMotion(pill)
-	if p.LiquidGlass {
-		kit.GlassFloatingButton(pill, p, kit.RadiusFull, ui.Color{}, pillBg, p.LineSoft)
-	} else {
-		pill.Background(pill.AnimateColor("pill-bg", pillBg, kit.MotionFast)).Border(1, p.LineSoft)
-	}
-	pill.Children(func() {
-		kit.StatusDot(ctx, tone, 7)
-		if !iconsOnly {
-			kit.AnimatedLabel(ctx, statusLabel).FontSize(12).FontWeight(600).SingleLine().
-				MaxWidth(170).TextColor(p.Text)
+	return pill
+}
+
+func floatingGlassIconButton(ctx *ui.Context, p kit.Palette, key string, size float32, icon *ui.SVG, iconSize float32, iconColor ui.Color, label string, onClick func(ui.Element)) ui.Element {
+	var btn ui.Element
+	btn = ui.ButtonBase(ctx.Key(key)).Size(size, size).Shrink(0).Center().
+		Label(label).Tooltip(label).OnClick(func() {
+		if onClick != nil {
+			onClick(btn)
 		}
 	})
-	return pill
+	kit.ControlMotion(kit.GlassFloatingButton(ctx, btn, p, kit.RadiusFull, ui.Color{}, p.Surface, p.LineSoft)).Children(func() {
+		pop := float32(0)
+		if btn.Pressed() {
+			pop = 1
+		}
+		kit.GlassIconPop(ctx, ui.Icon(ctx, icon).FontSize(iconSize).TextColor(iconColor), p, pop)
+	})
+	return btn
+}
+
+func (d *dashboard) headerThemeButton(ctx *ui.Context, p kit.Palette, msgs locales.Messages, size float32) {
+	themeIcon, themeLabel := kit.IconMoon, msgs.GuiDark()
+	if p.Dark {
+		themeIcon, themeLabel = kit.IconSun, msgs.GuiLight()
+	}
+	if p.LiquidGlass {
+		iconSize := float32(15)
+		if d.mobile {
+			iconSize = 16
+		}
+		btn := floatingGlassIconButton(ctx, p, "theme-toggle", size, themeIcon, iconSize, p.Muted, themeLabel, d.toggleLightDark)
+		if !d.mobile && !p.Dark && p.CardShadow.A > 0 {
+			btn.Shadow(0, 1, 4, 0, p.CardShadow)
+		}
+		return
+	}
+	if d.mobile {
+		var themeBtn ui.Element
+		themeBtn = kit.RoundIconActionButton(ctx.Key("theme-toggle"), p, themeIcon, themeLabel, size, false, func() {
+			d.toggleLightDark(themeBtn)
+		})
+		return
+	}
+	var themeBtn ui.Element
+	themeBtn = kit.IconActionButton(ctx.Key("theme-toggle"), p, themeIcon, themeLabel, windowButtonWidth, false, func() {
+		d.toggleLightDark(themeBtn)
+	})
 }
 
 func (d *dashboard) mobileTopBar(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pageTitle, name, status string, tone ui.Color, topInset, rightInset, leftInset float32) {
 	hasBack := isMobileSubpage(d.page)
-	leading := max(16, leftInset)
+	leading := leftInset + 16
 	gap := float32(10)
 	if hasBack {
-		leading = max(8, leftInset)
+		leading = leftInset + 8
 		gap = 6
 	}
-	trailing := max(14, rightInset)
+	trailing := rightInset + 14
 	header := ui.Row(ctx.Key("workspace-header")).Height(mobileHeaderHeight+topInset).Shrink(0).
 		AlignItems(ui.Center).
 		Padding(topInset, trailing, 0, leading).Gap(gap)
 	if p.LiquidGlass {
-		header.Absolute().Top(-topInset).Left(-leftInset).Right(-rightInset).ZIndex(9)
-	} else {
-		header.FillWidth().Margin(-topInset, -rightInset, 0, -leftInset)
+		header.Absolute().Top(0).Left(0).Right(0).ZIndex(9)
 	}
 	kit.GlassBarChrome(header, p, p.Surface, p.LineSoft)
 	var statusPill ui.Element
 	header.Children(func() {
 		if hasBack {
 			if p.LiquidGlass {
-				back := ui.ButtonBase(ctx.Key("more-back")).Size(38, 38).Shrink(0).Center().
-					Label(msgs.GuiBack()).Tooltip(msgs.GuiBack()).OnClick(func() {
+				floatingGlassIconButton(ctx, p, "more-back", 38, kit.IconArrowLeft, 16, p.Text, msgs.GuiBack(), func(ui.Element) {
 					d.goPage(pageMore)
 				})
-				kit.ControlMotion(kit.GlassFloatingButton(back, p, kit.RadiusFull, ui.Color{}, p.Surface, p.LineSoft)).Children(func() {
-					pop := float32(0)
-					if back.Pressed() {
-						pop = 1
-					}
-					kit.GlassIconPop(ui.Icon(ctx, kit.IconArrowLeft).FontSize(16).TextColor(p.Text), p, pop)
-				})
 			} else {
-				kit.IconActionButton(ctx.Key("more-back"), p, kit.IconArrowLeft, msgs.GuiBack(), 40, false, func() {
+				kit.RoundIconActionButton(ctx.Key("more-back"), p, kit.IconArrowLeft, msgs.GuiBack(), 40, false, func() {
 					d.goPage(pageMore)
 				})
 			}
 		}
-		kit.AnimatedLabel(ctx, pageTitle).FontSize(19).FontWeight(750).SingleLine().Grow(1).MinWidth(0).
+		title := kit.AnimatedLabel(ctx.Key(headerTitleKey{landscape: false}), pageTitle).FontSize(19).FontWeight(750).SingleLine().Shrink(1).MinWidth(0).
 			Role(ui.RoleHeading).Level(1)
+		if !d.snapshotOnly {
+			title.Transition(kit.NavRotateMatchTransition(ctx, navHeaderTitleMatchKey{}, false))
+		}
+		ui.Spacer(ctx).MinWidth(0)
 		statusPill = d.statusPillButton(ctx, p, msgs, name, status, tone, kit.NarrowWidth(ctx), false)
 	})
 	if !d.snapshotOnly {
@@ -357,64 +522,57 @@ func (d *dashboard) mobileTopBar(ctx *ui.Context, p kit.Palette, msgs locales.Me
 	}
 }
 
-func (d *dashboard) desktopHeader(ctx *ui.Context, p kit.Palette, msgs locales.Messages, name, status string, tone ui.Color, topPages []workspacePage) {
+func (d *dashboard) desktopHeader(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pageTitle, name, status string, tone ui.Color, topPages []workspacePage) {
 	top := len(topPages) != 0
-	plan := computeDesktopHeaderPlan(ctx, topPages, name, status)
-	themeIcon, themeLabel := kit.IconMoon, msgs.GuiDark()
-	if p.Dark {
-		themeIcon, themeLabel = kit.IconSun, msgs.GuiLight()
-	}
+	topInset, rightInset, _, leftInset := ctx.SafeArea()
+	metrics := d.headerLayoutMetrics(ctx)
+	plan := d.computeDesktopHeaderPlan(ctx, topPages, pageTitle, name, status, metrics)
 
-	header := ui.Row(ctx.Key("workspace-header")).Height(headerHeight).Shrink(0).AlignItems(ui.Center).
-		Padding(0, workspacePadding, 0, headerLeading).Gap(headerGap).
-		DragWindow()
+	header := ui.Row(ctx.Key("workspace-header")).Shrink(0).AlignItems(ui.Center).Gap(headerGap)
+	if !d.mobile {
+		header.Height(headerHeight).Padding(0, metrics.padEnd, 0, metrics.padStart).DragWindow()
+	} else {
+		header.Height(mobileHeaderHeight+topInset).
+			Padding(topInset, rightInset+metrics.padEnd, 0, leftInset+metrics.padStart)
+	}
 	if p.LiquidGlass {
 		header.Absolute().Top(0).Left(0).Right(0).ZIndex(9)
-	} else {
-		header.FillWidth()
 	}
 	kit.GlassBarChrome(header, p, p.Surface, p.LineSoft)
 
 	var statusPill ui.Element
 	header.Children(func() {
-		ui.Row(ctx).AlignItems(ui.Center).Gap(7).Shrink(0).Children(func() {
-			ui.Image(ctx, kit.BrandLogo).Size(22, 22).Shrink(0).AccessHidden(true)
-			ui.Text(ctx, "WattScope").FontSize(13).FontWeight(750).SingleLine().Shrink(0).
+		if d.mobile {
+			title := kit.AnimatedLabel(ctx.Key(headerTitleKey{landscape: true}), pageTitle).FontSize(19).FontWeight(750).SingleLine().Shrink(0).MinWidth(0).
 				Role(ui.RoleHeading).Level(1)
-		})
+			if !d.snapshotOnly {
+				title.Transition(kit.NavRotateMatchTransition(ctx, navHeaderTitleMatchKey{}, false))
+			}
+		} else {
+			ui.Row(ctx).AlignItems(ui.Center).Gap(7).Shrink(0).Children(func() {
+				ui.Image(ctx, kit.BrandLogo).Size(22, 22).Shrink(0).AccessHidden(true)
+				ui.Text(ctx, "WattScope").FontSize(13).FontWeight(750).SingleLine().Shrink(0).
+					Role(ui.RoleHeading).Level(1)
+			})
+		}
 
 		if top {
-			d.pageNavigation(ctx, p, msgs, topPages, navigationTop, plan.navIconsOnly, plan.tabPad, plan.tabGap)
+			d.pageNavigation(ctx, p, msgs, topPages, navigationTop, plan.navIconsOnly)
 		}
 
 		ui.Spacer(ctx).MinWidth(0)
 
 		statusPill = d.statusPillButton(ctx, p, msgs, name, status, tone, plan.pillCompact, plan.pillIconsOnly)
 
-		ui.Row(ctx).Shrink(0).AlignItems(ui.Center).Gap(windowButtonGap).Children(func() {
-			if p.LiquidGlass {
-				var themeBtn ui.Element
-				themeBtn = ui.ButtonBase(ctx.Key("theme-toggle")).Size(kit.DesktopTopNavHeight, kit.DesktopTopNavHeight).Shrink(0).Center().
-					Label(themeLabel).Tooltip(themeLabel).OnClick(func() {
-					d.toggleLightDark(themeBtn)
-				})
-				if !p.Dark && p.CardShadow.A > 0 {
-					themeBtn.Shadow(0, 1, 4, 0, p.CardShadow)
-				}
-				kit.ControlMotion(kit.GlassFloatingButton(themeBtn, p, kit.RadiusFull, ui.Color{}, p.Surface, p.LineSoft)).Children(func() {
-					pop := float32(0)
-					if themeBtn.Pressed() {
-						pop = 1
-					}
-					kit.GlassIconPop(ui.Icon(ctx, themeIcon).FontSize(15).TextColor(p.Muted), p, pop)
-				})
-			} else {
-				var themeBtn ui.Element
-				themeBtn = kit.IconActionButton(ctx.Key("theme-toggle"), p, themeIcon, themeLabel, windowButtonWidth, false, func() {
-					d.toggleLightDark(themeBtn)
-				})
+		ctrlRow := ui.Row(ctx.Key("header-controls")).Shrink(0).AlignItems(ui.Center).Gap(windowButtonGap)
+		if d.mobile && !d.snapshotOnly {
+			kit.ApplyRotateEnterPose(ctx, ctrlRow.TransformOrigin(0.5, 0.5), "rot-theme", ui.Pose{Scale: 0.72, Fade: 0.85}, kit.MotionRotate)
+		}
+		ctrlRow.Children(func() {
+			d.headerThemeButton(ctx, p, msgs, metrics.themeBtnSize)
+			if !d.mobile {
+				d.windowButtons(ctx, p, msgs)
 			}
-			d.windowButtons(ctx, p, msgs)
 		})
 	})
 	if !d.snapshotOnly {
@@ -431,21 +589,25 @@ func (d *dashboard) toggleNavigationPlacement() {
 	d.saveSettings()
 }
 
-func (d *dashboard) pageNavigation(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pages []workspacePage, position navigationPosition, iconsOnly bool, tabPad, tabGap float32) {
-	items := make([]kit.NavTab, len(pages))
+func (d *dashboard) pageNavigation(ctx *ui.Context, p kit.Palette, msgs locales.Messages, pages []workspacePage, position navigationPosition, iconsOnly bool) {
+	var itemBuf [pageMore]kit.NavTab
+	items := itemBuf[:0]
+	if len(pages) > len(itemBuf) {
+		items = make([]kit.NavTab, 0, len(pages))
+	}
 	for index, page := range pages {
 		idx := index
-		items[idx] = kit.NavTab{
+		items = append(items, kit.NavTab{
 			Label:    page.label,
 			Icon:     page.icon,
 			OnSelect: func() { d.goPage(idx) },
-		}
+		})
 	}
 	sidebar := position == navigationSide
+	tabPad, tabGap := float32(navTabPadding), float32(navLabelGap)
 	toggleTooltip := msgs.GuiSideNavigation()
 	if sidebar {
-		width, _ := ctx.Size()
-		iconsOnly = sidebarWidth(width) != navigationSidebarWidth
+		iconsOnly = d.sidebarWidthFor(ctx) < kit.DesktopSidebarWidth
 		tabPad, tabGap = 12, 10
 		toggleTooltip = msgs.GuiTopNavigation()
 	}
@@ -454,7 +616,16 @@ func (d *dashboard) pageNavigation(ctx *ui.Context, p kit.Palette, msgs locales.
 		selected = pageDevice
 	}
 	before := selected
-	kit.DesktopNav(ctx, p, msgs.Workspace(), &selected, items, sidebar, iconsOnly, tabPad, tabGap, d.toggleNavigationPlacement, msgs.GuiNavigation(), toggleTooltip)
+	kit.DesktopNav(ctx, p, msgs.Workspace(), &selected, items, kit.DesktopNavOptions{
+		Sidebar:       sidebar,
+		IconsOnly:     iconsOnly,
+		Touch:         d.mobile,
+		TabPad:        tabPad,
+		TabGap:        tabGap,
+		OnToggle:      d.toggleNavigationPlacement,
+		ToggleLabel:   msgs.GuiNavigation(),
+		ToggleTooltip: toggleTooltip,
+	})
 	if selected != before {
 		d.goPage(selected)
 	}
@@ -475,7 +646,12 @@ func (d *dashboard) mobileBottomBar(ctx *ui.Context, p kit.Palette, label string
 		}
 	}
 	before := selected
-	kit.BottomNavigationBar(ctx, p, "mobile-pages", label, &selected, items[:], d.bottomBarStyle(), bottomInset, leftInset, rightInset)
+	kit.BottomNavigationBar(ctx, p, "mobile-pages", label, &selected, items[:], kit.BottomNavigationBarOptions{
+		Style:       d.bottomBarStyle(),
+		BottomInset: bottomInset,
+		LeftInset:   leftInset,
+		RightInset:  rightInset,
+	})
 	if selected != before {
 		d.goPage(destinations[selected])
 	}
@@ -517,28 +693,58 @@ func (d *dashboard) morePage(ctx *ui.Context, p kit.Palette, msgs locales.Messag
 	})
 }
 
+type desktopHeaderMetrics struct {
+	padStart     float32
+	padEnd       float32
+	pillHeight   float32
+	themeBtnSize float32
+	tabsMargin   float32
+}
+
+func (d *dashboard) headerLayoutMetrics(ctx *ui.Context) desktopHeaderMetrics {
+	if !d.mobile {
+		return desktopHeaderMetrics{
+			padStart:     headerLeading,
+			padEnd:       workspacePadding,
+			pillHeight:   kit.DesktopTopNavHeight,
+			themeBtnSize: kit.DesktopTopNavHeight,
+			tabsMargin:   6,
+		}
+	}
+	_, winH := ctx.Size()
+	padStart := float32(headerLeading)
+	if navigationPlacement(d.mobile, true, d.settings.Navigation) == navigationSide {
+		padStart = kit.CompactSidebarSideMargin(winH)
+	}
+	return desktopHeaderMetrics{
+		padStart:     padStart,
+		padEnd:       14,
+		pillHeight:   36,
+		themeBtnSize: 36,
+		tabsMargin:   4,
+	}
+}
+
 type desktopHeaderPlan struct {
 	navIconsOnly  bool
 	pillCompact   bool
 	pillIconsOnly bool
-	tabPad        float32
-	tabGap        float32
 }
 
-func measureStatusPillWidth(ctx *ui.Context, text string) float32 {
+func measureStatusPillWidth(ctx *ui.Context, text string, pillHeight float32) float32 {
 	if text == "" {
-		return 28
+		return pillHeight
 	}
 	w, _ := ctx.MeasureText(1<<20, ui.Span{Text: text, Size: 12, Weight: 600})
-	return min(170, w) + 33
+	return min(170, w) + 37
 }
 
-func measureTopTabsWidth(ctx *ui.Context, pages []workspacePage, tabPad, tabGap float32) float32 {
+func measureTopTabsWidth(ctx *ui.Context, pages []workspacePage, tabPad, tabGap, ctrlH float32) float32 {
 	if len(pages) == 0 {
 		return 0
 	}
-	// Outer capsule horizontal padding (6), leading toggle (26), inter-item gaps.
-	width := float32(6+26) + navTabGap*float32(len(pages))
+	// Outer capsule horizontal padding (6), leading toggle (ctrlH), inter-item gaps.
+	width := float32(6+ctrlH) + navTabGap*float32(len(pages))
 	for _, page := range pages {
 		labelW, _ := ctx.MeasureText(1<<20, ui.Span{Text: page.label, Size: 13, Weight: 550})
 		width += navIconSize + tabGap + 2*tabPad + labelW
@@ -546,23 +752,37 @@ func measureTopTabsWidth(ctx *ui.Context, pages []workspacePage, tabPad, tabGap 
 	return width
 }
 
-func computeDesktopHeaderPlan(ctx *ui.Context, pages []workspacePage, name, status string) desktopHeaderPlan {
+func (d *dashboard) computeDesktopHeaderPlan(ctx *ui.Context, pages []workspacePage, pageTitle, name, status string, metrics desktopHeaderMetrics) desktopHeaderPlan {
 	available, _ := ctx.Size()
-	titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: "WattScope", Size: 13, Weight: 750})
+	var brandW float32
+	rightW := float32(windowButtonWidth)
+	if d.mobile {
+		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: pageTitle, Size: 19, Weight: 750})
+		brandW = titleW
+		rightW = metrics.themeBtnSize
+		_, rightInset, _, leftInset := ctx.SafeArea()
+		available -= leftInset + rightInset
+	} else {
+		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: "WattScope", Size: 13, Weight: 750})
+		brandW = 22 + 7 + titleW
+		rightW += windowButtonGap + windowButtonsWidth
+	}
 	fullText := name
 	if status != "" {
 		fullText = name + " · " + status
 	}
-	fullPillW := measureStatusPillWidth(ctx, fullText)
+	fullPillW := measureStatusPillWidth(ctx, fullText, metrics.pillHeight)
 	shortPillW := fullPillW
 	if status != "" {
-		shortPillW = measureStatusPillWidth(ctx, status)
+		shortPillW = measureStatusPillWidth(ctx, status, metrics.pillHeight)
 	}
-	const dotPillW = float32(28)
+	dotPillW := metrics.pillHeight
 
-	rightW := float32(windowButtonWidth + windowButtonGap + windowButtonsWidth)
-	brandW := 22 + 7 + titleW
-	fixed := float32(headerLeading+workspacePadding+4*headerGap) + brandW + rightW
+	gapCount := float32(3)
+	if len(pages) == 0 {
+		gapCount = 2
+	}
+	fixed := metrics.padStart + metrics.padEnd + gapCount*headerGap + brandW + rightW
 
 	if len(pages) == 0 {
 		if available >= fixed+fullPillW {
@@ -571,24 +791,25 @@ func computeDesktopHeaderPlan(ctx *ui.Context, pages []workspacePage, name, stat
 		if status != "" && available >= fixed+shortPillW {
 			return desktopHeaderPlan{pillCompact: true}
 		}
-		return desktopHeaderPlan{pillIconsOnly: available < fixed+dotPillW}
+		return desktopHeaderPlan{pillIconsOnly: true}
 	}
 
-	tabsFullW := measureTopTabsWidth(ctx, pages, navTabPadding, navLabelGap)
-	tabsIconW := float32(6+26) + float32(len(pages))*26 + navTabGap*float32(len(pages))
+	topCtrlH := kit.DesktopNavTopControlHeight(d.mobile)
+	tabsFullW := measureTopTabsWidth(ctx, pages, navTabPadding, navLabelGap, topCtrlH)
+	tabsIconW := float32(6+topCtrlH) + float32(len(pages))*topCtrlH + navTabGap*float32(len(pages))
 
 	switch {
-	case available >= fixed+6+tabsFullW+fullPillW:
-		return desktopHeaderPlan{tabPad: navTabPadding, tabGap: navLabelGap}
-	case status != "" && available >= fixed+6+tabsFullW+shortPillW:
-		return desktopHeaderPlan{pillCompact: true, tabPad: navTabPadding, tabGap: navLabelGap}
-	case available >= fixed+6+tabsFullW+dotPillW:
-		return desktopHeaderPlan{pillIconsOnly: true, tabPad: navTabPadding, tabGap: navLabelGap}
-	case available >= fixed+tabsIconW+fullPillW:
-		return desktopHeaderPlan{navIconsOnly: true, tabPad: navTabPadding, tabGap: navLabelGap}
-	case status != "" && available >= fixed+tabsIconW+shortPillW:
-		return desktopHeaderPlan{navIconsOnly: true, pillCompact: true, tabPad: navTabPadding, tabGap: navLabelGap}
+	case available >= fixed+metrics.tabsMargin+tabsFullW+fullPillW:
+		return desktopHeaderPlan{}
+	case status != "" && available >= fixed+metrics.tabsMargin+tabsFullW+shortPillW:
+		return desktopHeaderPlan{pillCompact: true}
+	case available >= fixed+metrics.tabsMargin+tabsFullW+dotPillW:
+		return desktopHeaderPlan{pillIconsOnly: true}
+	case available >= fixed+metrics.tabsMargin+tabsIconW+fullPillW:
+		return desktopHeaderPlan{navIconsOnly: true}
+	case status != "" && available >= fixed+metrics.tabsMargin+tabsIconW+shortPillW:
+		return desktopHeaderPlan{navIconsOnly: true, pillCompact: true}
 	default:
-		return desktopHeaderPlan{navIconsOnly: true, pillIconsOnly: true, tabPad: navTabPadding, tabGap: navLabelGap}
+		return desktopHeaderPlan{navIconsOnly: true, pillIconsOnly: true}
 	}
 }

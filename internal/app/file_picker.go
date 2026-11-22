@@ -133,7 +133,7 @@ func (d *dashboard) openFilePicker(initial filePickerData, startDir string) {
 	p.data = initial
 
 	if d.window != nil {
-		_, palette, _ := d.frameTheme(nil)
+		palette, _ := d.frameTheme(nil)
 		p.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:             initial.Title,
 			Width:             760,
@@ -384,7 +384,7 @@ func (d *dashboard) confirmFilePicker(msgs locales.Messages) {
 				return
 			}
 			d.closeFilePicker()
-			d.notify(resolved, "", "success")
+			d.notify(resolved, "success")
 			if d.window != nil {
 				d.window.Invalidate()
 			}

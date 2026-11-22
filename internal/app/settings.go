@@ -35,6 +35,8 @@ type guiSettings struct {
 	LiquidGlass    bool             `json:"liquid_glass"`
 	IslandEnabled  bool             `json:"island_enabled"`
 	IslandLeft     string           `json:"island_left,omitempty"`
+	HideGoodCRC    bool             `json:"pd_hide_good_crc,omitempty"`
+	HideKeepAlive  bool             `json:"pd_hide_keep_alive,omitempty"`
 }
 
 type islandDisplay struct {
@@ -52,10 +54,17 @@ type themeChange struct {
 	toggle bool
 }
 
+func (d *dashboard) prefsKey() string {
+	if d.settingsKey != "" {
+		return d.settingsKey
+	}
+	return settingsKey
+}
+
 func (d *dashboard) loadSettings(language string) {
 	d.settings.SmoothChart = true
 	d.settings.IslandEnabled = true
-	preferences.Get(settingsKey, &d.settings)
+	preferences.Get(d.prefsKey(), &d.settings)
 	switch d.settings.Theme {
 	case mygo.ThemeLight, mygo.ThemeDark:
 	default:
@@ -86,6 +95,8 @@ func (d *dashboard) loadSettings(language string) {
 		d.settings.IslandLeft = islandLeftVoltage
 	}
 	d.syncIslandDisplay()
+	d.packets.hideGoodCRC = d.settings.HideGoodCRC
+	d.packets.hideKeepAlive = d.settings.HideKeepAlive
 	d.language = d.settings.Language
 	if language = strings.TrimSpace(language); language != "" && !strings.EqualFold(language, settingsAuto) {
 		d.language = locales.Resolve(language)
@@ -103,9 +114,9 @@ func (d *dashboard) bottomBarStyle() kit.BottomNavStyle {
 }
 
 func (d *dashboard) saveSettings() {
-	if err := preferences.Set(settingsKey, d.settings); err != nil {
+	if err := preferences.Set(d.prefsKey(), d.settings); err != nil {
 		msgs := locales.In(d.locale())
-		d.notify(msgs.GuiSettingsSaveFailed(err.Error()), "", "error")
+		d.notify(msgs.GuiSettingsSaveFailed(err.Error()), "error")
 	}
 }
 
@@ -221,7 +232,7 @@ func optionMenuItems(options []settingOption, current string, apply func(string)
 }
 
 func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages) {
-	touch := d.touchUI(ctx)
+	touch := d.touchUI()
 	themes := themeOptions(msgs)
 	languages := languageOptions(msgs)
 	themeIcon := kit.IconSun
@@ -247,7 +258,7 @@ func (d *dashboard) settingsPage(ctx *ui.Context, p kit.Palette, msgs locales.Me
 					}
 				})
 			})
-			if !d.mobile {
+			if !d.isPortraitMobile(ctx) {
 				kit.Divider(ctx, p)
 				navIcon := kit.IconSidebar
 				if d.settings.Navigation == navigationHorizontal {

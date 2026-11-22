@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,10 +74,12 @@ func (d *dashboard) meterRows(ctx *ui.Context, p kit.Palette, snap backend.Snaps
 }
 
 func (d *dashboard) deviceSwitcherPopover(ctx *ui.Context, p kit.Palette, msgs locales.Messages, anchor ui.Element) {
-	touch := d.touchUI(ctx)
+	touch := d.touchUI()
 	_, height := ctx.Size()
+	topInset, _, bottomInset, _ := ctx.SafeArea()
+	maxH := max(140, min(height-topInset-bottomInset-84, max(220, height*0.65)))
 	kit.Popover(ctx, p, anchor, &d.deviceMenuOpen, 0.92, 0, func(panel ui.Element) {
-		panel.Width(288).MaxWidthPercent(92).MaxHeight(max(240, height*0.65)).Padding(12).Gap(8)
+		panel.Width(288).MaxWidthPercent(92).MaxHeight(maxH).Padding(12).Gap(8)
 		panel.Children(func() {
 			d.deviceSwitcherContent(ctx, p, msgs, touch)
 		})
@@ -97,13 +100,14 @@ func (d *dashboard) deviceSwitcherContent(ctx *ui.Context, p kit.Palette, msgs l
 	})
 	kit.Divider(ctx, p)
 	buildList := func() {
-		if len(d.meters) > 0 {
+		switch {
+		case len(d.meters) > 0:
 			d.meterRows(ctx, p, snap, !touch, func() { d.deviceMenuOpen = false })
-		} else if snap.Device.ID != "" {
+		case snap.Device.ID != "":
 			meterOptionRow(ctx, p, snap.Device, snap.State == backend.Streaming, !touch, func() {
 				d.deviceMenuOpen = false
 			})
-		} else {
+		default:
 			status := msgs.GuiNoDevices()
 			if d.busy {
 				status = msgs.Connecting()
@@ -111,7 +115,7 @@ func (d *dashboard) deviceSwitcherContent(ctx *ui.Context, p kit.Palette, msgs l
 			ui.Text(ctx, status).FillWidth().Padding(8, 2).FontSize(13).TextColor(p.Muted).Wrap()
 		}
 	}
-	ui.Scroll(ctx.Key("dev-pop-scroll")).Scrollbars(false).MaxHeight(260).FillWidth().Children(buildList)
+	ui.Scroll(ctx.Key("dev-pop-scroll")).Scrollbars(false).MaxHeight(260).MinHeight(0).FillWidth().Children(buildList)
 	kit.Divider(ctx, p)
 	ui.Row(ctx).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 		connectLabel := msgs.GuiConnect()
@@ -131,7 +135,7 @@ func (d *dashboard) deviceSwitcherContent(ctx *ui.Context, p kit.Palette, msgs l
 }
 
 func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot) {
-	touch := d.touchUI(ctx)
+	touch := d.touchUI()
 	info := snap.Device
 	title := info.Name
 	if title == "" {
@@ -246,15 +250,23 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 	})
 }
 
-func (d *dashboard) deviceSubnav(ctx *ui.Context, p kit.Palette, msgs locales.Messages, floatingTop float32) {
+func (d *dashboard) deviceSubnav(ctx *ui.Context, p kit.Palette, msgs locales.Messages, position navigationPosition, floatingTop, leftInset, rightInset float32) {
 	selected := 0
 	if d.page == pageConnectionLog {
 		selected = 1
 	}
-	ui.Column(ctx.Key("device-subnav")).FillWidth().Shrink(0).Padding(floatingTop+16, 20, 6, 20).Children(func() {
+	landscape := d.isLandscape(ctx)
+	padTop, padX := floatingTop+16, float32(20)
+	if landscape {
+		padTop, padX = floatingTop+10, 12
+	}
+	padStart, padEnd := horizontalContentPadding(d.isPortraitMobile(ctx), landscape, position, padX, leftInset, rightInset)
+	ui.Column(ctx.Key("device-subnav")).FillWidth().Shrink(0).Padding(padTop, padEnd, 6, padStart).Children(func() {
 		kit.NarrowColumn(ctx, func() {
 			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(12).Children(func() {
-				ui.Text(ctx, msgs.GuiDevice()).FontSize(18).FontWeight(750).SingleLine().Role(ui.RoleHeading).Level(2)
+				if !d.mobile {
+					ui.Text(ctx, msgs.GuiDevice()).FontSize(18).FontWeight(750).SingleLine().Role(ui.RoleHeading).Level(2)
+				}
 				kit.SectionTabs(ctx, p, msgs.GuiDevice(), selected, []kit.NavTab{
 					{Label: msgs.GuiDeviceInfo(), OnSelect: func() { d.goPage(pageDevice) }},
 					{Label: msgs.GuiConnectionLog(), OnSelect: func() { d.goPage(pageConnectionLog) }},
@@ -285,7 +297,7 @@ func (view *connectionLogView) snapshot(logs *diagnostics.Buffer, level slog.Lev
 
 func (d *dashboard) connectionLogPage(ctx *ui.Context, p kit.Palette, msgs locales.Messages, bottomPadding float32) {
 	ctx.After(500 * time.Millisecond)
-	touch := d.touchUI(ctx)
+	touch := d.touchUI()
 	entries := d.logView.snapshot(d.logs, d.logLevel)
 	kit.NarrowColumn(ctx, func() {
 		levels := [...]struct {
@@ -310,7 +322,7 @@ func (d *dashboard) connectionLogPage(ctx *ui.Context, p kit.Palette, msgs local
 		ui.Column(ctx).Fill().MinHeight(0).Gap(8).Children(func() {
 			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(8).Children(func() {
 				ui.Row(ctx).AlignItems(ui.Center).Gap(8).Children(func() {
-					if !d.mobile {
+					if !d.isPortraitMobile(ctx) {
 						ui.Text(ctx, msgs.GuiConnectionLog()).FontSize(13).FontWeight(650).
 							TextColor(p.Text).Role(ui.RoleHeading).Level(2).SingleLine()
 					}
@@ -423,7 +435,7 @@ func (d *dashboard) connectionLogRow(ctx *ui.Context, p kit.Palette, msgs locale
 			ui.Spacer(ctx)
 			copyBtn := kit.IconActionButton(ctx.Key("copy"), p, kit.IconCopy, msgs.LogCopyEntry(), copySize, false, func() {
 				ctx.Services().WriteClipboard(text.clipboardText())
-				d.notify(msgs.GuiCopied(), "", "success")
+				d.notify(msgs.GuiCopied(), "success")
 			})
 			if !touch && !copyBtn.Hovered() && !copyBtn.Pressed() && !copyBtn.FocusVisible() {
 				copyBtn.Opacity(0.58)
@@ -507,7 +519,7 @@ func (d *dashboard) deviceTelemetry(ctx *ui.Context, p kit.Palette, msgs locales
 		nextRow(msgs.GuiMinCurrent(), fmt.Sprintf("%.3f mA", value*1000))
 	}
 	if sample.Group != nil {
-		nextRow(msgs.GuiGroup(), fmt.Sprint(*sample.Group))
+		nextRow(msgs.GuiGroup(), strconv.FormatUint(uint64(*sample.Group), 10))
 	}
 	if sample.Uptime != nil {
 		nextRow(msgs.GuiUptime(), formatDuration(float64(*sample.Uptime)))

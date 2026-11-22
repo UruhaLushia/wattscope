@@ -15,9 +15,9 @@ type glassInteraction struct {
 	touch                ui.Point
 }
 
-func trackGlassInteraction(owner ui.Element) glassInteraction {
+func trackGlassInteraction(owner ui.Element, staticSnapshot bool) glassInteraction {
 	center := ui.Point{X: 0.5, Y: 0.5}
-	if StaticSnapshot {
+	if staticSnapshot {
 		return glassInteraction{touch: center}
 	}
 	touch := ui.Local(owner, glassPressKey{}, func() ui.Point { return center })
@@ -48,19 +48,20 @@ func (g glassInteraction) active() bool {
 	return g.glow > 0.005 || g.hover > 0.005 || g.elastic != 0
 }
 
-func (g glassInteraction) material(base glass.Glass) ui.Material {
+func (g glassInteraction) material(base glass.Glass, staticSnapshot bool) ui.Material {
 	if g.active() {
-		return interactiveGlass{base: base, glassInteraction: g}
+		return interactiveGlass{base: base, glassInteraction: g, staticSnapshot: staticSnapshot}
 	}
-	return staticGlass{base: base}
+	return staticGlass{base: base, staticSnapshot: staticSnapshot}
 }
 
 type staticGlass struct {
-	base glass.Glass
+	base           glass.Glass
+	staticSnapshot bool
 }
 
 func (g staticGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
-	if StaticSnapshot || p.Preferences().ReduceTransparency {
+	if g.staticSnapshot || p.Preferences().ReduceTransparency {
 		g.base.PaintMaterial(p, box, radii)
 		return
 	}
@@ -77,8 +78,8 @@ func (g staticGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32)
 
 // GlassIconPop gives SVG icons inside Liquid Glass controls a spring pop on
 // press while keeping neighboring text labels unscaled for sharp glyphs.
-func GlassIconPop(iconEl ui.Element, p Palette, amount float32) ui.Element {
-	if !p.LiquidGlass || iconEl == (ui.Element{}) || StaticSnapshot {
+func GlassIconPop(ctx *ui.Context, iconEl ui.Element, p Palette, amount float32) ui.Element {
+	if !p.LiquidGlass || iconEl == (ui.Element{}) || IsStaticSnapshot(ctx) {
 		return iconEl
 	}
 	target := float32(1)
@@ -92,10 +93,11 @@ func GlassIconPop(iconEl ui.Element, p Palette, amount float32) ui.Element {
 
 type dockGlass struct {
 	glassInteraction
+	staticSnapshot bool
 }
 
 func (g dockGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
-	if StaticSnapshot || p.Preferences().ReduceTransparency {
+	if g.staticSnapshot || p.Preferences().ReduceTransparency {
 		(glass.Glass{}).PaintMaterial(p, box, radii)
 		return
 	}
@@ -113,10 +115,11 @@ func (g dockGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
 type interactiveGlass struct {
 	base glass.Glass
 	glassInteraction
+	staticSnapshot bool
 }
 
 func (g interactiveGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
-	if StaticSnapshot || p.Preferences().ReduceTransparency {
+	if g.staticSnapshot || p.Preferences().ReduceTransparency {
 		g.base.PaintMaterial(p, box, radii)
 		return
 	}
@@ -146,7 +149,7 @@ func GlassPillControl(ctx *ui.Context, owner ui.Element, p Palette, radius float
 		return
 	}
 
-	interaction := trackGlassInteraction(owner)
+	interaction := trackGlassInteraction(owner, IsStaticSnapshot(ctx))
 	elastic, glow, hover := interaction.elastic, interaction.glow, interaction.hover
 	surface := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).PassThrough()
 
@@ -209,21 +212,21 @@ func GlassSelectionPill(ctx *ui.Context, owner ui.Element, p Palette, radius flo
 		pill := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).
 			TransformOrigin(0.5, 0.5).AnimatePose(pillPose, pillAnim).
 			Background(owner.AnimateColor("sp-bg", pillBg, MotionFast)).PassThrough().
-			Transition(PillMatchTransition(matchKey))
+			Transition(PillMatchTransition(ctx, matchKey))
 		if showShadow && p.CardShadow.A > 0 && !owner.Pressed() {
 			pill.Shadow(0, 1, 2, 0, p.CardShadow)
 		}
 		return
 	}
 
-	interaction := trackGlassInteraction(owner)
+	interaction := trackGlassInteraction(owner, IsStaticSnapshot(ctx))
 	elastic, glow, hover := interaction.elastic, interaction.glow, interaction.hover
 	lensMix := clamp32(glow, 0, 1)
 	bg := scaleAlpha(restBg, 1-0.68*lensMix)
 
 	pill := ui.Box(ctx).Absolute().Fill().ZIndex(-1).Radius(radius).
 		Background(owner.AnimateColor("sp-bg", bg, MotionFast)).PassThrough().
-		Transition(pillMatchTransition(matchKey, &MotionGlassScrub))
+		Transition(pillMatchTransition(ctx, matchKey, &MotionGlassScrub))
 
 	if showShadow && p.CardShadow.A > 0 && lensMix < 0.5 {
 		pill.Shadow(0, 1, 2, 0, scaleAlpha(p.CardShadow, 1-lensMix))

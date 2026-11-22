@@ -5,6 +5,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/UruhaLushia/wattscope/internal/backend"
@@ -156,9 +157,126 @@ func hasChannelData(samples []device.Sample, ch measurement) bool {
 	return false
 }
 
-func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap, live backend.Snapshot, chartSample, readoutSample *device.Sample, readoutStats backend.Statistics, metricStats [3]channelStat, cw chartWindow, width, height float32, notice string) {
+type chartTraceKey int
+type overviewPDKey uint64
+
+type overviewFrame struct {
+	snap          backend.Snapshot
+	live          backend.Snapshot
+	chartSample   *device.Sample
+	readoutSample *device.Sample
+	readoutStats  backend.Statistics
+	metricStats   [3]channelStat
+	cw            chartWindow
+	width         float32
+	height        float32
+	notice        string
+}
+
+func (d *dashboard) clearSession() {
+	d.resetChartView()
+	if d.service != nil {
+		d.service.ResetStatistics()
+	}
+}
+
+func (d *dashboard) chartCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, frame overviewFrame, cardPad, cardBottomPad, cardGap float32, touch, landscape, grow bool, basis, minW, pHeight float32, leftAxis bool) {
 	channel := channels[d.channel]
-	touch := d.touchUI(ctx)
+	seriesMask := d.effectiveSeriesMask()
+	fillHeight := pHeight <= 0
+	var c ui.Element
+	if grow {
+		// Skip FillWidth and slow size transitions on flex-grown chart cards so safe-area or orientation changes never lag past the viewport edge.
+		col := ui.Column(ctx).MinWidth(0).Padding(cardPad, cardPad, cardBottomPad, cardPad).Gap(cardGap)
+		if fillHeight {
+			col.FillHeight().MinHeight(0)
+		}
+		c = kit.GlassPanel(col, p, kit.RadiusL, 0.25, p.Surface, p.LineSoft).Grow(1).Basis(basis).MinWidth(minW)
+		if landscape && d.mobile && !d.snapshotOnly {
+			kit.ApplyRotateEnterPose(ctx, c.TransformOrigin(0.5, 0.5), "rot-ov-chart", ui.Pose{X: 12, Scale: 0.965, Fade: 0.55}, kit.MotionRotate)
+		}
+	} else {
+		c = kit.Card(ctx, p).Padding(cardPad, cardPad, cardBottomPad, cardPad).Gap(cardGap)
+	}
+	c.Children(func() {
+		titleSize, hdrMinH, badgeH, btnH := float32(14), float32(0), float32(24), float32(28)
+		if d.mobile {
+			btnH = 32
+		}
+		if landscape {
+			titleSize, hdrMinH, badgeH, btnH = 13.5, 26, 22, 26
+		}
+		kit.ActionBar(ctx).MinHeight(hdrMinH).AlignItems(ui.Center).Gap(8).Shrink(0).Children(func() {
+			ui.Row(ctx).Grow(1).MinWidth(100).AlignItems(ui.Center).Gap(8).Children(func() {
+				kit.StatusDot(ctx, channel.color(p), 7)
+				ui.Text(ctx, channel.name(msgs)).FontSize(titleSize).FontWeight(700).SingleLine()
+				if d.held != nil {
+					kit.Badge(ctx, p, msgs.Hold(), kit.ToneWarning)
+				}
+			})
+
+			kit.ValueBadge(ctx, p, formatWindowLabel(frame.cw.windowSec), kit.TonePlain).Height(badgeH)
+
+			detached := d.held != nil || d.hasViewEnd
+			holdLabel, holdIcon, holdVariant := msgs.ActionHold(), kit.IconPause, kit.VariantSecondary
+			if detached {
+				holdLabel, holdIcon, holdVariant = msgs.ActionResume(), kit.IconPlay, kit.VariantPrimary
+			}
+			kit.ActionButton(ctx.Key("hold"), p, holdVariant, holdIcon, holdLabel, touch, func() {
+				if detached {
+					d.resumeLive()
+				} else {
+					d.hold(frame.snap)
+					d.hasViewEnd = false
+					d.hasCursor = false
+				}
+			}).Height(btnH).Disabled(!detached && len(frame.snap.History) == 0)
+		})
+
+		d.chartLegendRow(ctx, p, msgs, frame.snap.History, seriesMask, landscape)
+
+		empty := msgs.WaitingMeasurements()
+		if len(frame.snap.History) != 0 {
+			empty = msgs.NotReported()
+		} else if frame.notice != "" {
+			empty = frame.notice
+		}
+
+		if len(frame.snap.History) == 0 && pHeight > 0 {
+			pHeight = min(pHeight, 250)
+		}
+		d.trend(ctx, p, msgs, frame.snap, frame.live, channel, frame.chartSample, frame.cw, pHeight, empty, touch, seriesMask, leftAxis)
+	})
+}
+
+func (d *dashboard) landscapeOverview(ctx *ui.Context, p kit.Palette, msgs locales.Messages, frame overviewFrame, pdTotal uint64, cardPad, cardBottomPad, cardGap float32, touch, hasBottom bool) {
+	leftW := min(float32(268), max(float32(180), frame.width*0.33))
+	chartW := frame.width - leftW - 10
+	chartMinW := min(float32(260), max(float32(180), chartW))
+	ui.Row(ctx).Fill().MinWidth(0).MinHeight(0).Gap(10).AlignItems(ui.Stretch).Children(func() {
+		ovLeft := ui.Scroll(ctx.Key("ov-left")).Scrollbars(false).Width(leftW).Shrink(0).FillHeight().MinHeight(0).TrackScroll(&d.scroll)
+		if d.mobile && !d.snapshotOnly {
+			kit.ApplyRotateEnterPose(ctx, ovLeft.TransformOrigin(0.5, 0.5), "rot-ov-left", ui.Pose{X: -12, Scale: 0.975, Fade: 0.55}, kit.MotionRotate)
+		}
+		ovLeft.Children(func() {
+			ui.Column(ctx).FillWidth().Shrink(0).Padding(0, 0, 2, 0).Gap(8).Children(func() {
+				d.landscapeMetricsCard(ctx, p, msgs, frame.readoutSample, frame.metricStats)
+				if hasBottom {
+					d.landscapeSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, leftW, touch)
+					if hasLandscapeSignals(frame.readoutSample, pdTotal) {
+						d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true).Padding(10, 12).Gap(7)
+					}
+				}
+			})
+		})
+		d.chartCard(ctx, p, msgs, frame, cardPad, cardBottomPad, cardGap, touch, true, true, 0, chartMinW, 0, chartW >= 360)
+	})
+}
+
+func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locales.Messages, frame overviewFrame) {
+	touch := d.touchUI()
+	landscape := d.isLandscape(ctx)
+	width, height := frame.width, frame.height
 	stacked, split := width < 280, width < 480
 	compactStats := width < 680
 	fontSize := float32(24)
@@ -169,33 +287,32 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 		}
 	}
 
-	if d.mobile && split {
-		d.mobileMetricsCard(ctx, p, msgs, readoutSample, metricStats, fontSize)
-	} else {
-		gap := float32(12)
+	if !landscape {
 		if d.mobile && split {
-			gap = 8
-		}
-		readings := ui.Row(ctx).FillWidth().Gap(gap).Role(ui.RoleTabList)
-		if split {
-			readings.Column().Gap(gap)
-		}
-		readings.Children(func() {
-			metric := func(index int, inline bool) {
-				item := channels[index]
-				d.metricTab(ctx, p, msgs, item, readoutSample, metricStats[index], item.name(msgs), index, fontSize, inline, compactStats)
+			d.mobileMetricsCard(ctx, p, msgs, frame.readoutSample, frame.metricStats, fontSize)
+		} else {
+			const gap = float32(12)
+			readings := ui.Row(ctx).FillWidth().Gap(gap).Role(ui.RoleTabList)
+			if split {
+				readings.Column().Gap(gap)
 			}
-			metric(0, split)
-			if split && !stacked {
-				ui.Row(ctx).FillWidth().Gap(gap).Children(func() {
-					metric(1, false)
-					metric(2, false)
-				})
-			} else {
-				metric(1, stacked)
-				metric(2, stacked)
-			}
-		})
+			readings.Children(func() {
+				metric := func(index int, inline bool) {
+					item := channels[index]
+					d.metricTab(ctx, p, msgs, item, frame.readoutSample, frame.metricStats[index], item.name(msgs), index, fontSize, inline, compactStats)
+				}
+				metric(0, split)
+				if split && !stacked {
+					ui.Row(ctx).FillWidth().Gap(gap).Children(func() {
+						metric(1, false)
+						metric(2, false)
+					})
+				} else {
+					metric(1, stacked)
+					metric(2, stacked)
+				}
+			})
+		}
 	}
 
 	cardPad := float32(16)
@@ -204,73 +321,31 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	if d.mobile && split {
 		cardBottomPad = 13
 		cardGap = 8
+	} else if landscape {
+		cardPad = 12
+		cardBottomPad = 10
+		cardGap = 6
 	}
 	wide2K := width >= 1280 && !d.mobile
-	hasBottom := live.State == backend.Streaming || readoutStats.Samples > 0 || live.Recording.Active
-	seriesMask := d.effectiveSeriesMask()
+	hasBottom := frame.live.State == backend.Streaming || frame.readoutStats.Samples > 0 || frame.live.Recording.Active
+	var pdTotal uint64
+	if hasBottom && d.service != nil {
+		pdTotal = d.service.PacketSnapshot(0, 0).Total
+	}
 
-	buildChartCard := func(grow bool, pHeight float32) {
-		c := kit.Card(ctx, p).Padding(cardPad, cardPad, cardBottomPad, cardPad).Gap(cardGap)
-		if grow {
-			c.Grow(1).Basis(680).MinWidth(560)
-		}
-		c.Children(func() {
-			kit.ActionBar(ctx).AlignItems(ui.Center).Gap(8).Children(func() {
-				ui.Row(ctx).Grow(1).MinWidth(100).AlignItems(ui.Center).Gap(8).Children(func() {
-					kit.StatusDot(ctx, channel.color(p), 7)
-					ui.Text(ctx, channel.name(msgs)).FontSize(14).FontWeight(700).SingleLine()
-					if d.held != nil {
-						kit.Badge(ctx, p, msgs.Hold(), kit.ToneWarning)
-					}
-				})
-
-				kit.ValueBadge(ctx, p, formatWindowLabel(cw.windowSec), kit.TonePlain).Height(24)
-
-				detached := d.held != nil || d.hasViewEnd
-				holdLabel, holdIcon, holdVariant := msgs.ActionHold(), kit.IconPause, kit.VariantSecondary
-				if detached {
-					holdLabel, holdIcon, holdVariant = msgs.ActionResume(), kit.IconPlay, kit.VariantPrimary
-				}
-				holdBtn := kit.ActionButton(ctx.Key("hold"), p, holdVariant, holdIcon, holdLabel, touch, func() {
-					if detached {
-						d.resumeLive()
-					} else {
-						d.hold(snap)
-						d.hasViewEnd = false
-						d.hasCursor = false
-					}
-				}).Disabled(!detached && len(snap.History) == 0)
-				if d.mobile {
-					holdBtn.Height(32)
-				} else {
-					holdBtn.Height(28)
-				}
-			})
-
-			d.chartLegendRow(ctx, p, msgs, snap.History, seriesMask)
-
-			empty := msgs.WaitingMeasurements()
-			if len(snap.History) != 0 {
-				empty = msgs.NotReported()
-			} else if notice != "" {
-				empty = notice
-			}
-
-			if len(snap.History) == 0 {
-				pHeight = min(pHeight, 250)
-			}
-			d.trend(ctx, p, msgs, snap, live, channel, chartSample, cw, pHeight, empty, touch, seriesMask, !split)
-		})
+	if landscape {
+		d.landscapeOverview(ctx, p, msgs, frame, pdTotal, cardPad, cardBottomPad, cardGap, touch, hasBottom)
+		return
 	}
 
 	if wide2K && hasBottom {
 		plotHeight := min(650, max(310, height-360))
 		ui.Row(ctx).FillWidth().Gap(14).AlignItems(ui.Start).Children(func() {
-			buildChartCard(true, plotHeight)
+			d.chartCard(ctx, p, msgs, frame, cardPad, cardBottomPad, cardGap, touch, false, true, 680, 560, plotHeight, !split)
 			ui.Column(ctx).Width(384).Shrink(0).Gap(12).Children(func() {
-				d.overviewSessionCard(ctx, p, msgs, live, readoutSample, readoutStats, touch)
-				d.overviewSignalsCard(ctx, p, msgs, live, readoutSample, true)
-				d.overviewPDCard(ctx, p, msgs, live)
+				d.overviewSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, touch)
+				d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, true)
+				d.overviewPDCard(ctx, p, msgs, frame.live)
 			})
 		})
 		return
@@ -283,7 +358,7 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	if d.mobile && split {
 		plotHeight = max(160, min(198, height-500))
 	}
-	buildChartCard(false, plotHeight)
+	d.chartCard(ctx, p, msgs, frame, cardPad, cardBottomPad, cardGap, touch, false, false, 0, 0, plotHeight, !split)
 
 	if hasBottom {
 		compactSignals := d.mobile || (width >= 652 && width < 960)
@@ -292,13 +367,72 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 			bottomGap = 10
 		}
 		ui.Row(ctx).FillWidth().Wrap().Gap(bottomGap).AlignItems(ui.Stretch).Children(func() {
-			d.overviewSessionCard(ctx, p, msgs, live, readoutSample, readoutStats, touch).Grow(1).Basis(300).MinWidth(260)
-			d.overviewSignalsCard(ctx, p, msgs, live, readoutSample, compactSignals).Grow(1).Basis(300).MinWidth(260)
+			d.overviewSessionCard(ctx, p, msgs, frame.live, frame.readoutStats, touch).Grow(1).Basis(300).MinWidth(260)
+			d.overviewSignalsCard(ctx, p, msgs, frame.live, frame.readoutSample, pdTotal, compactSignals).Grow(1).Basis(300).MinWidth(260)
 		})
 	}
 }
 
-func (d *dashboard) overviewSessionCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, sample *device.Sample, stats backend.Statistics, touch bool) ui.Element {
+func hasLandscapeSignals(sample *device.Sample, pdTotal uint64) bool {
+	if pdTotal > 0 {
+		return true
+	}
+	if sample == nil {
+		return false
+	}
+	if displayedCurrentDirection(sample) != "" {
+		return true
+	}
+	for _, ptr := range [4]*float64{sample.DP, sample.DN, sample.CC1, sample.CC2} {
+		if _, ok := optional(ptr); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *dashboard) landscapeSessionCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, stats backend.Statistics, cardW float32, touch bool) ui.Element {
+	compactCell := func(label, value, unit string) {
+		ui.Column(ctx).Grow(1).Basis(0).MinWidth(0).Gap(1).Children(func() {
+			ui.Text(ctx, label).FontSize(10).FontWeight(600).TextColor(p.Muted).SingleLine()
+			ui.Row(ctx).AlignItems(ui.Baseline).Gap(2).Children(func() {
+				ui.Text(ctx, value).FontFeatures("tnum").FontSize(11.5).FontWeight(700).MinWidth(0).SingleLine()
+				if unit != "" {
+					ui.Text(ctx, unit).FontSize(9.5).FontWeight(600).TextColor(p.Muted).Shrink(0).SingleLine()
+				}
+			})
+		})
+	}
+	return kit.Card(ctx, p).Radius(kit.RadiusL).Padding(8, 11).Gap(5).Children(func() {
+		ui.Row(ctx).FillWidth().MinHeight(24).AlignItems(ui.Center).Gap(5).Children(func() {
+			ui.Text(ctx, msgs.GuiSession()).FontSize(13).FontWeight(700).SingleLine().Shrink(0).Role(ui.RoleHeading).Level(2)
+			if live.Recording.Active {
+				kit.Badge(ctx, p, msgs.RecBadge(), kit.ToneDanger)
+			}
+			ui.Spacer(ctx).MinWidth(0)
+			if stats.Samples > 0 {
+				if cardW < 236 {
+					kit.IconActionButton(ctx.Key("clear-overview"), p, kit.IconTrash, msgs.ActionClear(), 24, false, d.clearSession)
+				} else {
+					kit.ActionButton(ctx.Key("clear-overview"), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), touch, d.clearSession).
+						Height(24).Padding(0, 6)
+				}
+			}
+			d.csvButton(ctx, p, msgs, live.Recording, touch).Height(24).Padding(0, 8)
+		})
+		kit.Divider(ctx, p)
+		durVal, durUnit := formatSessionDuration(stats.MeasuredSeconds)
+		ui.Row(ctx).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			compactCell(msgs.Energy(), formatCompactMetric(stats.WattHours, 3), "Wh")
+			kit.VerticalDivider(ctx, p, 20)
+			compactCell(msgs.ChargeShort(), formatCompactMetric(stats.AbsoluteAmpHours*1000, 2), "mAh")
+			kit.VerticalDivider(ctx, p, 20)
+			compactCell(msgs.GuiDuration(), durVal, durUnit)
+		})
+	})
+}
+
+func (d *dashboard) overviewSessionCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, stats backend.Statistics, touch bool) ui.Element {
 	return kit.Card(ctx, p).Gap(10).Children(func() {
 		ui.Row(ctx).FillWidth().MinHeight(28).AlignItems(ui.Center).Gap(8).Children(func() {
 			kit.SectionTitle(ctx, msgs.GuiSession())
@@ -307,12 +441,8 @@ func (d *dashboard) overviewSessionCard(ctx *ui.Context, p kit.Palette, msgs loc
 				kit.Badge(ctx, p, msgs.RecBadge(), kit.ToneDanger)
 			}
 			if stats.Samples > 0 {
-				kit.ActionButton(ctx.Key("clear-overview"), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), touch, func() {
-					d.resetChartView()
-					if d.service != nil {
-						d.service.ResetStatistics()
-					}
-				}).Height(28).Padding(0, 8)
+				kit.ActionButton(ctx.Key("clear-overview"), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), touch, d.clearSession).
+					Height(28).Padding(0, 8)
 			}
 			d.csvButton(ctx, p, msgs, live.Recording, touch).Height(28)
 		})
@@ -328,11 +458,7 @@ func (d *dashboard) overviewSessionCard(ctx *ui.Context, p kit.Palette, msgs loc
 	})
 }
 
-func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, sample *device.Sample, compactGrid bool) ui.Element {
-	var pdSnap backend.PacketSnapshot
-	if d.service != nil {
-		pdSnap = d.service.PacketSnapshot(0, 0)
-	}
+func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs locales.Messages, live backend.Snapshot, sample *device.Sample, pdTotal uint64, compactGrid bool) ui.Element {
 	dirLabel := ""
 	switch displayedCurrentDirection(sample) {
 	case device.CurrentPlugToReceptacle:
@@ -347,8 +473,8 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 				kit.Badge(ctx, p, dirLabel, kit.TonePlain)
 			}
 			ui.Spacer(ctx)
-			if pdSnap.Total > 0 {
-				kit.ValueButton(ctx.Key("goto-pd"), p, kit.VariantGhost, kit.IconUSB, fmt.Sprintf("PD · %d", pdSnap.Total), false, func() {
+			if pdTotal > 0 {
+				kit.ValueButton(ctx.Key("goto-pd"), p, kit.VariantGhost, kit.IconUSB, fmt.Sprintf("PD · %d", pdTotal), false, func() {
 					d.goPage(pagePD)
 				}).Height(28).Padding(0, 8)
 			}
@@ -359,14 +485,15 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 			type pinTile struct {
 				label, value, unit string
 			}
-			var tiles []pinTile
-			for _, index := range []int{4, 5} {
+			var tileBuf [4]pinTile
+			tiles := tileBuf[:0]
+			for _, index := range [...]int{4, 5} {
 				ch := channels[index]
 				if _, ok := ch.read(sample); ok {
 					tiles = append(tiles, pinTile{ch.name(msgs), ch.format(sample), ch.unit})
 				}
 			}
-			for _, line := range []struct {
+			for _, line := range [...]struct {
 				label string
 				ptr   *float64
 			}{{"CC1", sample.CC1}, {"CC2", sample.CC2}} {
@@ -378,8 +505,8 @@ func (d *dashboard) overviewSignalsCard(ctx *ui.Context, p kit.Palette, msgs loc
 				if live.Device.Driver != "" {
 					tiles = append(tiles, pinTile{msgs.GuiInfo(), live.Device.Driver, ""})
 				}
-				if pdSnap.Total > 0 {
-					tiles = append(tiles, pinTile{msgs.PdHeading(), fmt.Sprint(pdSnap.Total), ""})
+				if pdTotal > 0 {
+					tiles = append(tiles, pinTile{msgs.PdHeading(), strconv.FormatUint(pdTotal, 10), ""})
 				}
 			}
 			renderRow := func(items []pinTile) {
@@ -420,7 +547,7 @@ func (d *dashboard) overviewPDCard(ctx *ui.Context, p kit.Palette, msgs locales.
 			kit.SectionTitle(ctx, msgs.PagePd())
 			ui.Spacer(ctx)
 			if pdSnap.Total > 0 {
-				kit.Badge(ctx, p, fmt.Sprint(pdSnap.Total), kit.ToneAccent)
+				kit.Badge(ctx, p, strconv.FormatUint(pdSnap.Total, 10), kit.ToneAccent)
 			}
 		})
 		kit.Divider(ctx, p)
@@ -430,7 +557,7 @@ func (d *dashboard) overviewPDCard(ctx *ui.Context, p kit.Palette, msgs locales.
 		}
 		for i := len(pdSnap.Packets) - 1; i >= max(0, len(pdSnap.Packets)-5); i-- {
 			pkt := pdSnap.Packets[i]
-			row := ui.ButtonBase(ctx.Key(fmt.Sprintf("ov-pd-%d", pkt.Sequence))).
+			row := ui.ButtonBase(ctx.Key(overviewPDKey(pkt.Sequence))).
 				FillWidth().Padding(5, 8).Radius(kit.RadiusS).AlignItems(ui.Center).Gap(8).
 				Label(pkt.Type).OnClick(func() {
 				d.packets.selected = pkt.Sequence
@@ -566,9 +693,10 @@ func (d *dashboard) visibleChartStat(history []device.Sample, index int) channel
 	return cache.stats[index]
 }
 
-func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.Messages, history []device.Sample, seriesMask uint8) {
+func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.Messages, history []device.Sample, seriesMask uint8, compact bool) {
 	candidates := [...]int{0, 1, 2, 3, 6, 4, 5}
-	var visible []int
+	var visBuf [len(candidates)]int
+	visible := visBuf[:0]
 	for _, idx := range candidates {
 		if idx < 3 || hasChannelData(history, channels[idx]) {
 			visible = append(visible, idx)
@@ -577,7 +705,11 @@ func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.
 	if len(visible) == 0 {
 		return
 	}
-	ui.Row(ctx).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
+	rowGap, chipH, chipPadX := float32(6), float32(24), float32(9)
+	if compact {
+		rowGap, chipH, chipPadX = 5, 22, 8
+	}
+	ui.Row(ctx).FillWidth().Wrap().Gap(rowGap).AlignItems(ui.Center).Shrink(0).Children(func() {
 		for _, idx := range visible {
 			ch := channels[idx]
 			tone := ch.color(p)
@@ -585,10 +717,10 @@ func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.
 			enabled := seriesMask&uint8(1<<idx) != 0
 			label := ch.name(msgs)
 
-			chip := ui.ButtonBase(ctx.Key(fmt.Sprintf("trace-%d", idx))).
-				Height(24).Shrink(0).Padding(0, 9).Gap(5).Radius(kit.RadiusFull).
+			chip := ui.ButtonBase(ctx.Key(chartTraceKey(idx))).
+				Height(chipH).Shrink(0).Padding(0, chipPadX).Gap(5).Radius(kit.RadiusFull).
 				AlignItems(ui.Center).Justify(ui.Center).
-				Label(fmt.Sprintf("%s (%s)", label, ch.unit)).
+				Label(label + " (" + ch.unit + ")").
 				OnClick(func() {
 					if primary {
 						return
@@ -971,7 +1103,7 @@ func (d *dashboard) secondaryAxisChannel(history []device.Sample, seriesMask uin
 	if !wideLeftAxis {
 		return -1, false
 	}
-	for _, idx := range []int{3, 6, 4, 5, 1, 2, 0} {
+	for _, idx := range [...]int{3, 6, 4, 5, 1, 2, 0} {
 		if idx == d.channel || seriesMask&uint8(1<<idx) == 0 {
 			continue
 		}
@@ -987,7 +1119,13 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 	primary := d.channel
 	stat := d.visibleChartStat(history, primary)
 	if stat.count == 0 {
-		ui.Box(ctx).FillWidth().MinHeight(height).Center().Children(func() {
+		emptyBox := ui.Box(ctx).FillWidth().Center()
+		if height <= 0 {
+			emptyBox.Grow(1).MinHeight(120)
+		} else {
+			emptyBox.MinHeight(height)
+		}
+		emptyBox.Children(func() {
 			kit.EmptyState(ctx, p, kit.IconActivity, empty, "", func() {
 				switch {
 				case live.ErrorKind == "selection":
@@ -1096,7 +1234,13 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		return math.Abs(float64(localX-t1X)) <= 12
 	}
 
-	plot := ui.Box(ctx.Key("chart")).Bind(&d.chartHandle).FillWidth().Height(height).
+	plot := ui.Box(ctx.Key("chart")).Bind(&d.chartHandle).FillWidth()
+	if height <= 0 {
+		plot.Grow(1).MinHeight(120)
+	} else {
+		plot.Height(height)
+	}
+	plot.
 		HandleInput(func(event ui.InputEvent) bool {
 			rect := d.chartHandle.Bounds(ctx)
 			plotW := max(1, rect.W-leftMargin-rightMargin)
@@ -1118,7 +1262,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 					if d.held == nil && !d.hasViewEnd && event.Momentum {
 						return true
 					}
-					_, atEdge := d.panChart(delta, plotW, cw)
+					atEdge := d.panChart(delta, plotW, cw)
 					if d.held == nil && d.hasViewEnd && delta > 0 && atEdge {
 						d.resumeLive()
 					}
@@ -1181,7 +1325,8 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 					d.dragMoved = false
 					d.dragClicks = 0
 					if !event.Canceled && event.Button == 0 && !wasMoved {
-						if clicks >= 2 {
+						switch {
+						case clicks >= 2:
 							if d.held != nil || d.hasViewEnd || d.hasCursor {
 								d.resumeLive()
 							} else {
@@ -1196,13 +1341,13 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 									d.displayAt = time.Time{}
 								}
 							}
-						} else if nearCursor(event.X, rect.W) {
+						case nearCursor(event.X, rect.W):
 							d.hasCursor = false
 							d.displayAt = time.Time{}
 							if d.held == nil && d.atLiveEdge(cw, 1.5) {
 								d.resumeLive()
 							}
-						} else {
+						default:
 							seekAtX(event.X, rect.W)
 						}
 					}
@@ -1585,17 +1730,17 @@ func (d *dashboard) zoomByFactor(cw chartWindow, fraction, factor float64) {
 	d.viewEnd = newEnd
 }
 
-func (d *dashboard) panChart(dx, plotW float32, cw chartWindow) (moved bool, atLiveEdge bool) {
+func (d *dashboard) panChart(dx, plotW float32, cw chartWindow) bool {
 	if dx == 0 {
-		return false, false
+		return false
 	}
 	bufStart, bufEnd, ok := d.historyBounds(cw)
 	if !ok {
-		return false, false
+		return false
 	}
 	minEnd := min(bufEnd, bufStart+cw.windowSec)
 	if bufEnd-minEnd < 1e-6 {
-		return false, true
+		return true
 	}
 	curEnd := bufEnd
 	if d.hasViewEnd {
@@ -1605,11 +1750,11 @@ func (d *dashboard) panChart(dx, plotW float32, cw chartWindow) (moved bool, atL
 	}
 	rawEnd := curEnd + float64(dx)/float64(max(1, plotW))*cw.windowSec
 	if d.held == nil && !d.hasViewEnd && rawEnd >= bufEnd-1e-3 {
-		return false, true
+		return true
 	}
 	clamped := clampFloat(rawEnd, minEnd, bufEnd)
 	d.hasViewEnd = true
 	d.viewEnd = clamped
 	d.displayAt = time.Time{}
-	return math.Abs(clamped-curEnd) > 1e-6, rawEnd >= bufEnd-1e-3
+	return rawEnd >= bufEnd-1e-3
 }

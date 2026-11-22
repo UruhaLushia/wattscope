@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/UruhaLushia/wattscope/internal/device"
-	"github.com/egoist/mygo/ui"
 )
 
 func displayedCurrentDirection(sample *device.Sample) device.CurrentDirection {
@@ -16,7 +15,7 @@ func displayedCurrentDirection(sample *device.Sample) device.CurrentDirection {
 	return ""
 }
 
-func (d *dashboard) touchUI(ctx *ui.Context) bool {
+func (d *dashboard) touchUI() bool {
 	return d.mobile
 }
 

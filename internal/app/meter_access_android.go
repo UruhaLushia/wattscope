@@ -63,7 +63,7 @@ func (d *dashboard) meterAccessSettings(ctx *ui.Context, p kit.Palette, msgs loc
 							if access == usbhost.ShizukuNotAuthorized {
 								message = msgs.GuiShizukuAllowInManager()
 							}
-							d.notify(message, "", "error")
+							d.notify(message, "error")
 							return
 						}
 						if d.done != nil {
