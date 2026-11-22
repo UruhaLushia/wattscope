@@ -307,7 +307,7 @@ func (d *dashboard) pdMoreMenuItems(msgs locales.Messages, snap backend.Snapshot
 		items = append(items, kit.MenuItem{
 			Label:    msgs.PdCheckOnline(),
 			Icon:     kit.IconZap,
-			Disabled: d.busy,
+			Disabled: d.busy || d.reconnecting,
 			OnSelect: func() { d.checkPD(msgs) },
 		})
 	}
@@ -633,7 +633,7 @@ func (d *dashboard) pdEmptyState(ctx *ui.Context, p kit.Palette, msgs locales.Me
 				if snap.CanCheckPDHost {
 					kit.ActionButton(ctx.Key("empty-check"), p, kit.VariantPrimary, kit.IconZap, msgs.PdCheckOnline(), touch, func() {
 						d.checkPD(msgs)
-					}).Disabled(d.busy)
+					}).Disabled(d.busy || d.reconnecting)
 				}
 			}
 		})

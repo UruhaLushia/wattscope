@@ -44,7 +44,7 @@ func (d *dashboard) recordToggleButton(ctx *ui.Context, p kit.Palette, key strin
 			msg, err := start(dir)
 			return nil, msg, err
 		})
-	}).Disabled(d.service == nil || d.busy)
+	}).Disabled(d.service == nil || d.busy || d.reconnecting)
 }
 
 func (d *dashboard) csvButton(ctx *ui.Context, p kit.Palette, msgs locales.Messages, state backend.Recording, touch bool) ui.Element {

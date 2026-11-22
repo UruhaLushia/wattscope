@@ -93,6 +93,9 @@ type dashboard struct {
 	themeReveal      kit.ThemeReveal
 	themeChanges     []themeChange
 	snapshotOnly     bool
+	reconnectHold    reconnectHold
+	reconnecting     bool
+	connectDisabled  bool
 	busy             bool
 	work             sync.WaitGroup
 	uiMu             sync.Mutex
@@ -100,9 +103,19 @@ type dashboard struct {
 }
 
 const (
-	minWindowWidth  = 640
-	minWindowHeight = 560
+	minWindowWidth        = 640
+	minWindowHeight       = 560
+	reconnectDisableDelay = 250 * time.Millisecond
+	reconnectGrace        = 900 * time.Millisecond
 )
+
+type reconnectHold struct {
+	service   *backend.Service
+	source    session.Source
+	snap      backend.Snapshot
+	pending   bool
+	startedAt time.Time
+}
 
 func Run(parent context.Context, source session.Source, language, directory string) error {
 	logs := &diagnostics.Buffer{}
@@ -284,6 +297,13 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 	if d.ctx.Err() != nil {
 		return
 	}
+	if d.service != nil && d.reconnectHold.service == d.service && d.reconnectHold.source == source {
+		cur := d.service.Snapshot(0)
+		if d.err == nil && cur.Error == "" && cur.ErrorKind == "" &&
+			(cur.State == backend.Stopped || cur.State == backend.Connecting || cur.State == backend.Waiting) {
+			return
+		}
+	}
 	logger := diagnostics.Logger(d.ctx)
 	logger.InfoContext(d.ctx, diagnostics.Connecting, "driver_filter", source.Driver, "device", source.Device, "demo", source.Demo)
 	service, err := session.New(session.Options{
@@ -298,10 +318,24 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 		d.notify(err.Error(), "error")
 		return
 	}
+	var prev backend.Snapshot
+	if d.service != nil {
+		prev = d.service.Snapshot(0)
+	}
 	if d.cancel != nil {
 		d.cancel()
 	}
 	d.err, d.service = nil, service
+	sameDevice := prev.Device.ID != "" &&
+		prev.Device.Simulated == source.Demo &&
+		(source.Driver == "" || prev.Device.Driver == "" || source.Driver == prev.Device.Driver) &&
+		(source.Device == "" || source.Device == prev.Device.ID)
+	hold := reconnectHold{service: service, source: source, pending: true}
+	if sameDevice && (prev.State == backend.Streaming || prev.Latest != nil) {
+		prev.Recording = backend.Recording{}
+		hold.snap = prev
+	}
+	d.reconnectHold = hold
 	d.packets = packetView{}
 	d.resetChartView()
 	d.displaySample, d.displayStats, d.displayBounds = nil, backend.Statistics{}, [3]channelStat{}

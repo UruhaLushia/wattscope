@@ -327,3 +327,44 @@ func TestGlassMorphTransition(t *testing.T) {
 		t.Fatalf("settled expected exact (1, 16): mix=%v r=%v", gotMix, gotR)
 	}
 }
+
+func TestSectionAndInlineMotionAndFormGroup(t *testing.T) {
+	_, p := ResolveTheme(false, DefaultAccentHex)
+	var showDynamic, staticMode bool
+	var fgEl, secEl, inlEl, gotSec, gotInl ui.Element
+
+	tt := ui.NewTester(func(ctx *ui.Context) {
+		defer BeginFrame(ctx, false)()
+		if staticMode {
+			defer BeginStaticSnapshot(ctx)()
+		}
+		fgEl = FormGroup(ctx.Key("fg"), p, "Group", nil, func() {
+			ui.Text(ctx, "Row")
+		})
+		if showDynamic {
+			secEl = ui.Box(ctx.Key("dyn-sec")).Size(80, 24)
+			gotSec = SectionMotion(ctx, secEl)
+			inlEl = ui.Box(ctx.Key("dyn-inl")).Size(40, 20)
+			gotInl = InlineMotion(ctx, inlEl)
+		}
+	}, 240, 140)
+
+	tt.Frame()
+	if fgEl == (ui.Element{}) {
+		t.Fatal("FormGroup returned zero ui.Element")
+	}
+
+	showDynamic = true
+	tt.Frame()
+	if gotSec == (ui.Element{}) || gotInl == (ui.Element{}) {
+		t.Fatalf("SectionMotion/InlineMotion returned zero element: sec=%v inl=%v", gotSec, gotInl)
+	}
+	tt.Advance(60 * time.Millisecond)
+	tt.Advance(250 * time.Millisecond)
+
+	staticMode = true
+	tt.Frame()
+	if gotSec != secEl || gotInl != inlEl {
+		t.Fatalf("static snapshot should skip SectionMotion/InlineMotion without modifying element")
+	}
+}

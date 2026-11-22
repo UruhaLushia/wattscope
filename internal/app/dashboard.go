@@ -204,6 +204,7 @@ func (d *dashboard) view(ctx *ui.Context) {
 			d.source.Device = snapshot.Device.ID
 		}
 	}
+	snapshot, d.reconnecting, d.connectDisabled = d.resolveDisplaySnapshot(ctx, snapshot)
 
 	// Anchor the theme-stage to the full window padding box so theme transitions cover safe-area insets too.
 	stage := ui.Box(ctx.Key("theme-stage")).Absolute().Top(0).Right(0).Bottom(0).Left(0)
@@ -274,12 +275,79 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 		menus:            nil,
 		dir:              d.dir,
 		busy:             d.busy,
+		reconnectHold:    d.reconnectHold,
+		reconnecting:     d.reconnecting,
+		connectDisabled:  d.connectDisabled,
 		snapshotOnly:     true,
 	}
 	snap.packets.expanded = false
 	snap.packets.list.Handle = ui.Handle{}
 	snap.logView.list.Handle = ui.Handle{}
 	return snap
+}
+
+func (d *dashboard) resolveDisplaySnapshot(ctx *ui.Context, live backend.Snapshot) (display backend.Snapshot, reconnecting, disableConnect bool) {
+	hold := d.reconnectHold
+	clearHold := func() {
+		if !d.snapshotOnly {
+			d.reconnectHold = reconnectHold{}
+		}
+	}
+	if d.service == nil || hold.service != d.service {
+		return live, false, live.State == backend.Connecting
+	}
+	hasError := d.err != nil
+	if live.ErrorKind != "" {
+		hasError = hasError || live.ErrorKind != "report"
+	} else {
+		hasError = hasError || live.Error != ""
+	}
+	switchedDevice := live.Device.ID != "" && hold.snap.Device.ID != "" &&
+		(live.Device.ID != hold.snap.Device.ID || live.Device.Driver != hold.snap.Device.Driver)
+	if live.State == backend.Streaming || hasError || switchedDevice {
+		clearHold()
+		return live, false, live.State == backend.Connecting
+	}
+
+	now := ctx.Now()
+	var elapsed time.Duration
+	if hold.pending {
+		if !d.snapshotOnly {
+			d.reconnectHold.pending = false
+			d.reconnectHold.startedAt = now
+		}
+	} else {
+		elapsed = now.Sub(hold.startedAt)
+	}
+
+	// Normalize pre-Run Stopped state on a freshly launched service to Connecting so UI never flashes "Offline".
+	if live.State == backend.Stopped {
+		live.State = backend.Connecting
+	}
+
+	if hold.snap.Device.ID == "" || elapsed >= reconnectGrace {
+		if !d.snapshotOnly && hold.snap.Device.ID == "" && elapsed < reconnectGrace {
+			ctx.After(reconnectGrace - elapsed)
+		}
+		if elapsed >= reconnectGrace {
+			clearHold()
+		}
+		return live, false, live.State == backend.Connecting
+	}
+
+	if !d.snapshotOnly {
+		if elapsed < reconnectDisableDelay {
+			ctx.After(reconnectDisableDelay - elapsed)
+		} else {
+			ctx.After(reconnectGrace - elapsed)
+		}
+	}
+	held := hold.snap
+	if live.Device.ID == held.Device.ID {
+		held.Device = live.Device
+		held.CanCheckPDHost = live.CanCheckPDHost
+	}
+	return held, true, elapsed >= reconnectDisableDelay
 }
 
 func (d *dashboard) draw(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snapshot backend.Snapshot) {
@@ -295,6 +363,9 @@ func (d *dashboard) draw(ctx *ui.Context, p kit.Palette, msgs locales.Messages, 
 	width, height := layout.contentSize(sidebarW)
 
 	status, notice, toneKind := dashboardStatus(msgs, snapshot, d.err)
+	if d.reconnecting {
+		toneKind = kit.ToneWarning
+	}
 	_, tone := kit.BadgeColors(p, toneKind)
 	name := snapshot.Device.Name
 	switch {

@@ -92,6 +92,28 @@ var (
 		Enter:     &ui.Motion{},
 		Exit:      &ui.Motion{},
 	}
+
+	motionSection = ui.Animation{Spring: ui.SpringOptions{Duration: 240 * time.Millisecond, Bounce: 0.04}}
+	motionInline  = ui.Animation{Spring: ui.SpringOptions{Duration: 210 * time.Millisecond, Bounce: 0.06}}
+
+	sectionTransition = ui.ElementTransition{
+		Position:     true,
+		Size:         true,
+		Animation:    &motionSection,
+		ExitDuration: 130 * time.Millisecond,
+		ExitEase:     easeAccelerate,
+		Enter:        &ui.Motion{Y: 8, Scale: 0.985, Opacity: 0},
+		Exit:         &ui.Motion{Y: -4, Scale: 0.985, Opacity: 0},
+	}
+	inlineTransition = ui.ElementTransition{
+		Position:     true,
+		Size:         true,
+		Animation:    &motionInline,
+		ExitDuration: 110 * time.Millisecond,
+		ExitEase:     easeAccelerate,
+		Enter:        &ui.Motion{Scale: 0.88, Opacity: 0},
+		Exit:         &ui.Motion{Scale: 0.90, Opacity: 0},
+	}
 )
 
 type frameMotionState struct {
@@ -342,6 +364,25 @@ func CardMotion(el ui.Element) ui.Element {
 		pose.Y = -1
 	}
 	return el.TransformOrigin(0.5, 0.5).AnimatePose(pose, motionSpring)
+}
+
+// SectionMotion attaches enter, exit, and sibling reflow transitions to dynamic
+// vertical sections or cards (such as conditional FormGroup panels). Callers
+// should key conditional elements with ctx.Key so sibling shifts stay anchored.
+func SectionMotion(ctx *ui.Context, el ui.Element) ui.Element {
+	if isStaticSnapshot(ctx) || isScaleReflow(ctx) {
+		return el
+	}
+	return el.Transition(sectionTransition)
+}
+
+// InlineMotion attaches compact enter, exit, and reflow transitions to dynamic
+// inline badges, status chips, subtitles, or conditional toolbar buttons.
+func InlineMotion(ctx *ui.Context, el ui.Element) ui.Element {
+	if isStaticSnapshot(ctx) || isScaleReflow(ctx) {
+		return el
+	}
+	return el.Transition(inlineTransition)
 }
 
 func popupMotion(el ui.Element) {

@@ -87,12 +87,14 @@ func (d *dashboard) connectButton(ctx *ui.Context, p kit.Palette, msgs locales.M
 		connectLabel = msgs.GuiReconnect()
 	}
 	return kit.ActionButton(ctx.Key(key), p, kit.VariantPrimary, kit.IconPlay, connectLabel, touch, onClick).
-		Disabled(d.busy || snap.State == backend.Connecting)
+		Disabled(d.busy || d.connectDisabled || (!d.reconnecting && snap.State == backend.Connecting))
 }
 
 func (d *dashboard) deviceSwitcherContent(ctx *ui.Context, p kit.Palette, msgs locales.Messages, touch bool) {
 	var snap backend.Snapshot
-	if d.service != nil {
+	if d.reconnecting && d.reconnectHold.service == d.service && d.reconnectHold.snap.Device.ID != "" {
+		snap = d.reconnectHold.snap
+	} else if d.service != nil {
 		snap = d.service.Snapshot(0)
 	}
 	ui.Row(ctx).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
@@ -153,19 +155,19 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 			ui.Row(ctx).FillWidth().Wrap().AlignItems(ui.Center).Gap(8).Children(func() {
 				ui.Text(ctx, title).FontSize(16).FontWeight(700)
 				if status != "" {
-					kit.Badge(ctx, p, status, statusBadgeTone)
+					kit.InlineMotion(ctx, kit.Badge(ctx.Key("dev-status"), p, status, statusBadgeTone))
 				}
 			})
 			if sub != "" {
-				ui.Text(ctx, sub).FontSize(12).TextColor(p.Muted).Wrap()
+				kit.InlineMotion(ctx, ui.Text(ctx.Key("dev-sub"), sub).FontSize(12).TextColor(p.Muted).Wrap())
 			}
 		})
 	}
 	renderActions := func() {
 		if runtime.GOOS == "linux" && snap.ErrorKind == "permission" {
-			kit.ActionButton(ctx.Key("meter-permissions"), p, kit.VariantSecondary, kit.IconShield, msgs.GuiMeterAccess(), touch, func() {
+			kit.InlineMotion(ctx, kit.ActionButton(ctx.Key("meter-permissions"), p, kit.VariantSecondary, kit.IconShield, msgs.GuiMeterAccess(), touch, func() {
 				d.goPage(pageSettings)
-			})
+			}))
 		}
 		conn := d.connectButton(ctx, p, msgs, "connect", snap, !snap.Device.Simulated, touch, d.connect)
 		scan := kit.ActionButton(ctx.Key("scan"), p, kit.VariantSecondary, kit.IconRefresh, msgs.GuiFindMeters(), touch, func() {
@@ -188,7 +190,7 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 				})
 			}
 			if detail != "" {
-				ui.Text(ctx, detail).FillWidth().FontSize(12).TextColor(p.Muted).Wrap()
+				kit.SectionMotion(ctx, ui.Text(ctx.Key("dev-detail"), detail).FillWidth().FontSize(12).TextColor(p.Muted).Wrap())
 			}
 			if d.mobile {
 				kit.ActionBar(ctx).Children(renderActions)
@@ -196,9 +198,9 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 		})
 
 		if len(d.meters) > 0 {
-			kit.FormGroup(ctx, p, msgs.GuiDiscoveredDevices(), nil, func() {
+			kit.SectionMotion(ctx, kit.FormGroup(ctx.Key("dev-meters"), p, msgs.GuiDiscoveredDevices(), nil, func() {
 				d.meterRows(ctx, p, snap, false, nil)
-			})
+			}))
 		}
 
 		pathRow := info.Path
@@ -206,7 +208,7 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 			pathRow = info.ID
 		}
 		if info.Serial != "" || pathRow != "" || (snap.Error != "" && snap.Error != detail) {
-			kit.FormGroup(ctx, p, msgs.GuiInfo(), nil, func() {
+			kit.SectionMotion(ctx, kit.FormGroup(ctx.Key("dev-info"), p, msgs.GuiInfo(), nil, func() {
 				items := [2]kit.KVItem{{Label: msgs.SerialHeading(), Value: info.Serial}, {Label: msgs.Interface(), Value: pathRow}}
 				kit.KVList(ctx, p, items[:], d.mobile)
 				if snap.Error != "" && snap.Error != detail {
@@ -215,17 +217,17 @@ func (d *dashboard) devicePage(ctx *ui.Context, p kit.Palette, msgs locales.Mess
 					}
 					ui.Text(ctx, snap.Error).FillWidth().Padding(8, 0).FontSize(12).TextColor(p.Warning).Wrap()
 				}
-			})
+			}))
 		}
 
 		if info.ID != "" && !info.Simulated {
-			d.pdCapabilityPanel(ctx, p, msgs, snap, touch)
+			kit.SectionMotion(ctx, d.pdCapabilityPanel(ctx, p, msgs, snap, touch))
 		}
 
 		if snap.State == backend.Streaming && hasTelemetry(snap.Latest) {
-			kit.FormGroup(ctx, p, msgs.GuiTelemetry(), nil, func() {
+			kit.SectionMotion(ctx, kit.FormGroup(ctx.Key("dev-telemetry"), p, msgs.GuiTelemetry(), nil, func() {
 				d.deviceTelemetry(ctx, p, msgs, snap.Latest)
-			})
+			}))
 		}
 	})
 }
@@ -445,13 +447,13 @@ func (d *dashboard) connectionLogRow(ctx *ui.Context, p kit.Palette, msgs locale
 	})
 }
 
-func (d *dashboard) pdCapabilityPanel(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, touch bool) {
+func (d *dashboard) pdCapabilityPanel(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap backend.Snapshot, touch bool) ui.Element {
 	info := snap.Device
-	kit.FormGroup(ctx, p, msgs.PdHeading(), func() {
+	return kit.FormGroup(ctx.Key("dev-pd"), p, msgs.PdHeading(), func() {
 		if snap.CanCheckPDHost {
-			kit.ActionButton(ctx.Key("check"), p, kit.VariantSecondary, kit.IconZap, msgs.PdCheckOnline(), touch, func() {
+			kit.InlineMotion(ctx, kit.ActionButton(ctx.Key("check"), p, kit.VariantSecondary, kit.IconZap, msgs.PdCheckOnline(), touch, func() {
 				d.checkPD(msgs)
-			}).Height(28).Padding(0, 10).Disabled(d.busy)
+			}).Height(28).Padding(0, 10).Disabled(d.busy || d.reconnecting))
 		}
 	}, func() {
 		status, tone := msgs.GuiUnsupported(), kit.TonePlain

@@ -462,10 +462,11 @@ func (d *dashboard) sessionSummaryCard(ctx *ui.Context, p kit.Palette, msgs loca
 				ui.Spacer(ctx).MinWidth(0)
 				if stats.Samples > 0 {
 					if opts.cardW < 236 {
-						kit.IconActionButton(ctx.Key(opts.clearKey), p, kit.IconTrash, msgs.ActionClear(), 24, d.clearSession)
+						kit.IconActionButton(ctx.Key(opts.clearKey), p, kit.IconTrash, msgs.ActionClear(), 24, d.clearSession).
+							Disabled(d.reconnecting)
 					} else {
 						kit.ActionButton(ctx.Key(opts.clearKey), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), opts.touch, d.clearSession).
-							Height(24).Padding(0, 6)
+							Height(24).Padding(0, 6).Disabled(d.reconnecting)
 					}
 				}
 				if opts.showCSV {
@@ -481,12 +482,12 @@ func (d *dashboard) sessionSummaryCard(ctx *ui.Context, p kit.Palette, msgs loca
 			if opts.showCSV {
 				if stats.Samples > 0 {
 					kit.ActionButton(ctx.Key(opts.clearKey), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), opts.touch, d.clearSession).
-						Height(28).Padding(0, 8)
+						Height(28).Padding(0, 8).Disabled(d.reconnecting)
 				}
 				d.csvButton(ctx, p, msgs, live.Recording, opts.touch).Height(28)
 			} else {
 				kit.ActionButton(ctx.Key(opts.clearKey), p, kit.VariantGhost, kit.IconTrash, msgs.ActionClear(), opts.touch, d.clearSession).
-					Height(28).Padding(0, 8).Disabled(d.service == nil)
+					Height(28).Padding(0, 8).Disabled(d.service == nil || d.reconnecting)
 			}
 		})
 		kit.Divider(ctx, p)

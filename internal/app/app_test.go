@@ -820,3 +820,115 @@ func TestWorkspaceLayoutAndDesktopSafeArea(t *testing.T) {
 		t.Fatalf("sidebar overlapped header under SafeArea: ov.Y=%v, brandBottom=%v", ov1.Y, brand1.Y+brand1.H)
 	}
 }
+
+func TestReconnectHoldTransitions(t *testing.T) {
+	svc := &backend.Service{}
+	prevSnap := backend.Snapshot{
+		State:  backend.Streaming,
+		Device: device.Info{ID: "dev-a", Name: "Meter A", Driver: "witrn"},
+		Latest: &device.Sample{Voltage: 5.0},
+	}
+
+	d := &dashboard{}
+	var live, got backend.Snapshot
+	var reconnecting, disableConnect bool
+
+	tt := ui.NewTester(func(ctx *ui.Context) {
+		got, reconnecting, disableConnect = d.resolveDisplaySnapshot(ctx, live)
+	}, 200, 100)
+
+	// 1. Same-device reconnect: <250ms holds previous snapshot with connect enabled,
+	// >=250ms disables connect, >=900ms releases hold and normalizes Stopped -> Connecting.
+	d.service = svc
+	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	live = backend.Snapshot{State: backend.Stopped}
+	tt.Frame()
+	if !reconnecting || disableConnect || got.State != backend.Streaming || got.Device.ID != "dev-a" {
+		t.Fatalf("t=0ms: got=(state=%v id=%q) reconn=%v disabled=%v, want held Streaming/dev-a reconn=true disabled=false",
+			got.State, got.Device.ID, reconnecting, disableConnect)
+	}
+	if d.reconnectHold.pending {
+		t.Fatal("first resolveDisplaySnapshot frame should consume pending flag")
+	}
+
+	tt.Advance(reconnectDisableDelay - time.Millisecond)
+	if !reconnecting || disableConnect {
+		t.Fatalf("t=249ms: reconn=%v disabled=%v, want true/false", reconnecting, disableConnect)
+	}
+
+	tt.Advance(2 * time.Millisecond)
+	if !reconnecting || !disableConnect || got.State != backend.Streaming {
+		t.Fatalf("t=251ms: got.State=%v reconn=%v disabled=%v, want Streaming reconn=true disabled=true",
+			got.State, reconnecting, disableConnect)
+	}
+
+	tt.Advance(reconnectGrace - reconnectDisableDelay)
+	if reconnecting || !disableConnect || got.State != backend.Connecting {
+		t.Fatalf("t>=900ms: got.State=%v reconn=%v disabled=%v, want Connecting reconn=false disabled=true",
+			got.State, reconnecting, disableConnect)
+	}
+	if d.reconnectHold.service != nil {
+		t.Fatal("grace expiry should clear reconnectHold")
+	}
+
+	// 2. Recoverable report errors keep the held snapshot.
+	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	live = backend.Snapshot{State: backend.Waiting, ErrorKind: "report", Error: "invalid sample"}
+	tt.Frame()
+	if !reconnecting || disableConnect || got.Device.ID != "dev-a" || d.reconnectHold.service == nil {
+		t.Fatalf("report error should keep hold: got.ID=%q reconn=%v disabled=%v hold=%v",
+			got.Device.ID, reconnecting, disableConnect, d.reconnectHold.service != nil)
+	}
+
+	// 3. Non-report error immediately releases hold.
+	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	live = backend.Snapshot{State: backend.Waiting, ErrorKind: "missing", Error: "no device"}
+	tt.Frame()
+	if reconnecting || disableConnect || got.ErrorKind != "missing" || d.reconnectHold.service != nil {
+		t.Fatalf("error release failed: got.ErrorKind=%q reconn=%v disabled=%v hold=%v",
+			got.ErrorKind, reconnecting, disableConnect, d.reconnectHold.service != nil)
+	}
+
+	// 4. Different Device.ID immediately switches without holding old device.
+	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	live = backend.Snapshot{
+		State:  backend.Connecting,
+		Device: device.Info{ID: "dev-b", Name: "Meter B", Driver: "witrn"},
+	}
+	tt.Frame()
+	if reconnecting || !disableConnect || got.Device.ID != "dev-b" || d.reconnectHold.service != nil {
+		t.Fatalf("device switch failed: got.ID=%q reconn=%v disabled=%v hold=%v",
+			got.Device.ID, reconnecting, disableConnect, d.reconnectHold.service != nil)
+	}
+
+	// 5. Offline connect (empty hold.snap) normalizes Stopped -> Connecting without flashing Stopped,
+	// and schedules a grace wake so a quiet stopped service cannot remain stuck at Connecting.
+	d.reconnectHold = reconnectHold{service: svc, pending: true}
+	live = backend.Snapshot{State: backend.Stopped}
+	tt.Frame()
+	if reconnecting || !disableConnect || got.State != backend.Connecting {
+		t.Fatalf("offline connect Stopped normalization failed: state=%v reconn=%v disabled=%v",
+			got.State, reconnecting, disableConnect)
+	}
+	if d.reconnectHold.service == nil {
+		t.Fatal("offline connect hold should remain until grace expiry")
+	}
+	tt.Advance(reconnectGrace)
+	if d.reconnectHold.service != nil {
+		t.Fatal("offline connect grace wake should clear reconnectHold")
+	}
+
+	// 6. snapshotOnly=true with pending=true stays read-only and still returns held snapshot.
+	d.snapshotOnly = true
+	d.reconnectHold = reconnectHold{service: svc, snap: prevSnap, pending: true}
+	live = backend.Snapshot{State: backend.Stopped}
+	tt.Frame()
+	if !reconnecting || disableConnect || got.Device.ID != "dev-a" || got.State != backend.Streaming {
+		t.Fatalf("snapshotOnly read failed: state=%v id=%q reconn=%v disabled=%v",
+			got.State, got.Device.ID, reconnecting, disableConnect)
+	}
+	if !d.reconnectHold.pending || !d.reconnectHold.startedAt.IsZero() {
+		t.Fatalf("snapshotOnly mutated host reconnectHold: pending=%v startedAt=%v",
+			d.reconnectHold.pending, d.reconnectHold.startedAt)
+	}
+}

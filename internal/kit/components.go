@@ -113,8 +113,8 @@ func sectionHeader(ctx *ui.Context, p Palette, title string, trailing func()) {
 const formGroupInset = 16
 
 // FormGroup renders an optional muted header and grouped rows inside a rounded surface panel.
-func FormGroup(ctx *ui.Context, p Palette, title string, trailing, rows func()) {
-	ui.Column(ctx).FillWidth().Shrink(0).Gap(6).Children(func() {
+func FormGroup(ctx *ui.Context, p Palette, title string, trailing, rows func()) ui.Element {
+	return ui.Column(ctx).FillWidth().Shrink(0).Gap(6).Children(func() {
 		if title != "" {
 			sectionHeader(ctx, p, title, trailing)
 		}
