@@ -118,6 +118,10 @@ func paintLiquidGlass(p *ui.Painter, box ui.Rect, radius float32, spec liquidLen
 		paintReducedGlass(p, box, r, spec)
 		return
 	}
+	if !p.Accelerated() {
+		paintCPUGlass(p, box, [4]float32{r, r, r, r}, spec)
+		return
+	}
 
 	alpha := spec.Alpha
 	if alpha <= 0 {
@@ -239,4 +243,103 @@ func paintReducedGlass(p *ui.Painter, box ui.Rect, r float32, spec liquidLensSpe
 	}
 	c = scaleAlpha(c, alpha)
 	p.Fill(box, c, r)
+}
+
+func paintCPUGlass(p *ui.Painter, box ui.Rect, radii [4]float32, spec liquidLensSpec) {
+	if box.W <= 0 || box.H <= 0 || spec.WarpOnly {
+		return
+	}
+	alpha := resolveGlassAlpha(spec.Alpha)
+	glow := clamp32(spec.Glow, 0, 1.35)
+	hover := clamp32(spec.Hover, 0, 1)
+	pressAmt := clamp32(max(glow, hover*0.5), 0, 1)
+	dark := p.Theme().Dark
+
+	maxR := min(box.W, box.H) * 0.5
+	rr := [4]float32{
+		clamp32(radii[0], 0, maxR),
+		clamp32(radii[1], 0, maxR),
+		clamp32(radii[2], 0, maxR),
+		clamp32(radii[3], 0, maxR),
+	}
+	uniformRadii := rr[0] == rr[1] && rr[1] == rr[2] && rr[2] == rr[3]
+	strokeR := min(min(rr[0], rr[1]), min(rr[2], rr[3]))
+
+	if spec.ClearLens {
+		base := ui.RGBA(255, 255, 255, 0.26+0.10*pressAmt)
+		if dark {
+			base = ui.RGBA(218, 232, 255, 0.14+0.08*pressAmt)
+		}
+		if spec.Tint.A > 0 {
+			baseA := base.A
+			base = base.Mix(spec.Tint, 0.38)
+			base.A = baseA
+		}
+		p.FillRadii(box, rr, scaleAlpha(base, alpha))
+		if uniformRadii {
+			var stops [3]ui.GradientStop
+			var strokeColor ui.Color
+			if dark {
+				stops = [3]ui.GradientStop{
+					{Color: ui.RGBA(235, 244, 255, 0.18*alpha), At: 0},
+					{Color: ui.Transparent, At: 0.48},
+					{Color: ui.RGBA(235, 244, 255, 0.05*alpha), At: 1},
+				}
+				strokeColor = ui.RGBA(226, 238, 255, (0.24+0.14*pressAmt)*alpha)
+			} else {
+				stops = [3]ui.GradientStop{
+					{Color: ui.RGBA(255, 255, 255, 0.34*alpha), At: 0},
+					{Color: ui.Transparent, At: 0.48},
+					{Color: ui.RGBA(255, 255, 255, 0.10*alpha), At: 1},
+				}
+				strokeColor = ui.RGBA(148, 163, 184, (0.28+0.14*pressAmt)*alpha)
+			}
+			p.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: stops[:]}, strokeR)
+			p.Stroke(box, strokeColor, strokeR, 1)
+		}
+		return
+	}
+
+	c := p.Theme().Surface
+	if spec.FallbackBg.A > 0 {
+		c = spec.FallbackBg.Over(c)
+	}
+	if spec.Tint.A > 0 {
+		c = c.Mix(spec.Tint, float32(spec.Tint.A)/255*0.72)
+	}
+	if pressAmt > 0 {
+		lift := float32(0.18) * pressAmt
+		if dark {
+			lift = 0.10 * pressAmt
+		}
+		c = c.Mix(ui.RGB(255, 255, 255), lift)
+	}
+	baseAlpha := float32(0.88)
+	if dark {
+		baseAlpha = 0.86
+	}
+	baseAlpha -= 0.06 * clamp32(spec.Clarity, 0, 1)
+	c.A = 255
+	p.FillRadii(box, rr, c.Alpha(baseAlpha*alpha))
+	if uniformRadii {
+		var stops [3]ui.GradientStop
+		var strokeColor ui.Color
+		if dark {
+			stops = [3]ui.GradientStop{
+				{Color: ui.RGBA(235, 244, 255, (0.11+0.08*pressAmt)*alpha), At: 0},
+				{Color: ui.Transparent, At: 0.45},
+				{Color: ui.RGBA(255, 255, 255, 0.02*alpha), At: 1},
+			}
+			strokeColor = ui.RGBA(232, 242, 255, (0.14+0.08*pressAmt)*alpha)
+		} else {
+			stops = [3]ui.GradientStop{
+				{Color: ui.RGBA(255, 255, 255, (0.34+0.12*pressAmt)*alpha), At: 0},
+				{Color: ui.Transparent, At: 0.45},
+				{Color: ui.RGBA(15, 23, 42, 0.025*alpha), At: 1},
+			}
+			strokeColor = ui.RGBA(15, 23, 42, (0.09+0.05*pressAmt)*alpha)
+		}
+		p.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: stops[:]}, strokeR)
+		p.Stroke(box, strokeColor, strokeR, 1)
+	}
 }

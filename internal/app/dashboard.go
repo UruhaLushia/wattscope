@@ -116,6 +116,8 @@ func (d *dashboard) resetChartView() {
 	d.chartHistory = chartHistoryCache{}
 	d.chartStats = chartStatsCache{}
 	d.chartGeometry = chartGeometry{}
+	d.chartScratch = chartScratch{}
+	d.chartAreaPath = ui.Path{}
 	d.chartCanvasKey = chartPlotCanvasKey{}
 	d.chartTickMetrics = [2]chartTickMetricsCache{}
 	d.fullSession = true
@@ -210,7 +212,7 @@ func (d *dashboard) view(ctx *ui.Context) {
 	stage := ui.Box(ctx.Key("theme-stage")).Absolute().Top(0).Right(0).Bottom(0).Left(0)
 	stage.Children(func() {
 		if reveal != nil {
-			d.warmRevealListData(msgs)
+			d.warmRevealData(ctx, msgs, snapshot)
 			oldTheme, oldP := kit.ResolveTheme(!p.Dark, d.settings.Accent)
 			oldP.LiquidGlass = p.LiquidGlass
 			oldSnap := d.snapshotForReveal(!p.Dark)
@@ -223,6 +225,7 @@ func (d *dashboard) view(ctx *ui.Context) {
 			})
 		} else {
 			d.revealLists = nil
+			d.revealChart = nil
 		}
 		host := ui.Box(ctx.Key("workspace-host")).Fill().ZIndex(1)
 		if reveal != nil {
@@ -245,7 +248,9 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 	syncRevealListState(&d.revealLists.log, &d.logView.list)
 	d.revealLists.packetsAtEnd = listAtEndOrUnlaid(&d.packets.list)
 
-	snap := &dashboard{
+	rc := d.ensureRevealChart()
+	snap := &rc.snap
+	*snap = dashboard{
 		meterAccessState: d.meterAccessState,
 		ctx:              d.ctx,
 		source:           d.source,
@@ -265,8 +270,6 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 		channel:          d.channel,
 		chartSeries:      d.chartSeries,
 		chartHistory:     d.chartHistory,
-		chartStats:       d.chartStats,
-		chartGeometry:    d.chartGeometry,
 		windowSec:        d.windowSec,
 		fullSession:      d.fullSession,
 		held:             d.held,
@@ -290,6 +293,7 @@ func (d *dashboard) snapshotForReveal(fromDark bool) *dashboard {
 		connectDisabled:  d.connectDisabled,
 		snapshotOnly:     true,
 		revealLists:      d.revealLists,
+		revealChart:      rc,
 	}
 	snap.packets.expanded = false
 	snap.packets.list = ui.ListState{}
@@ -301,6 +305,40 @@ type revealListStates struct {
 	packets      ui.ListState
 	packetsAtEnd bool
 	log          ui.ListState
+}
+
+type revealChartState struct {
+	snap          dashboard
+	canvas        *ui.Canvas
+	canvasKey     chartPlotCanvasKey
+	pixelPts      [][2]float32
+	areaPath      ui.Path
+	tickMetrics   [2]chartTickMetricsCache
+	sharedGeom    *chartGeometry
+	sharedStats   *chartStatsCache
+	sharedScratch *chartScratch
+	hasPD         bool
+	pdWide        bool
+	pdSnap        backend.PacketSnapshot
+}
+
+func (d *dashboard) ensureRevealChart() *revealChartState {
+	if d.revealChart == nil {
+		d.revealChart = &revealChartState{
+			tickMetrics: d.chartTickMetrics,
+		}
+	}
+	rc := d.revealChart
+	if rc.sharedGeom == nil {
+		rc.sharedGeom = &d.chartGeometry
+	}
+	if rc.sharedStats == nil {
+		rc.sharedStats = &d.chartStats
+	}
+	if rc.sharedScratch == nil {
+		rc.sharedScratch = &d.chartScratch
+	}
+	return rc
 }
 
 func (d *dashboard) packetListState() *ui.ListState {
@@ -344,7 +382,7 @@ func syncRevealListState(dst, src *ui.ListState) {
 	*dst = ui.ListState{}
 }
 
-func (d *dashboard) warmRevealListData(msgs locales.Messages) {
+func (d *dashboard) warmRevealData(ctx *ui.Context, msgs locales.Messages, live backend.Snapshot) {
 	switch d.page {
 	case pagePD:
 		data := d.packetSnapshot()
@@ -352,7 +390,48 @@ func (d *dashboard) warmRevealListData(msgs locales.Messages) {
 		d.packets.summaryState(data.Packets)
 	case pageConnectionLog:
 		d.logView.snapshot(d.logs, d.logLevel)
+	case pageOverview:
+		rc := d.ensureRevealChart()
+		if d.held == nil && d.service != nil {
+			query := chartHistoryQuery{}
+			sessionSpan := 0.0
+			if live.HistoryCount > 0 {
+				sessionSpan = max(0, live.HistoryEnd-live.HistoryStart)
+				if d.fullSession {
+					sessionSpan = max(0, live.HistoryEnd)
+				}
+			}
+			window := d.effectiveWindowFor(sessionSpan)
+			if d.hasViewEnd && live.HistoryCount > 0 {
+				cw := d.clampViewWindow(live.HistoryStart, live.HistoryEnd, window)
+				query = chartHistoryQuery{start: cw.winStart, end: cw.winEnd, ranged: true}
+			} else if !d.fullSession {
+				query.duration = time.Duration(window * float64(time.Second))
+			}
+			windowSnap := d.sampledChartHistory(live, query)
+			if ctx != nil {
+				d.throttledReadout(ctx, live, windowSnap)
+			}
+		}
+		rc.hasPD = false
+		if d.service != nil && (live.State == backend.Streaming || live.Recording.Active || d.displayStats.Samples > 0) {
+			var width float32
+			if ctx != nil {
+				width, _ = ctx.Size()
+			}
+			rc.pdWide = width >= 1280 && !d.mobile
+			if rc.pdWide {
+				rc.pdSnap = d.service.PacketSnapshot(0, 6)
+			} else {
+				rc.pdSnap = d.service.PacketSnapshot(0, 0)
+			}
+			rc.hasPD = true
+		}
 	}
+}
+
+func (d *dashboard) warmRevealListData(msgs locales.Messages) {
+	d.warmRevealData(nil, msgs, backend.Snapshot{})
 }
 
 func (d *dashboard) resolveDisplaySnapshot(ctx *ui.Context, live backend.Snapshot) (display backend.Snapshot, reconnecting, disableConnect bool) {
@@ -488,6 +567,9 @@ type channelStat struct {
 }
 
 func (d *dashboard) throttledReadout(ctx *ui.Context, live, windowSnap backend.Snapshot) (*device.Sample, backend.Statistics, [3]channelStat) {
+	if d.snapshotOnly {
+		return d.displaySample, d.displayStats, d.displayBounds
+	}
 	if live.State != backend.Streaming || live.Latest == nil {
 		d.displaySample = nil
 		d.displayAt = time.Time{}

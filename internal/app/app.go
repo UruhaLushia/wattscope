@@ -57,6 +57,8 @@ type dashboard struct {
 	chartHistory     chartHistoryCache
 	chartStats       chartStatsCache
 	chartGeometry    chartGeometry
+	chartAreaPath    ui.Path
+	chartScratch     chartScratch
 	chartCanvas      *ui.Canvas
 	chartCanvasKey   chartPlotCanvasKey
 	chartPixelPts    [][2]float32
@@ -94,6 +96,7 @@ type dashboard struct {
 	themeChanges     []themeChange
 	snapshotOnly     bool
 	revealLists      *revealListStates
+	revealChart      *revealChartState
 	reconnectHold    reconnectHold
 	reconnecting     bool
 	connectDisabled  bool

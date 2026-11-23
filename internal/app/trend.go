@@ -356,11 +356,15 @@ func (d *dashboard) measurementPanel(ctx *ui.Context, p kit.Palette, msgs locale
 	wide2K := width >= 1280 && !d.mobile
 	hasBottom := frame.live.State == backend.Streaming || frame.readoutStats.Samples > 0 || frame.live.Recording.Active
 	var pdSnap backend.PacketSnapshot
-	if hasBottom && d.service != nil {
-		if wide2K {
-			pdSnap = d.service.PacketSnapshot(0, 6)
-		} else {
-			pdSnap = d.service.PacketSnapshot(0, 0)
+	if hasBottom {
+		if d.revealChart != nil && d.revealChart.hasPD && d.revealChart.pdWide == wide2K {
+			pdSnap = d.revealChart.pdSnap
+		} else if d.service != nil {
+			if wide2K {
+				pdSnap = d.service.PacketSnapshot(0, 6)
+			} else {
+				pdSnap = d.service.PacketSnapshot(0, 0)
+			}
 		}
 	}
 	pdTotal := pdSnap.Total
@@ -708,9 +712,30 @@ type chartStatsCache struct {
 	stats          [len(channels)]channelStat
 }
 
+func (d *dashboard) chartGeometryCache() *chartGeometry {
+	if d.snapshotOnly && d.revealChart != nil && d.revealChart.sharedGeom != nil {
+		return d.revealChart.sharedGeom
+	}
+	return &d.chartGeometry
+}
+
+func (d *dashboard) chartStatsCacheFor() *chartStatsCache {
+	if d.snapshotOnly && d.revealChart != nil && d.revealChart.sharedStats != nil {
+		return d.revealChart.sharedStats
+	}
+	return &d.chartStats
+}
+
+func (d *dashboard) chartScratchBuf() *chartScratch {
+	if d.snapshotOnly && d.revealChart != nil && d.revealChart.sharedScratch != nil {
+		return d.revealChart.sharedScratch
+	}
+	return &d.chartScratch
+}
+
 func (d *dashboard) chartStatsFor(history []device.Sample) *chartStatsCache {
 	key := chartSamplesIdentity(history)
-	cache := &d.chartStats
+	cache := d.chartStatsCacheFor()
 	if cache.key != key {
 		*cache = chartStatsCache{key: key}
 	}
@@ -836,6 +861,17 @@ type seriesSample struct {
 	value   float64
 }
 
+type chartScratch struct {
+	deltas      []float64
+	samples     []seriesSample
+	downsampled []seriesSample
+	smoothed    []seriesSample
+	rawX        []float32
+	rawY        []float32
+	minMaxX     []float32
+	minMaxY     []float32
+}
+
 func chartSmoothingKernel(span float64, dpWidth float32) (sigma, radius float64) {
 	const baseSigma = 0.08
 	sPerDp := span / max(float64(dpWidth), 1)
@@ -844,11 +880,11 @@ func chartSmoothingKernel(span float64, dpWidth float32) (sigma, radius float64)
 }
 
 // A sampled history can have wider spacing than the meter's native cadence.
-func seriesGapThreshold(history []device.Sample) float64 {
+func seriesGapThreshold(history []device.Sample, scratch []float64) (float64, []float64) {
 	const baseGap = 0.5
 	n := len(history)
 	if n < 4 {
-		return baseGap
+		return baseGap, scratch[:0]
 	}
 	const maxSamples = 8192
 	// An odd stride samples both spacings when a bucket contributes two extrema.
@@ -856,7 +892,7 @@ func seriesGapThreshold(history []device.Sample) float64 {
 	if stride%2 == 0 {
 		stride++
 	}
-	deltas := make([]float64, 0, 1+(n-2)/stride)
+	deltas := scratch[:0]
 	for i := 1; i < n; i += stride {
 		if history[i].Segment != history[i-1].Segment {
 			continue
@@ -866,14 +902,14 @@ func seriesGapThreshold(history []device.Sample) float64 {
 		}
 	}
 	if len(deltas) < 3 {
-		return baseGap
+		return baseGap, deltas
 	}
 	slices.Sort(deltas)
 	cadence := deltas[(len(deltas)-1)*3/4]
 	if len(deltas) < 8 {
 		cadence = deltas[(len(deltas)-1)/2]
 	}
-	return max(baseGap, cadence*4)
+	return max(baseGap, cadence*4), deltas
 }
 
 func historyWindowBounds(n int, at func(int) float64, start, end float64) (lo, hi int) {
@@ -893,24 +929,26 @@ func visibleHistory(history []device.Sample, start, end float64) []device.Sample
 	return history[lo:hi]
 }
 
-func downsampleSeriesRun(run []seriesSample, target int) []seriesSample {
+func downsampleSeriesRunInto(dst, run []seriesSample, target int) ([]seriesSample, []seriesSample) {
 	if len(run) <= target {
-		return run
+		return run, dst
 	}
 	first, last := run[0], run[len(run)-1]
 	span := last.elapsed - first.elapsed
 	if span <= 0 {
-		return run[len(run)-1:]
+		dst = dst[:0]
+		dst = append(dst, last)
+		return dst, dst
 	}
 	buckets := target - 2
 	pointsPerSecond := float64(buckets) / span
-	out := make([]seriesSample, 1, target)
-	out[0] = first
+	dst = dst[:0]
+	dst = append(dst, first)
 	var elapsedSum, valueSum float64
 	bucket, count := 0, 0
 	flush := func() {
 		if count > 0 {
-			out = append(out, seriesSample{
+			dst = append(dst, seriesSample{
 				elapsed: first.elapsed + elapsedSum/float64(count),
 				value:   valueSum / float64(count),
 			})
@@ -929,14 +967,40 @@ func downsampleSeriesRun(run []seriesSample, target int) []seriesSample {
 		count++
 	}
 	flush()
-	return append(out, last)
+	dst = append(dst, last)
+	return dst, dst
 }
 
-func smoothSeriesRun(run []seriesSample, sigma, radius float64) []seriesSample {
-	if len(run) < 3 {
-		return run
+const (
+	gaussExpLUTSize = 512
+	gaussExpLUTMaxU = 4.5
+	gaussExpLUTStep = gaussExpLUTMaxU / gaussExpLUTSize
+	gaussExpLUTInv  = gaussExpLUTSize / gaussExpLUTMaxU
+)
+
+var gaussExpLUT = func() [gaussExpLUTSize + 1]float64 {
+	var lut [gaussExpLUTSize + 1]float64
+	for i := range lut {
+		lut[i] = math.Exp(-float64(i) * gaussExpLUTStep)
 	}
-	out := make([]seriesSample, len(run))
+	return lut
+}()
+
+func smoothSeriesRunInto(dst, run []seriesSample, sigma, radius float64) ([]seriesSample, []seriesSample) {
+	if len(run) < 3 || sigma <= 0 || math.IsNaN(sigma) || math.IsInf(sigma, 0) {
+		return run, dst
+	}
+	halfInvSigma2 := 0.5 / (sigma * sigma)
+	lutScale := halfInvSigma2 * gaussExpLUTInv
+	if math.IsInf(halfInvSigma2, 0) || math.IsInf(lutScale, 0) {
+		return run, dst
+	}
+	dst = dst[:0]
+	if cap(dst) < len(run) {
+		dst = make([]seriesSample, len(run))
+	} else {
+		dst = dst[:len(run)]
+	}
 	leftIdx, rightIdx := 0, 0
 	for i := range run {
 		t0 := run[i].elapsed
@@ -951,14 +1015,23 @@ func smoothSeriesRun(run []seriesSample, sigma, radius float64) []seriesSample {
 		}
 		var wSum, vSum float64
 		for j := leftIdx; j <= rightIdx; j++ {
-			dt := (run[j].elapsed - t0) / sigma
-			w := math.Exp(-0.5 * dt * dt)
+			d := run[j].elapsed - t0
+			pos := d * d * lutScale
+			var w float64
+			if pos >= 0 && pos < gaussExpLUTSize {
+				idx := int(pos)
+				frac := pos - float64(idx)
+				lo := gaussExpLUT[idx]
+				w = lo + frac*(gaussExpLUT[idx+1]-lo)
+			} else {
+				w = math.Exp(-d * d * halfInvSigma2)
+			}
 			wSum += w
 			vSum += w * run[j].value
 		}
-		out[i] = seriesSample{elapsed: t0, value: vSum / wSum}
+		dst[i] = seriesSample{elapsed: t0, value: vSum / wSum}
 	}
-	return out
+	return dst, dst
 }
 
 func trimRunToWindow(run []seriesSample, winStart, winEnd float64) []seriesSample {
@@ -970,10 +1043,18 @@ func trimRunToWindow(run []seriesSample, winStart, winEnd float64) []seriesSampl
 	return run[lo:hi]
 }
 
-func sampleNormalizedSeries(view []device.Sample, ch measurement, axis chart.Linear, winStart, winEnd, maxGap, sigma, radius float64, pixelWidth int) (xs, ysUp []float32, lastValue float64) {
+func sampleNormalizedSeriesInto(scratch *chartScratch, view []device.Sample, ch measurement, axis chart.Linear, winStart, winEnd, maxGap, sigma, radius float64, dpWidth float32, pixelWidth int) (xs, ysUp []float32, lastValue float64) {
 	span := max(winEnd-winStart, 1e-6)
 	n := len(view)
-	samples := make([]seriesSample, n)
+	if cap(scratch.samples) > 16384 && n <= 4096 {
+		scratch.samples = make([]seriesSample, n)
+	}
+	if cap(scratch.samples) < n {
+		scratch.samples = make([]seriesSample, n)
+	} else {
+		scratch.samples = scratch.samples[:n]
+	}
+	samples := scratch.samples
 	for i := range view {
 		value, ok := ch.read(&view[i])
 		if !ok || math.IsInf(value, 0) {
@@ -982,10 +1063,17 @@ func sampleNormalizedSeries(view []device.Sample, ch measurement, axis chart.Lin
 		samples[i] = seriesSample{elapsed: view[i].Elapsed, value: value}
 	}
 
-	xs = make([]float32, 0, min(n, max(256, pixelWidth*2)))
-	ysUp = make([]float32, 0, cap(xs))
+	rawCap := n * 2
+	if cap(scratch.rawX) < rawCap {
+		scratch.rawX = make([]float32, rawCap)
+	}
+	if cap(scratch.rawY) < rawCap {
+		scratch.rawY = make([]float32, rawCap)
+	}
+	xs = scratch.rawX[:0]
+	ysUp = scratch.rawY[:0]
 	gap := float32(math.NaN())
-	maxSmoothPts := max(4000, pixelWidth*2)
+	maxSmoothPts := max(1000, int(math.Ceil(float64(dpWidth)*2.4)))
 	lastValue = math.NaN()
 
 	for runStart := 0; runStart < n; {
@@ -1002,7 +1090,8 @@ func sampleNormalizedSeries(view []device.Sample, ch measurement, axis chart.Lin
 
 		run := samples[runStart:runEnd]
 		if sigma > 0 {
-			run = smoothSeriesRun(downsampleSeriesRun(run, maxSmoothPts), sigma, radius)
+			run, scratch.downsampled = downsampleSeriesRunInto(scratch.downsampled, run, maxSmoothPts)
+			run, scratch.smoothed = smoothSeriesRunInto(scratch.smoothed, run, sigma, radius)
 		}
 		visible := trimRunToWindow(run, winStart, winEnd)
 		if len(visible) > 0 {
@@ -1022,13 +1111,14 @@ func sampleNormalizedSeries(view []device.Sample, ch measurement, axis chart.Lin
 		runStart = runEnd
 	}
 	if pixelWidth > 8 && len(xs) > pixelWidth*2 {
-		xs, ysUp = chart.MinMax(nil, nil, xs, ysUp, pixelWidth)
+		scratch.minMaxX, scratch.minMaxY = chart.MinMax(scratch.minMaxX[:0], scratch.minMaxY[:0], xs, ysUp, pixelWidth)
+		xs, ysUp = scratch.minMaxX, scratch.minMaxY
 	}
 	return xs, ysUp, lastValue
 }
 
-func seriesPointsFromNormalized(plotRect ui.Rect, xs, ysUp []float32) [][2]float32 {
-	points := make([][2]float32, 0, len(xs))
+func seriesPointsFromNormalizedInto(dst [][2]float32, plotRect ui.Rect, xs, ysUp []float32) [][2]float32 {
+	points := dst[:0]
 	gap := float32(math.NaN())
 	breakPt := [2]float32{gap, gap}
 	connected := false
@@ -1048,32 +1138,34 @@ func seriesPointsFromNormalized(plotRect ui.Rect, xs, ysUp []float32) [][2]float
 	return points
 }
 
-func buildSeriesArea(rect ui.Rect, axis chart.Linear, points [][2]float32) *ui.Path {
+func buildSeriesAreaInto(dst *ui.Path, rect ui.Rect, axis chart.Linear, points [][2]float32) bool {
+	if dst == nil {
+		return false
+	}
+	dst.Reset()
 	baseline := rect.Y + rect.H
 	if axis.Lo < 0 {
 		baseline = chart.Y(rect, clampOrder(axis.At(0), 0, 1))
 	}
-	var path *ui.Path
+	hasPath := false
 	start := 0
 	for end := 0; end <= len(points); end++ {
 		if end < len(points) && !math.IsNaN(float64(points[end][0])) {
 			continue
 		}
 		if end-start >= 2 {
-			if path == nil {
-				path = &ui.Path{}
-			}
-			path.MoveTo(points[start][0], points[start][1])
+			dst.MoveTo(points[start][0], points[start][1])
 			for _, point := range points[start+1 : end] {
-				path.LineTo(point[0], point[1])
+				dst.LineTo(point[0], point[1])
 			}
-			path.LineTo(points[end-1][0], baseline)
-			path.LineTo(points[start][0], baseline)
-			path.Close()
+			dst.LineTo(points[end-1][0], baseline)
+			dst.LineTo(points[start][0], baseline)
+			dst.Close()
+			hasPath = true
 		}
 		start = end + 1
 	}
-	return path
+	return hasPath
 }
 
 type chartGeometryKey struct {
@@ -1090,7 +1182,6 @@ type chartGeometryKey struct {
 type chartGeometry struct {
 	key       chartGeometryKey
 	lines     [len(channels)][][2]float32
-	area      *ui.Path
 	lastValue float64
 }
 
@@ -1110,7 +1201,7 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 			key.axes[index] = [2]float64{axis.Lo, axis.Hi}
 		}
 	}
-	cache := &d.chartGeometry
+	cache := d.chartGeometryCache()
 	// Scroll only moves the plot. Reuse its paths and their masks at the new origin.
 	if key.rect.W == cache.key.rect.W && key.rect.H == cache.key.rect.H {
 		key.rect.X, key.rect.Y = cache.key.rect.X, cache.key.rect.Y
@@ -1119,13 +1210,19 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 		return cache
 	}
 	key.rect = rect
-	*cache = chartGeometry{key: key, lastValue: math.NaN()}
+	cache.key = key
+	cache.lastValue = math.NaN()
+	for index := range cache.lines {
+		cache.lines[index] = cache.lines[index][:0]
+	}
 	var sigma, radius float64
 	if key.smooth {
 		sigma, radius = chartSmoothingKernel(end-start, rect.W)
 	}
 	view := visibleHistory(source, start-radius, end+radius)
-	maxGap := seriesGapThreshold(view)
+	scratch := d.chartScratchBuf()
+	var maxGap float64
+	maxGap, scratch.deltas = seriesGapThreshold(view, scratch.deltas)
 	pixelWidth := max(1, int(math.Ceil(float64(rect.W*scale))))
 	for index, channel := range channels {
 		if index != primary && series&uint8(1<<index) == 0 {
@@ -1136,11 +1233,10 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 			continue
 		}
 		axis := chart.NewLinear(key.axes[index][0], key.axes[index][1])
-		xs, ys, lastValue := sampleNormalizedSeries(view, channel, axis, start, end, maxGap, sigma, radius, pixelWidth)
-		cache.lines[index] = seriesPointsFromNormalized(rect, xs, ys)
+		xs, ys, lastValue := sampleNormalizedSeriesInto(scratch, view, channel, axis, start, end, maxGap, sigma, radius, rect.W, pixelWidth)
+		cache.lines[index] = seriesPointsFromNormalizedInto(cache.lines[index], rect, xs, ys)
 		if index == primary {
 			cache.lastValue = lastValue
-			cache.area = buildSeriesArea(rect, axis, cache.lines[index])
 		}
 	}
 	return cache
@@ -1193,8 +1289,9 @@ func (d *dashboard) resolveChartTicks(ctx *ui.Context, slot, channel int, axis c
 		compactMobile: compactMobile,
 		hasSample:     hasSample,
 	}
-	if cached := d.chartTickMetrics[slot]; cached.key == key && len(cached.ticks) > 0 {
-		return cached
+	cache := d.chartTickCache(slot)
+	if cache != nil && cache.key == key && len(cache.ticks) > 0 {
+		return *cache
 	}
 	ticks := axis.Ticks(4)
 	const tickLabelGap = float32(6)
@@ -1230,10 +1327,47 @@ func (d *dashboard) resolveChartTicks(ctx *ui.Context, slot, channel int, axis c
 		widths:      widths,
 		rightMargin: rightMargin,
 	}
-	if !d.snapshotOnly {
-		d.chartTickMetrics[slot] = resolved
+	if cache != nil {
+		*cache = resolved
 	}
 	return resolved
+}
+
+func (d *dashboard) chartTickCache(slot int) *chartTickMetricsCache {
+	if slot < 0 || slot >= len(d.chartTickMetrics) {
+		return nil
+	}
+	if d.snapshotOnly {
+		if d.revealChart == nil {
+			return nil
+		}
+		return &d.revealChart.tickMetrics[slot]
+	}
+	return &d.chartTickMetrics[slot]
+}
+
+func (d *dashboard) chartCanvasState() (**ui.Canvas, *chartPlotCanvasKey, bool) {
+	if d.snapshotOnly {
+		if d.revealChart == nil {
+			return nil, nil, false
+		}
+		return &d.revealChart.canvas, &d.revealChart.canvasKey, true
+	}
+	return &d.chartCanvas, &d.chartCanvasKey, true
+}
+
+func (d *dashboard) pixelPointsBuf() *[][2]float32 {
+	if d.snapshotOnly && d.revealChart != nil {
+		return &d.revealChart.pixelPts
+	}
+	return &d.chartPixelPts
+}
+
+func (d *dashboard) areaPathBuf() *ui.Path {
+	if d.snapshotOnly && d.revealChart != nil {
+		return &d.revealChart.areaPath
+	}
+	return &d.chartAreaPath
 }
 
 type chartPlotCanvasKey struct {
@@ -1292,10 +1426,11 @@ func makeChartPlotCanvasKey(geomKey chartGeometryKey, wPx, hPx int, scale float3
 
 func (d *dashboard) pixelPoints(points [][2]float32, origin ui.Rect, scale float32) [][2]float32 {
 	n := len(points)
-	if cap(d.chartPixelPts) < n {
-		d.chartPixelPts = make([][2]float32, n)
+	buf := d.pixelPointsBuf()
+	if cap(*buf) < n {
+		*buf = make([][2]float32, n)
 	}
-	out := d.chartPixelPts[:n]
+	out := (*buf)[:n]
 	for i, pt := range points {
 		if math.IsNaN(float64(pt[0])) || math.IsNaN(float64(pt[1])) {
 			out[i] = pt
@@ -1303,7 +1438,7 @@ func (d *dashboard) pixelPoints(points [][2]float32, origin ui.Rect, scale float
 		}
 		out[i] = [2]float32{(pt[0] - origin.X) * scale, (pt[1] - origin.Y) * scale}
 	}
-	d.chartPixelPts = out
+	*buf = out
 	return out
 }
 
@@ -1361,16 +1496,18 @@ func (d *dashboard) drawChartPlotLayer(painter *ui.Painter, rect ui.Rect, scale 
 			}
 		}
 		primaryPts := geometry.lines[primary]
-		area := geometry.area
+		areaPath := d.areaPathBuf()
+		hasArea := false
 		if pixelSpace {
-			area = nil
 			if len(primaryPts) >= 2 {
 				primaryPts = d.pixelPoints(primaryPts, origin, scale)
-				area = buildSeriesArea(rect, axis, primaryPts)
+				hasArea = buildSeriesAreaInto(areaPath, rect, axis, primaryPts)
 			}
+		} else {
+			hasArea = buildSeriesAreaInto(areaPath, rect, axis, primaryPts)
 		}
-		if area != nil {
-			painter.FillPathGradient(area, ui.LinearGradient{Angle: 180, From: tone.Alpha(0.24), To: tone.Alpha(0.01)})
+		if hasArea {
+			painter.FillPathGradient(areaPath, ui.LinearGradient{Angle: 180, From: tone.Alpha(0.24), To: tone.Alpha(0.01)})
 		}
 		if len(primaryPts) >= 2 {
 			painter.StrokePolyline(primaryPts, 2.2*strokeScale, tone)
@@ -1752,46 +1889,53 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 	}
 
 	canPan := cw.bufEnd-cw.bufStart > cw.windowSec+1e-3 || (d.hasViewEnd && d.viewEnd < cw.bufEnd-1e-3)
-	plot := ui.Box(ctx.Key("chart")).Bind(&d.chartHandle).FillWidth()
+	plot := ui.Box(ctx.Key("chart")).FillWidth()
+	if !d.snapshotOnly {
+		plot.Bind(&d.chartHandle)
+		plot.HandleInput(d.handleChartInput(ctx, history, cw, leftMargin, rightMargin))
+	}
 	if height <= 0 {
 		plot.Grow(1).MinHeight(120)
 	} else {
 		plot.Height(height)
 	}
-	plot.HandleInput(d.handleChartInput(ctx, history, cw, leftMargin, rightMargin))
-	if plot.RightClicked() {
-		d.resumeLive()
-	}
+	if !d.snapshotOnly {
+		if plot.RightClicked() {
+			d.resumeLive()
+		}
 
-	if !d.mobile && d.dragMode != chartDragPan {
-		hx, hy, over := plot.PointerPosition()
-		if over {
-			bounds := plot.Bounds()
-			if bounds.W > leftMargin+rightMargin && hx >= leftMargin && hx <= bounds.W-rightMargin && hy >= 4 && hy <= bounds.H-14 {
-				if hs := sampleAtX(hx, bounds.W, history); hs != nil {
-					d.hoverAt = hs.Elapsed
-					d.hasHover = true
+		if !d.mobile && d.dragMode != chartDragPan {
+			hx, hy, over := plot.PointerPosition()
+			if over {
+				bounds := plot.Bounds()
+				if bounds.W > leftMargin+rightMargin && hx >= leftMargin && hx <= bounds.W-rightMargin && hy >= 4 && hy <= bounds.H-14 {
+					if hs := sampleAtX(hx, bounds.W, history); hs != nil {
+						d.hoverAt = hs.Elapsed
+						d.hasHover = true
+					} else {
+						d.hasHover = false
+					}
 				} else {
 					d.hasHover = false
 				}
 			} else {
 				d.hasHover = false
 			}
-		} else {
+		} else if d.mobile || d.dragMode == chartDragPan {
 			d.hasHover = false
 		}
-	} else if d.mobile || d.dragMode == chartDragPan {
-		d.hasHover = false
+
+		switch {
+		case d.dragMode == chartDragPan:
+			plot.Cursor(ui.CursorGrabbing)
+		case canPan:
+			plot.Cursor(ui.CursorGrab)
+		default:
+			plot.Cursor(ui.CursorCrosshair)
+		}
 	}
 
-	switch {
-	case d.dragMode == chartDragPan:
-		plot.Cursor(ui.CursorGrabbing)
-	case canPan:
-		plot.Cursor(ui.CursorGrab)
-	default:
-		plot.Cursor(ui.CursorCrosshair)
-	}
+	navSwitch := kit.DesktopNavSwitch(ctx)
 
 	plot.Draw(func(painter *ui.Painter, rect ui.Rect) {
 		plotTop, plotBottom, xLabelOffset := float32(8), float32(20), float32(5)
@@ -1817,30 +1961,55 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		if scale <= 0 {
 			scale = 1
 		}
-		geometry := d.prepareChartGeometry(history, snap.ChartRanges, plotRect, scale, winStart, winEnd, primary, seriesMask)
 		wPx := max(1, int(math.Round(float64(plotRect.W*scale))))
 		hPx := max(1, int(math.Round(float64(plotRect.H*scale))))
 
-		if !d.snapshotOnly && wPx <= 4096 && hPx <= 4096 {
-			plotKey := makeChartPlotCanvasKey(geometry.key, wPx, hPx, scale, p, xDivs, ticks, primary, seriesMask, hasLeftAxis)
-			if d.chartCanvas == nil {
-				d.chartCanvas = ui.NewCanvas(wPx, hPx)
-			} else if cwPx, chPx := d.chartCanvas.Size(); cwPx != wPx || chPx != hPx {
-				d.chartCanvas = ui.NewCanvas(wPx, hPx)
-				d.chartCanvasKey = chartPlotCanvasKey{}
+		canvasPtr, canvasKeyPtr, canCache := d.chartCanvasState()
+		freezeCanvas := false
+		if canCache && !d.snapshotOnly && navSwitch.Active(painter.Now()) && *canvasPtr != nil {
+			cwPx, chPx := (*canvasPtr).Size()
+			freezeCanvas = wPx <= 4096 && hPx <= 4096 &&
+				cwPx > 0 && chPx > 0 && cwPx <= 4096 && chPx <= 4096 &&
+				canvasKeyPtr.wPx == cwPx && canvasKeyPtr.hPx == chPx &&
+				canvasKeyPtr.scale == scale && canvasKeyPtr.xDivs > 0 &&
+				canvasKeyPtr.geom.rect.W > 0 && canvasKeyPtr.geom.rect.H > 0
+		}
+		drawRect, drawWPx, drawHPx, drawXDivs := plotRect, wPx, hPx, xDivs
+		if freezeCanvas {
+			drawRect = canvasKeyPtr.geom.rect
+			drawWPx, drawHPx = canvasKeyPtr.wPx, canvasKeyPtr.hPx
+			drawXDivs = canvasKeyPtr.xDivs
+		}
+		geometry := d.prepareChartGeometry(history, snap.ChartRanges, drawRect, scale, winStart, winEnd, primary, seriesMask)
+
+		overlayXDivs := xDivs
+		if canCache && drawWPx <= 4096 && drawHPx <= 4096 {
+			plotKey := makeChartPlotCanvasKey(geometry.key, drawWPx, drawHPx, scale, p, drawXDivs, ticks, primary, seriesMask, hasLeftAxis)
+			canvas := *canvasPtr
+			if canvas == nil {
+				canvas = ui.NewCanvas(drawWPx, drawHPx)
+				*canvasPtr = canvas
+			} else if cwPx, chPx := canvas.Size(); cwPx != drawWPx || chPx != drawHPx {
+				canvas = ui.NewCanvas(drawWPx, drawHPx)
+				*canvasPtr = canvas
+				*canvasKeyPtr = chartPlotCanvasKey{}
 			}
-			if d.chartCanvasKey != plotKey {
-				d.chartCanvas.Draw(painter, func(cp *ui.Painter) {
-					d.drawChartPlotLayer(cp, ui.Rect{W: float32(wPx), H: float32(hPx)}, scale, p, wellAlpha, xDivs, ticks, geometry, axis, primary, hasLeftAxis, true)
+			if *canvasKeyPtr != plotKey {
+				canvas.Draw(painter, func(cp *ui.Painter) {
+					d.drawChartPlotLayer(cp, ui.Rect{W: float32(drawWPx), H: float32(drawHPx)}, scale, p, wellAlpha, drawXDivs, ticks, geometry, axis, primary, hasLeftAxis, true)
 				})
-				d.chartCanvasKey = plotKey
+				*canvasKeyPtr = plotKey
 			}
-			painter.Image(d.chartCanvas.Bitmap(), plotRect, ui.FillBox)
+			overlayXDivs = drawXDivs
+			painter.Image(canvas.Bitmap(), plotRect, ui.FillBox)
 		} else {
+			if canCache {
+				*canvasKeyPtr = chartPlotCanvasKey{}
+			}
 			d.drawChartPlotLayer(painter, plotRect, scale, p, wellAlpha, xDivs, ticks, geometry, axis, primary, hasLeftAxis, false)
 		}
 
-		d.drawChartOverlay(painter, p, msgs, rect, plotRect, history, sample, channel, geometry, axis, tickMetrics, secTickMetrics, secIdx, rightMargin, xLabelOffset, xDivs, cw, seriesMask)
+		d.drawChartOverlay(painter, p, msgs, rect, plotRect, history, sample, channel, geometry, axis, tickMetrics, secTickMetrics, secIdx, rightMargin, xLabelOffset, overlayXDivs, cw, seriesMask)
 	})
 }
 

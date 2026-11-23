@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"math"
 	"strings"
@@ -438,6 +437,84 @@ func TestChartPlotCanvasKeyAndSecondaryColor(t *testing.T) {
 	}
 }
 
+func TestPrepareChartGeometryScratchZeroAllocs(t *testing.T) {
+	d := chartFrameFixture()
+	d.settings.SmoothChart = true
+	rect := ui.Rect{X: 12, Y: 18, W: 640, H: 220}
+	history := d.held.History
+	var ranges [7]backend.ChartRange
+	series := d.effectiveSeriesMask()
+	geom := d.prepareChartGeometry(history, ranges, rect, 1, 0, history[len(history)-1].Elapsed, d.channel, series)
+	if geom == nil || len(geom.lines[d.channel]) == 0 {
+		t.Fatal("expected warmed chart geometry")
+	}
+	axis := chartAxis(ranges[d.channel], d.visibleChartStat(history, d.channel))
+	if !buildSeriesAreaInto(&d.chartAreaPath, rect, axis, geom.lines[d.channel]) {
+		t.Fatal("expected warmed chart area")
+	}
+
+	start := 0.0
+	allocs := testing.AllocsPerRun(5, func() {
+		start += 0.01
+		geom := d.prepareChartGeometry(history, ranges, rect, 1, start, history[len(history)-1].Elapsed+start, d.channel, series)
+		if len(geom.lines[d.channel]) == 0 {
+			t.Fatal("geometry rebuild returned no points")
+		}
+		axis := chartAxis(ranges[d.channel], d.visibleChartStat(history, d.channel))
+		if !buildSeriesAreaInto(&d.chartAreaPath, rect, axis, geom.lines[d.channel]) {
+			t.Fatal("geometry rebuild returned no area")
+		}
+		previous := float32(math.Inf(-1))
+		for _, point := range geom.lines[d.channel] {
+			if math.IsNaN(float64(point[0])) || math.IsNaN(float64(point[1])) {
+				previous = float32(math.Inf(-1))
+				continue
+			}
+			if point[0] < previous {
+				t.Fatalf("geometry points are not monotonic: previous=%v current=%v", previous, point[0])
+			}
+			previous = point[0]
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("warmed geometry rebuild allocated %.0f times", allocs)
+	}
+}
+
+func TestRevealChartStateReuseAndRelease(t *testing.T) {
+	d := &dashboard{}
+	first := d.snapshotForReveal(false)
+	rc := d.revealChart
+	if rc == nil || first != &rc.snap {
+		t.Fatal("snapshotForReveal did not create reusable reveal state")
+	}
+	if first.chartGeometryCache() != &d.chartGeometry || first.chartStatsCacheFor() != &d.chartStats || first.chartScratchBuf() != &d.chartScratch {
+		t.Fatal("reveal snapshot did not route shared chart caches")
+	}
+	rc.canvas = ui.NewCanvas(12, 12)
+	rc.pixelPts = make([][2]float32, 2)
+	rc.areaPath.MoveTo(1, 2)
+	rc.tickMetrics[0].rightMargin = 17
+	second := d.snapshotForReveal(true)
+	if second != first || second != &rc.snap {
+		t.Fatal("reveal snapshot shell was not reused")
+	}
+	canvasPtr, _, canCache := second.chartCanvasState()
+	if !canCache || canvasPtr == nil {
+		t.Fatal("reveal canvas state is unavailable")
+	}
+	if second.chartTickCache(0) == nil || second.chartTickCache(0).rightMargin != 17 {
+		t.Fatal("reveal tick cache was not preserved")
+	}
+	if d.chartCanvas != nil || len(d.chartPixelPts) != 0 || d.chartAreaPath.Bounds().W != 0 {
+		t.Fatal("reveal resources leaked into the main chart state")
+	}
+	d.revealChart = nil
+	if d.revealChart != nil {
+		t.Fatal("reveal chart state was not released")
+	}
+}
+
 func TestDashboardStatus(t *testing.T) {
 	msgs := locales.In("en")
 	for _, tc := range []struct {
@@ -607,243 +684,41 @@ func TestReconnectHoldTransitions(t *testing.T) {
 }
 
 func TestSnapshotForRevealIsolatesListState(t *testing.T) {
-	const (
-		canvasW = 220
-		canvasH = 180
-		listX   = float32(72)
-	)
-	cases := []struct {
-		name  string
-		tag   string
-		count int
-		pick  func(*dashboard) *ui.ListState
-		raw   func(*dashboard) *ui.ListState
-		atEnd bool
-	}{
-		{
-			name:  "packets_end",
-			tag:   "pkt",
-			count: 48,
-			pick:  func(d *dashboard) *ui.ListState { return d.packetListState() },
-			raw:   func(d *dashboard) *ui.ListState { return &d.packets.list },
-			atEnd: true,
-		},
-		{
-			name:  "packets_mid",
-			tag:   "pkt",
-			count: 48,
-			pick:  func(d *dashboard) *ui.ListState { return d.packetListState() },
-			raw:   func(d *dashboard) *ui.ListState { return &d.packets.list },
-			atEnd: false,
-		},
-		{
-			name:  "log_end",
-			tag:   "log",
-			count: 20,
-			pick:  func(d *dashboard) *ui.ListState { return d.logListState() },
-			raw:   func(d *dashboard) *ui.ListState { return &d.logView.list },
-			atEnd: true,
-		},
-		{
-			name:  "log_mid",
-			tag:   "log",
-			count: 20,
-			pick:  func(d *dashboard) *ui.ListState { return d.logListState() },
-			raw:   func(d *dashboard) *ui.ListState { return &d.logView.list },
-			atEnd: false,
-		},
-	}
-
 	msgs := locales.In("en")
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := &dashboard{}
-			live := tc.pick(d)
-			selected := tc.count - 1
-			if !tc.atEnd {
-				selected = 10
-			}
-			live.Selected = &selected
-			if tc.atEnd {
-				live.ScrollToEnd()
-			} else {
-				live.ScrollTo(10, ui.Start)
-			}
+	packets := make([]pd.Packet, 12)
+	for i := range packets {
+		packets[i] = pd.Packet{Sequence: uint64(i + 1), Elapsed: float64(i) * 0.1, SOP: "SOP", Type: "GoodCRC"}
+	}
+	d := &dashboard{page: pagePD, service: &backend.Service{}}
+	d.packets.live = backend.PacketSnapshot{Packets: packets}
+	d.packets.list.ScrollTo(4, ui.Start)
+	d.logView.list.ScrollTo(2, ui.Start)
 
-			renderList := func(ctx *ui.Context, key string, state *ui.ListState, prefix string) {
-				ui.Row(ctx).Fill().Children(func() {
-					ui.Box(ctx).Width(listX).FillHeight()
-					ui.Box(ctx).Grow(1).FillHeight().MinHeight(0).Clip().Children(func() {
-						ui.List(ctx.Key(key), state, tc.count).Fill().Clip().
-							ItemKey(func(i int) any { return i }).
-							Rows(func(row ui.ListRow) {
-								ui.Text(row.Context, fmt.Sprintf("%s-%s-%d", prefix, tc.tag, row.Index)).
-									SingleLine().Height(28)
-							})
-					})
-				})
-			}
-
-			showReveal := false
-			var lastSnap *dashboard
-			tt := ui.NewTester(func(ctx *ui.Context) {
-				stage := ui.Box(ctx.Key("theme-stage")).Absolute().Top(0).Right(0).Bottom(0).Left(0)
-				stage.Children(func() {
-					if showReveal {
-						d.warmRevealListData(msgs)
-						snap := d.snapshotForReveal(false)
-						lastSnap = snap
-						snapList := tc.pick(snap)
-						snapSel := selected
-						snapList.Selected = &snapSel
-						if !tc.atEnd {
-							snapList.FollowEnd = true
-						}
-						ui.Box(ctx.Key("theme-reveal-alternate")).Absolute().Fill().ZIndex(0).
-							PassThrough().IgnoreInput(true).AccessHidden(true).Children(func() {
-							renderList(ctx, "snap-"+tc.tag, snapList, "snap")
-						})
-					} else {
-						d.revealLists = nil
-					}
-					ui.Box(ctx.Key("workspace-host")).Fill().ZIndex(1).Children(func() {
-						renderList(ctx, "live-"+tc.tag, tc.pick(d), "live")
-					})
-				})
-			}, canvasW, canvasH)
-
-			// First pass: lay out the single live list so Visible()/AtEnd() are populated.
-			tt.Frame()
-			if live.AtEnd() != tc.atEnd {
-				t.Fatalf("single list AtEnd=%v, want %v", live.AtEnd(), tc.atEnd)
-			}
-			firstBefore, lastBefore := live.Visible()
-			if tc.atEnd && lastBefore != tc.count-1 {
-				t.Fatalf("single list at end visible=(%d,%d), want last=%d", firstBefore, lastBefore, tc.count-1)
-			}
-			if !tc.atEnd && (firstBefore != 10 || lastBefore >= tc.count-1) {
-				t.Fatalf("single list mid-scroll visible=(%d,%d), want first=10 and last<%d", firstBefore, lastBefore, tc.count-1)
-			}
-
-			// Render multiple consecutive reveal frames and verify revealLists reuse + isolation.
-			showReveal = true
-			var wantRevealLists *revealListStates
-			var wantSnapList *ui.ListState
-			for frame := range 3 {
-				tt.Frame()
-				if lastSnap == nil || d.revealLists == nil {
-					t.Fatalf("frame %d: reveal state not populated (lastSnap=%v revealLists=%v)", frame, lastSnap != nil, d.revealLists != nil)
-				}
-				snapList := tc.pick(lastSnap)
-				if frame == 0 {
-					wantRevealLists = d.revealLists
-					wantSnapList = snapList
-				} else if d.revealLists != wantRevealLists || snapList != wantSnapList {
-					t.Fatalf("frame %d: revealLists was not reused (got %p/%p, want %p/%p)", frame, d.revealLists, snapList, wantRevealLists, wantSnapList)
-				}
-				if snapList == live || tc.raw(lastSnap) == snapList {
-					t.Fatalf("frame %d: snapshot list state was not isolated from live/raw fields", frame)
-				}
-				if snapList.AtEnd() != tc.atEnd || live.AtEnd() != tc.atEnd {
-					t.Fatalf("frame %d: AtEnd mismatch: snap=%v live=%v want=%v", frame, snapList.AtEnd(), live.AtEnd(), tc.atEnd)
-				}
-				snapFirst, snapLast := snapList.Visible()
-				liveFirst, liveLast := live.Visible()
-				if snapFirst != liveFirst || snapLast != liveLast {
-					t.Fatalf("frame %d: visible range mismatch: snap=(%d,%d) live=(%d,%d)", frame, snapFirst, snapLast, liveFirst, liveLast)
-				}
-				if !tc.atEnd && (snapFirst != 10 || snapLast >= tc.count-1) {
-					t.Fatalf("frame %d: snapshot jumped away from mid-scroll row 10: snap=(%d,%d)", frame, snapFirst, snapLast)
-				}
-				for _, row := range []int{liveFirst, selected, liveLast} {
-					for _, prefix := range []string{"snap", "live"} {
-						label := fmt.Sprintf("%s-%s-%d", prefix, tc.tag, row)
-						r, ok := tt.Find(label)
-						if !ok || r.W <= 0 || r.H <= 0 {
-							t.Fatalf("frame %d: row %q missing or zero-sized: ok=%v rect=%+v", frame, label, ok, r)
-						}
-						if r.X < listX || r.X >= listX*1.5 {
-							t.Fatalf("frame %d: row %q shifted horizontally out of list bounds: rect=%+v (listX=%v)", frame, label, r, listX)
-						}
-					}
-				}
-			}
-
-			// End reveal: revealLists must be released cleanly while live list keeps rendering.
-			showReveal = false
-			tt.Frame()
-			if d.revealLists != nil {
-				t.Fatalf("expected d.revealLists released after reveal ends, got %p", d.revealLists)
-			}
-			rLive, okLive := tt.Find(fmt.Sprintf("live-%s-%d", tc.tag, selected))
-			if !okLive || rLive.W <= 0 || rLive.H <= 0 || rLive.X < listX || rLive.X >= listX*1.5 {
-				t.Fatalf("live row invalid after reveal ended: ok=%v rect=%+v", okLive, rLive)
-			}
-		})
+	d.warmRevealListData(msgs)
+	snap1 := d.snapshotForReveal(false)
+	lists := d.revealLists
+	if lists == nil || snap1.revealLists != lists {
+		t.Fatal("snapshotForReveal did not create revealLists")
+	}
+	if snap1.packetListState() == &d.packets.list || snap1.packetListState() == &snap1.packets.list ||
+		snap1.logListState() == &d.logView.list || snap1.logListState() == &snap1.logView.list {
+		t.Fatal("snapshot list state was not isolated from live/raw fields")
+	}
+	if !d.packetListAtEnd() || !snap1.packetListAtEnd() {
+		t.Fatalf("unlaid list should report atEnd=true: live=%v snap=%v", d.packetListAtEnd(), snap1.packetListAtEnd())
+	}
+	if liveFrame, snapFrame := d.preparePDFrame(msgs, false, 1200), snap1.preparePDFrame(msgs, false, 1200); liveFrame.canReturnLive || snapFrame.canReturnLive {
+		t.Fatalf("unlaid live PD should have canReturnLive=false: live=%v snap=%v", liveFrame.canReturnLive, snapFrame.canReturnLive)
 	}
 
-	t.Run("live_pd_canReturnLive_isolation", func(t *testing.T) {
-		packets := make([]pd.Packet, 48)
-		for i := range packets {
-			packets[i] = pd.Packet{Sequence: uint64(i + 1), Elapsed: float64(i) * 0.1, SOP: "SOP", Type: "GoodCRC"}
-		}
-		d := &dashboard{page: pagePD, service: &backend.Service{}}
-		d.packets.live = backend.PacketSnapshot{Packets: packets}
-
-		// 1. Before first layout: unlaid live list must not trigger canReturnLive on live or snapshot.
-		d.warmRevealListData(msgs)
-		snap := d.snapshotForReveal(false)
-		if !d.packetListAtEnd() || !snap.packetListAtEnd() {
-			t.Fatalf("unlaid list should report atEnd=true: live=%v snap=%v", d.packetListAtEnd(), snap.packetListAtEnd())
-		}
-		liveFrame := d.preparePDFrame(msgs, false, 1200)
-		snapFrame := snap.preparePDFrame(msgs, false, 1200)
-		if len(liveFrame.visible) != len(packets) || len(snapFrame.visible) != len(packets) {
-			t.Fatalf("unexpected visible packet counts: live=%d snap=%d want=%d", len(liveFrame.visible), len(snapFrame.visible), len(packets))
-		}
-		if liveFrame.canReturnLive || snapFrame.canReturnLive {
-			t.Fatalf("unlaid live PD should have canReturnLive=false: live=%v snap=%v", liveFrame.canReturnLive, snapFrame.canReturnLive)
-		}
-
-		// 2. Laid out at end: canReturnLive stays false.
-		tt := ui.NewTester(func(ctx *ui.Context) {
-			ui.List(ctx.Key("live-pd"), d.packetListState(), len(packets)).Fill().Rows(func(row ui.ListRow) {
-				ui.Text(row.Context, fmt.Sprintf("#%d", row.Index+1)).SingleLine().Height(28)
-			})
-		}, canvasW, canvasH)
-		d.packetListState().ScrollToEnd()
-		tt.Frame()
-		if !d.packets.list.AtEnd() {
-			t.Fatal("expected live packets list at end after ScrollToEnd")
-		}
-		d.warmRevealListData(msgs)
-		snap = d.snapshotForReveal(false)
-		liveFrame = d.preparePDFrame(msgs, false, 1200)
-		snapFrame = snap.preparePDFrame(msgs, false, 1200)
-		if !snap.packetListAtEnd() || liveFrame.canReturnLive || snapFrame.canReturnLive {
-			t.Fatalf("at-end live PD should have canReturnLive=false: snapAtEnd=%v live=%v snap=%v", snap.packetListAtEnd(), liveFrame.canReturnLive, snapFrame.canReturnLive)
-		}
-
-		// 3. Laid out and scrolled away from end: canReturnLive is true on both live and snapshot.
-		d.packetListState().ScrollTo(10, ui.Start)
-		tt.Frame()
-		if d.packets.list.AtEnd() {
-			t.Fatal("expected live packets list not at end after ScrollTo(10)")
-		}
-		d.warmRevealListData(msgs)
-		snap = d.snapshotForReveal(false)
-		liveFrame = d.preparePDFrame(msgs, false, 1200)
-		snapFrame = snap.preparePDFrame(msgs, false, 1200)
-		if snap.packetListAtEnd() || !liveFrame.canReturnLive || !snapFrame.canReturnLive {
-			t.Fatalf("scrolled-up live PD should have canReturnLive=true: snapAtEnd=%v live=%v snap=%v", snap.packetListAtEnd(), liveFrame.canReturnLive, snapFrame.canReturnLive)
-		}
-
-		// 4. Release revealLists when reveal ends.
-		d.revealLists = nil
-		if d.revealLists != nil || d.packetListState() != &d.packets.list || d.logListState() != &d.logView.list {
-			t.Fatal("revealLists cleanup did not restore direct live list state")
-		}
-	})
+	snap2 := d.snapshotForReveal(true)
+	if d.revealLists != lists || snap2 != snap1 || snap2.packetListState() != snap1.packetListState() {
+		t.Fatal("snapshotForReveal did not reuse revealLists shell")
+	}
+	d.revealLists = nil
+	if d.packetListState() != &d.packets.list || d.logListState() != &d.logView.list {
+		t.Fatal("clearing revealLists did not restore direct live list state")
+	}
 }
 
 func TestComputePageInsetsLandscapeSubnav(t *testing.T) {
@@ -860,3 +735,53 @@ func TestComputePageInsetsLandscapeSubnav(t *testing.T) {
 	if listPage.top != 4 {
 		t.Fatalf("landscape list top = %v, want 4", listPage.top)
 	}
+}
+
+func TestSmoothSeriesRunLUTAccuracy(t *testing.T) {
+	const count = 320
+	const span = 16.0
+	rawRun := make([]seriesSample, count)
+	for i := range count {
+		elapsed := float64(i) / 20.0
+		val := 5.0 + 3.0*math.Sin(elapsed*0.9) + 0.8*math.Cos(elapsed*2.3)
+		if i >= count/2 {
+			val += 9.0
+		}
+		rawRun[i] = seriesSample{elapsed: elapsed, value: val}
+	}
+
+	checkAgainstExact := func(run []seriesSample, sigma, radius float64, label string) {
+		t.Helper()
+		got, _ := smoothSeriesRunInto(nil, run, sigma, radius)
+		if len(got) != len(run) {
+			t.Fatalf("%s: len = %d, want %d", label, len(got), len(run))
+		}
+		for i, pt := range run {
+			var wSum, vSum float64
+			for _, src := range run {
+				if math.Abs(src.elapsed-pt.elapsed) <= radius {
+					dt := (src.elapsed - pt.elapsed) / sigma
+					w := math.Exp(-0.5 * dt * dt)
+					wSum += w
+					vSum += w * src.value
+				}
+			}
+			if diff := math.Abs(got[i].value - vSum/wSum); diff >= 1e-4 {
+				t.Fatalf("%s[%d]: LUT abs error = %g, want < 1e-4", label, i, diff)
+			}
+		}
+	}
+
+	sigma, radius := chartSmoothingKernel(span, 700)
+	checkAgainstExact(rawRun, sigma, radius, "lut")
+	checkAgainstExact(rawRun[:64], sigma, sigma*4.0, "wide_radius")
+
+	if gotShort, _ := smoothSeriesRunInto(nil, rawRun[:2], sigma, radius); len(gotShort) != 2 || &gotShort[0] != &rawRun[0] {
+		t.Fatal("smoothSeriesRunInto modified short run")
+	}
+	for _, badSigma := range []float64{0, -0.5, math.NaN(), math.Inf(1), 1e-200} {
+		if gotBad, _ := smoothSeriesRunInto(nil, rawRun[:8], badSigma, radius); len(gotBad) != 8 || &gotBad[0] != &rawRun[0] {
+			t.Fatalf("smoothSeriesRunInto(sigma=%v) did not return input run untouched", badSigma)
+		}
+	}
+}

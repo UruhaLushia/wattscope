@@ -170,13 +170,42 @@ func isScaleReflow(ctx *ui.Context) bool {
 	return readFrameMotionState(ctx).scaleReflow
 }
 
-func trackDesktopNavLayoutSwitch(ctx *ui.Context, sidebar bool) bool {
-	if ctx == nil || isStaticSnapshot(ctx) {
+// DesktopNavSwitchTracker reports whether a desktop navigation layout switch
+// is still in progress during Paint/Draw callbacks after BeginFrame returns.
+type DesktopNavSwitchTracker struct {
+	state *frameLayoutState
+}
+
+// DesktopNavSwitch captures the current window's persistent layout switch
+// tracker during build for lock-safe queries during Paint/Draw.
+func DesktopNavSwitch(ctx *ui.Context) DesktopNavSwitchTracker {
+	fs := readFrameMotionState(ctx)
+	if fs.staticSnapshot {
+		return DesktopNavSwitchTracker{}
+	}
+	return DesktopNavSwitchTracker{state: fs.layout}
+}
+
+// Active reports whether a desktop navigation layout switch is still active at now.
+func (t DesktopNavSwitchTracker) Active(now time.Time) bool {
+	if t.state == nil {
 		return false
 	}
+	frameStatesMu.RLock()
+	until := t.state.navSwitchUntil
+	frameStatesMu.RUnlock()
+	return now.Before(until)
+}
+
+func trackDesktopNavLayoutSwitch(ctx *ui.Context, sidebar bool) bool {
+	if ctx == nil {
+		return false
+	}
+	key := ctx.Services()
+	now := ctx.Now()
 	frameStatesMu.Lock()
-	st := frameStates[ctx.Services()]
-	if st == nil || st.layout == nil {
+	st := frameStates[key]
+	if st == nil || st.staticSnapshot || st.layout == nil {
 		frameStatesMu.Unlock()
 		return false
 	}
@@ -186,7 +215,6 @@ func trackDesktopNavLayoutSwitch(ctx *ui.Context, sidebar bool) bool {
 		frameStatesMu.Unlock()
 		return false
 	}
-	now := ctx.Now()
 	if ls.navSidebar != sidebar {
 		ls.navSidebar = sidebar
 		ls.navSwitchUntil = now.Add(navLayoutSwitchDur)
@@ -317,6 +345,7 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	})
 	now := ctx.Now()
 	insetSnap := false
+	resetNavSwitch := false
 	if w > 0 && h > 0 {
 		switch {
 		case !state.initialized:
@@ -333,17 +362,20 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 				state.until = time.Time{}
 				state.rotateGen++
 				state.rotateUntil = now.Add(rotateWindowDur)
+				resetNavSwitch = true
 			case sameSideSettling:
 				// Preserve ongoing rotation springs if Android finishes bar/cutout sizing a frame later.
 			default:
 				state.until = now.Add(motionUnfoldDur)
 				state.rotateUntil = time.Time{}
+				resetNavSwitch = true
 			}
 		case mobile && (state.top != top || state.right != right || state.bottom != bottom || state.left != left):
 			state.top, state.right, state.bottom, state.left = top, right, bottom, left
 			if !now.Before(state.rotateUntil) {
 				state.rotateUntil = time.Time{}
 				insetSnap = true
+				resetNavSwitch = true
 			}
 		}
 	}
@@ -351,6 +383,9 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	orientationRotating := mobile && now.Before(state.rotateUntil)
 	key := ctx.Services()
 	frameStatesMu.Lock()
+	if resetNavSwitch {
+		state.navSwitchUntil = time.Time{}
+	}
 	frameStates[key] = &frameMotionState{
 		scaleReflow:          scaleReflow,
 		orientationRotating:  orientationRotating,

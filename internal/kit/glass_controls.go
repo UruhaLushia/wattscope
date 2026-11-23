@@ -55,22 +55,56 @@ func resolveGlassAlpha(alpha float32) float32 {
 	return clamp32(alpha, 0, 1)
 }
 
-func (g glassInteraction) material(base glass.Glass, alpha float32, staticSnapshot bool) ui.Material {
+func (g glassInteraction) material(base glass.Glass, alpha float32, staticSnapshot bool, fallbackBg ui.Color) ui.Material {
 	if g.active() {
-		return interactiveGlass{base: base, glassInteraction: g, alpha: alpha, staticSnapshot: staticSnapshot}
+		return interactiveGlass{base: base, glassInteraction: g, alpha: alpha, staticSnapshot: staticSnapshot, fallbackBg: fallbackBg}
 	}
-	return staticGlass{base: base, alpha: alpha, staticSnapshot: staticSnapshot}
+	return staticGlass{base: base, alpha: alpha, staticSnapshot: staticSnapshot, fallbackBg: fallbackBg}
+}
+
+func expandGlassRadii(radii [4]float32, dy float32) [4]float32 {
+	add := max(dy, 0)
+	if radii[0] == radii[1] && radii[1] == radii[2] && radii[2] == radii[3] {
+		r := max(1, radii[0]+add)
+		return [4]float32{r, r, r, r}
+	}
+	for i := range radii {
+		if radii[i] > 0 {
+			radii[i] += add
+		}
+	}
+	return radii
 }
 
 type staticGlass struct {
 	base           glass.Glass
 	alpha          float32
 	staticSnapshot bool
+	fallbackBg     ui.Color
 }
 
 func (g staticGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
 	a := resolveGlassAlpha(g.alpha)
-	if g.staticSnapshot || p.Preferences().ReduceTransparency {
+	if p.Preferences().ReduceTransparency {
+		if a > 0.5 {
+			g.base.PaintMaterial(p, box, radii)
+		}
+		return
+	}
+	if !p.Accelerated() {
+		if g.staticSnapshot && a <= 0.5 {
+			return
+		}
+		paintCPUGlass(p, box, radii, liquidLensSpec{
+			Tint:       g.base.Tint,
+			FallbackBg: g.fallbackBg,
+			Clarity:    g.base.Clarity,
+			Alpha:      a,
+			ClearLens:  g.base.Style == glass.Clear,
+		})
+		return
+	}
+	if g.staticSnapshot {
 		if a > 0.5 {
 			g.base.PaintMaterial(p, box, radii)
 		}
@@ -109,7 +143,32 @@ type dockGlass struct {
 
 func (g dockGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
 	a := resolveGlassAlpha(g.alpha)
-	if g.staticSnapshot || p.Preferences().ReduceTransparency {
+	if p.Preferences().ReduceTransparency {
+		if a > 0.5 {
+			(glass.Glass{}).PaintMaterial(p, box, radii)
+		}
+		return
+	}
+	if !p.Accelerated() {
+		if g.staticSnapshot && a <= 0.5 {
+			return
+		}
+		dx, dy := float32(0), float32(0)
+		glow := 0.15 * g.glow
+		if g.staticSnapshot {
+			glow = 0
+		} else if g.active() {
+			dx, dy = 4.5*g.elastic, 3.0*g.elastic
+		}
+		paintCPUGlass(p, expandGlass(box, dx, dy), expandGlassRadii(radii, dy), liquidLensSpec{
+			Clarity: 0.45,
+			Alpha:   a,
+			Glow:    glow,
+			Touch:   g.touch,
+		})
+		return
+	}
+	if g.staticSnapshot {
 		if a > 0.5 {
 			(glass.Glass{}).PaintMaterial(p, box, radii)
 		}
@@ -132,11 +191,44 @@ type interactiveGlass struct {
 	glassInteraction
 	alpha          float32
 	staticSnapshot bool
+	fallbackBg     ui.Color
 }
 
 func (g interactiveGlass) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
 	a := resolveGlassAlpha(g.alpha)
-	if g.staticSnapshot || p.Preferences().ReduceTransparency {
+	if p.Preferences().ReduceTransparency {
+		if a > 0.5 {
+			g.base.PaintMaterial(p, box, radii)
+		}
+		return
+	}
+	if !p.Accelerated() {
+		if g.staticSnapshot && a <= 0.5 {
+			return
+		}
+		var dx, dy float32
+		glow, hover := g.glow, g.hover
+		if g.staticSnapshot {
+			glow, hover = 0, 0
+		} else if g.active() {
+			maxExX := clamp32(box.W*0.14, 6.0, 10.5)
+			maxExY := clamp32(box.H*0.18, 5.0, 8.5)
+			dx = maxExX*g.elastic + 0.4*g.hover
+			dy = maxExY*g.elastic + 0.3*g.hover
+		}
+		paintCPUGlass(p, expandGlass(box, dx, dy), expandGlassRadii(radii, dy), liquidLensSpec{
+			Tint:       g.base.Tint,
+			FallbackBg: g.fallbackBg,
+			Clarity:    g.base.Clarity,
+			Alpha:      a,
+			Glow:       glow,
+			Hover:      hover,
+			Touch:      g.touch,
+			ClearLens:  g.base.Style == glass.Clear,
+		})
+		return
+	}
+	if g.staticSnapshot {
 		if a > 0.5 {
 			g.base.PaintMaterial(p, box, radii)
 		}

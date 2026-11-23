@@ -73,9 +73,9 @@ func glassFloating(ctx *ui.Context, el ui.Element, p Palette, radius, clarity fl
 		snap := isStaticSnapshot(ctx)
 		base := glass.Glass{Clarity: clarity}
 		if interactive && p.LiquidGlass {
-			return el.Material(trackGlassInteraction(el, snap).material(base, mix, snap))
+			return el.Material(trackGlassInteraction(el, snap).material(base, mix, snap, bg))
 		}
-		return el.Material(staticGlass{base: base, alpha: mix, staticSnapshot: snap})
+		return el.Material(staticGlass{base: base, alpha: mix, staticSnapshot: snap, fallbackBg: bg})
 	}
 	return el
 }
@@ -109,6 +109,7 @@ func GlassFloatingButton(ctx *ui.Context, el ui.Element, p Palette, radius float
 			glassInteraction: state,
 			alpha:            mix,
 			staticSnapshot:   snap,
+			fallbackBg:       bg,
 		})
 	}
 	return el
@@ -132,6 +133,36 @@ var glassScrollBlur = glass.Blur{
 	Mask:   &ui.LinearGradient{From: ui.RGB(0, 0, 0), To: ui.Transparent, Angle: 180},
 }
 
+type glassScrollEdgeMaterial struct {
+	canvas ui.Color
+}
+
+func (m glassScrollEdgeMaterial) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
+	if box.W <= 0 || box.H <= 0 {
+		return
+	}
+	if p.Accelerated() {
+		glassScrollBlur.PaintMaterial(p, box, radii)
+		stops := [3]ui.GradientStop{
+			{Color: m.canvas.Alpha(0.38), At: 0},
+			{Color: m.canvas.Alpha(0.08), At: 0.45},
+			{Color: ui.Transparent, At: 1},
+		}
+		p.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: stops[:]}, 0)
+		return
+	}
+	if p.Preferences().ReduceTransparency {
+		p.FillRadii(box, radii, p.Theme().Background)
+		return
+	}
+	stops := [3]ui.GradientStop{
+		{Color: m.canvas.Alpha(0.82), At: 0},
+		{Color: m.canvas.Alpha(0.28), At: 0.50},
+		{Color: ui.Transparent, At: 1},
+	}
+	p.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: stops[:]}, 0)
+}
+
 // GlassScrollEdge renders a soft top backdrop-blur fade overlay under floating chrome.
 func GlassScrollEdge(ctx *ui.Context, p Palette, offset, height float32, zIndex int) {
 	if !p.LiquidGlass || height <= 0 {
@@ -139,14 +170,7 @@ func GlassScrollEdge(ctx *ui.Context, p Palette, offset, height float32, zIndex 
 	}
 	ui.Box(ctx.Key("scroll-edge-top")).Absolute().Left(0).Right(0).Top(offset).Height(height).
 		ZIndex(zIndex).PassThrough().
-		Material(glassScrollBlur).
-		Draw(func(painter *ui.Painter, box ui.Rect) {
-			painter.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
-				{Color: p.Canvas.Alpha(0.38), At: 0},
-				{Color: p.Canvas.Alpha(0.08), At: 0.45},
-				{Color: ui.Transparent, At: 1},
-			}}, 0)
-		})
+		Material(glassScrollEdgeMaterial{canvas: p.Canvas})
 }
 
 func glassNeutral(dark bool, lightAlpha, darkAlpha float32) ui.Color {
