@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/ebitengine/purego v0.11.3
-	github.com/egoist/mygo v0.10.1-0.20261120152447-a87592ba36f9
+	github.com/egoist/mygo v0.10.1-0.20261123071500-1f690f298738
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
 	golang.org/x/sys v0.50.0
