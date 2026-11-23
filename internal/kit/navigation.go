@@ -145,7 +145,6 @@ type desktopNavScrubState struct {
 	pillSolidOwned bool
 	pillSolidMain  float32
 	pillSolidExt   float32
-	stripPoseArmed bool
 }
 
 // DesktopNav renders desktop navigation as either a floating header capsule or
@@ -265,20 +264,21 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			}
 
 			for index, entry := range items {
-				tab := tabs.Tab(index).Label(entry.Label).
-					Radius(tabRadius).AlignItems(ui.Center).Gap(opts.TabGap).
-					Background(ui.Transparent)
+				tab := styleDesktopNavTabContent(
+					tabs.Tab(index).Label(entry.Label).Radius(tabRadius).Background(ui.Transparent),
+					opts,
+				)
 				if opts.Sidebar {
 					if opts.IconsOnly {
-						tab.Size(sideTabH, sideTabH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
+						tab.Size(sideTabH, sideTabH).Tooltip(entry.Label)
 					} else {
-						tab.Width(sideInnerW).Height(sideTabH).Padding(0, 10)
+						tab.Width(sideInnerW).Height(sideTabH)
 					}
 				} else {
 					if opts.IconsOnly {
-						tab.Size(topCtrlH, topCtrlH).Padding(0).Justify(ui.Center).Tooltip(entry.Label)
+						tab.Size(topCtrlH, topCtrlH).Tooltip(entry.Label)
 					} else {
-						tab.Height(topCtrlH).Padding(0, opts.TabPad).Shrink(0)
+						tab.Height(topCtrlH).Shrink(0)
 					}
 				}
 				tabEls = append(tabEls, tab)
@@ -298,16 +298,6 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 
 			displayIndex, _ := st.stepTabs(ctx, tabsStrip, tabEls, axis, stripGap, st.slots, p.LiquidGlass, true, selected, items)
 
-			if !p.LiquidGlass && !IsOrientationRotating(ctx) {
-				if st.active && !isStaticSnapshot(ctx) {
-					st.stripPoseArmed = true
-				}
-				if st.active || st.stripPoseArmed {
-					stripPose, stripAnim := navSolidScrubPose(axis, st.active, navMainCoord(axis, st.lastX, st.lastY), stripMain, 3.0, 6)
-					tabsStrip.TransformOrigin(0.5, 0.5).AnimatePose(stripPose, stripAnim)
-				}
-			}
-
 			pillStart, pillExtent := st.slots[displayIndex].start, st.slots[displayIndex].extent
 			lastMain := navMainCoord(axis, st.lastX, st.lastY)
 			if st.active {
@@ -320,8 +310,16 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				target = ui.Rect{X: crossOff, Y: pillStart, W: stripCross, H: pillExtent}
 			}
 			now := ctx.Now()
+			glassOptics := p.LiquidGlass && !reduceTransparency
+			hoverBg, pressBg := navInactiveOverlayColors(p, p.LiquidGlass)
+			idleFg, activeFg := p.Muted, p.TrackOnInk
+			if p.LiquidGlass {
+				idleFg, activeFg = p.Text.Alpha(0.76), p.AccentText
+			}
+
 			var pillColor ui.Color
 			pillOwnsPaint := false
+			solidMaskPill := false
 			var lens navGlassLens
 			if p.LiquidGlass {
 				pillColor = tabsStrip.AnimateColor("dnav-pill-bg", glassNavPillBg(p), motionGlassMorph)
@@ -342,10 +340,15 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				if !isStaticSnapshot(ctx) {
 					st.hasPrev, st.lastMode, st.lastCount = true, mode, len(items)
 				}
-				pillBg, pillPose, pillAnim, pillPoseAnim := navSolidPillFeedback(
-					st.active, tabEls[displayIndex].Pressed(), lastMain, stripMain,
-					p.TrackOn, p.Text, 0.08, 0.10,
-				)
+				pillBg := p.TrackOn
+				pillAnim := motionNav
+				switch {
+				case st.active:
+					pillBg = p.TrackOn.Mix(p.Text, 0.08)
+					pillAnim = motionCapsuleDrag
+				case tabEls[displayIndex].Pressed():
+					pillBg = p.TrackOn.Mix(p.Text, 0.10)
+				}
 				pillColor = tabsStrip.AnimateColor("dnav-pill-bg", pillBg, motionGlassMorph)
 				if !isStaticSnapshot(ctx) {
 					if !st.pillInit || modeChanged || layoutSwitching {
@@ -366,8 +369,9 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				} else if !sliding && !isStaticSnapshot(ctx) {
 					st.pillSlideUntil = time.Time{}
 				}
+				pillSettling := st.pillSolidOwned && (abs32(st.pillSolidMain-pillStart) > 0.5 || abs32(st.pillSolidExt-pillExtent) > 0.5)
 				pillOwnsPaint = !layoutSwitching && !isStaticSnapshot(ctx) &&
-					(sliding || st.active || tabEls[displayIndex].Pressed())
+					(sliding || st.active || tabEls[displayIndex].Pressed() || pillSettling)
 				if pillOwnsPaint {
 					if jumpPill || isScaleReflow(ctx) || st.pillSolidExt <= 0 {
 						tabsStrip.Jump("dnav-solid-main", pillStart)
@@ -380,15 +384,30 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 					curExt := tabsStrip.AnimateTo("dnav-solid-ext", pillExtent, pillAnim)
 					st.pillSolidMain, st.pillSolidExt = curMain, curExt
 					st.pillSolidOwned = true
+					if pillSettling && !sliding &&
+						tabsStrip.Settled("dnav-solid-main") &&
+						tabsStrip.Settled("dnav-solid-ext") {
+						ctx.AnimationFrame()
+					}
 					drawRect := ui.Rect{X: curMain, Y: crossOff, W: curExt, H: stripCross}
 					if opts.Sidebar {
 						drawRect = ui.Rect{X: crossOff, Y: curMain, W: stripCross, H: curExt}
 					}
-					renderNavSolidPillColor(ctx, selKey, drawRect, tabRadius,
-						pillColor, pillPose, pillAnim, pillPoseAnim,
-						false,
-						!opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
-					)
+					showShadow := !opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active
+					solidMaskPill = pillColor.A == 255
+					if solidMaskPill {
+						maskFg := activeFg
+						if !st.active && tabEls[displayIndex].Pressed() {
+							maskFg = activeFg.Alpha(0.90)
+						}
+						renderDesktopNavSolidMaskPill(ctx, selKey, drawRect, tabRadius, pillColor,
+							showShadow, p.CardShadow, opts, items, st.slots, curMain, curExt, stripCross, maskFg)
+					} else {
+						renderNavSolidPillColor(ctx, selKey, drawRect, tabRadius,
+							pillColor, ui.Pose{}, pillAnim, motionNav,
+							false, showShadow, 2, p.CardShadow,
+						)
+					}
 				} else if !isStaticSnapshot(ctx) {
 					st.pillSolidOwned = false
 					st.pillSolidMain = pillStart
@@ -400,13 +419,6 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			}
 
 			lensMoving := st.active || lens.inFlight
-			glassOptics := p.LiquidGlass && !reduceTransparency
-			hoverBg, pressBg := navInactiveOverlayColors(p, p.LiquidGlass)
-			idleFg, activeFg := p.Muted, p.TrackOnInk
-			if p.LiquidGlass {
-				idleFg, activeFg = p.Text.Alpha(0.76), p.AccentText
-			}
-
 			z := 1
 			if glassOptics {
 				z = 2
@@ -433,27 +445,31 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 					idleFg: idleFg, activeFg: activeFg, textFg: p.Text, hoverBg: hoverBg, pressBg: pressBg,
 					idleWeight: 550, activeWeight: 550,
 				})
+				tabFg := vis.fg
+				if solidMaskPill {
+					tabFg = idleFg
+					if !st.active && (tab.Pressed() || tab.Hovered() || tab.FocusVisible()) {
+						tabFg = p.Text
+					}
+				}
+				animateColors := !layoutSwitching && (p.LiquidGlass || (!solidMaskPill && !active))
 
 				tab.Children(func() {
 					if !active && !st.active {
 						pillSurface(ctx.Key("tab-state"), tab, tabRadius, vis.stateBg, 0, ui.Transparent, 0.97)
 					}
 					if entry.Icon != nil {
-						iconSize := float32(15)
-						if opts.Sidebar {
-							iconSize = 17
+						iconColor := tabFg
+						if animateColors {
+							iconColor = tab.AnimateColor("tab-fg", tabFg, vis.colorAnim)
 						}
-						iconColor := vis.fg
-						if !layoutSwitching {
-							iconColor = tab.AnimateColor("tab-fg", vis.fg, vis.colorAnim)
-						}
-						glassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(iconSize).
+						glassIconPop(ctx, ui.Icon(ctx, entry.Icon).FontSize(desktopNavIconSize(opts.Sidebar)).
 							TextColor(iconColor), p, vis.iconPop)
 					}
 					if !opts.IconsOnly {
-						textColor := vis.fg
-						if !layoutSwitching {
-							textColor = tab.AnimateColor("tab-text", vis.fg, vis.colorAnim)
+						textColor := tabFg
+						if animateColors {
+							textColor = tab.AnimateColor("tab-text", tabFg, vis.colorAnim)
 						}
 						AnimatedLabel(ctx, entry.Label).FontSize(13).FontWeight(vis.weight).SingleLine().Shrink(0).
 							TextColor(textColor)
@@ -465,6 +481,72 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				renderNavGlassDroplet(ctx, selKey+"-lens", axis, lens, tabRadius, p.Dark)
 			}
 		})
+	})
+}
+
+func desktopNavIconSize(sidebar bool) float32 {
+	if sidebar {
+		return 17
+	}
+	return 15
+}
+
+func styleDesktopNavTabContent(el ui.Element, opts DesktopNavOptions) ui.Element {
+	el.AlignItems(ui.Center).Gap(opts.TabGap)
+	switch {
+	case opts.IconsOnly:
+		return el.Padding(0).Justify(ui.Center)
+	case opts.Sidebar:
+		return el.Padding(0, 10)
+	default:
+		return el.Padding(0, opts.TabPad)
+	}
+}
+
+func renderDesktopNavSolidMaskPill(
+	ctx *ui.Context,
+	key any,
+	drawRect ui.Rect,
+	tabRadius float32,
+	pillColor ui.Color,
+	showShadow bool,
+	shadowColor ui.Color,
+	opts DesktopNavOptions,
+	items []NavTab,
+	slots []navSlot,
+	curMain, curExt, stripCross float32,
+	maskFg ui.Color,
+) {
+	pill := rectBox(ctx.Key(key), drawRect, tabRadius, 2).
+		IgnoreInput(true).AccessHidden(true).Clip().
+		Background(pillColor)
+	if showShadow && shadowColor.A > 0 {
+		pill.Shadow(0, 1, 2, 0, shadowColor)
+	}
+	iconSize := desktopNavIconSize(opts.Sidebar)
+	pill.Children(func() {
+		for index, entry := range items {
+			slot := slots[index]
+			if curExt <= 0 || slot.extent <= 0 || slot.start+slot.extent <= curMain || slot.start >= curMain+curExt {
+				continue
+			}
+			relX, relY, w, h := slot.start-drawRect.X, float32(0), slot.extent, stripCross
+			if opts.Sidebar {
+				relX, relY, w, h = 0, slot.start-drawRect.Y, stripCross, slot.extent
+			}
+			row := styleDesktopNavTabContent(
+				ui.Row(ctx.Key(index)).Absolute().Left(relX).Top(relY).Size(w, h),
+				opts,
+			)
+			row.Children(func() {
+				if entry.Icon != nil {
+					ui.Icon(ctx, entry.Icon).FontSize(iconSize).TextColor(maskFg)
+				}
+				if !opts.IconsOnly {
+					ui.Text(ctx, entry.Label).FontSize(13).FontWeight(550).SingleLine().Shrink(0).TextColor(maskFg)
+				}
+			})
+		}
 	})
 }
 
@@ -547,7 +629,7 @@ func resolveDesktopNavSlots(
 			tw, _ := ctx.MeasureText(1<<20, ui.Span{Text: entry.Label, Size: 13, Weight: 550})
 			w = 2*opts.TabPad + tw
 			if entry.Icon != nil {
-				w += 15 + opts.TabGap
+				w += desktopNavIconSize(false) + opts.TabGap
 			}
 		}
 		slots[i] = navSlot{start: x, extent: w}
