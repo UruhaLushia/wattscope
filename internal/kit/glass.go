@@ -115,16 +115,8 @@ func GlassFloatingButton(ctx *ui.Context, el ui.Element, p Palette, radius float
 	return el
 }
 
-// GlassBarChrome applies the animated header background and bottom border to el across LiquidGlass transitions.
+// GlassBarChrome preserves the borderless floating header styling over CanvasBackdrop across Solid and LiquidGlass modes.
 func GlassBarChrome(el ui.Element, p Palette) ui.Element {
-	bg, border := p.Surface, p.LineSoft
-	if p.LiquidGlass {
-		bg, border = ui.Transparent, ui.Transparent
-	}
-	el.Background(el.AnimateColor("bar-bg", bg, motionGlassMorph))
-	if p.LineSoft.A > 0 {
-		el.BorderWidth(0, 0, 1, 0).BorderColor(el.AnimateColor("bar-bd", border, motionGlassMorph))
-	}
 	return el
 }
 
@@ -135,13 +127,14 @@ var glassScrollBlur = glass.Blur{
 
 type glassScrollEdgeMaterial struct {
 	canvas ui.Color
+	glass  bool
 }
 
 func (m glassScrollEdgeMaterial) PaintMaterial(p *ui.Painter, box ui.Rect, radii [4]float32) {
 	if box.W <= 0 || box.H <= 0 {
 		return
 	}
-	if p.Accelerated() {
+	if m.glass && p.Accelerated() {
 		glassScrollBlur.PaintMaterial(p, box, radii)
 		stops := [3]ui.GradientStop{
 			{Color: m.canvas.Alpha(0.38), At: 0},
@@ -152,25 +145,33 @@ func (m glassScrollEdgeMaterial) PaintMaterial(p *ui.Painter, box ui.Rect, radii
 		return
 	}
 	if p.Preferences().ReduceTransparency {
-		p.FillRadii(box, radii, p.Theme().Background)
+		p.FillRadii(box, radii, m.canvas)
+		return
+	}
+	if !p.Accelerated() {
+		p.FillGradient(box, ui.LinearGradient{
+			Angle: 180,
+			From:  m.canvas.Alpha(0.92),
+			To:    ui.Transparent,
+		}, 0)
 		return
 	}
 	stops := [3]ui.GradientStop{
-		{Color: m.canvas.Alpha(0.82), At: 0},
-		{Color: m.canvas.Alpha(0.28), At: 0.50},
+		{Color: m.canvas.Alpha(0.94), At: 0},
+		{Color: m.canvas.Alpha(0.45), At: 0.55},
 		{Color: ui.Transparent, At: 1},
 	}
 	p.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: stops[:]}, 0)
 }
 
-// GlassScrollEdge renders a soft top backdrop-blur fade overlay under floating chrome.
+// GlassScrollEdge renders a soft top fade overlay (with backdrop blur in GPU Liquid Glass) under floating chrome.
 func GlassScrollEdge(ctx *ui.Context, p Palette, offset, height float32, zIndex int) {
-	if !p.LiquidGlass || height <= 0 {
+	if height <= 0 {
 		return
 	}
 	ui.Box(ctx.Key("scroll-edge-top")).Absolute().Left(0).Right(0).Top(offset).Height(height).
 		ZIndex(zIndex).PassThrough().
-		Material(glassScrollEdgeMaterial{canvas: p.Canvas})
+		Material(glassScrollEdgeMaterial{canvas: p.Canvas, glass: p.LiquidGlass})
 }
 
 func glassNeutral(dark bool, lightAlpha, darkAlpha float32) ui.Color {

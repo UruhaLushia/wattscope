@@ -213,7 +213,7 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 		}
 		bar.Row().Height(topBarH).Shrink(0).AlignItems(ui.Start).
 			Padding(2).Gap(2)
-		navBarChrome(ctx, bar, p, topRadius, 0, p.Track, p.LineSoft, false)
+		navBarChrome(ctx, bar, p, topRadius, 0, p.Surface, p.LineSoft, false)
 		if opts.Touch {
 			bar.Margin(0, 0, 0, 4)
 		} else if !opts.IconsOnly {

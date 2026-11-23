@@ -269,13 +269,11 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 				desktopContent.Children(renderContent)
 			})
 		}
-		if p.LiquidGlass {
-			topEdgeOffset := float32(0)
-			if !d.mobile {
-				topEdgeOffset = layout.topInset
-			}
-			d.renderTopScrollEdge(ctx, p, pages[d.page], layout.portraitMobile, topEdgeOffset, layout.floatingTop)
+		topEdgeOffset := float32(0)
+		if !d.mobile {
+			topEdgeOffset = layout.topInset
 		}
+		d.renderTopScrollEdge(ctx, p, pages[d.page], layout.portraitMobile, topEdgeOffset, layout.floatingTop)
 		d.workspaceHeader(ctx, p, msgs, layout, mobileTitle, name, status, tone, topPages, headerExtra)
 		if layout.portraitMobile && layout.hasBottomBar {
 			d.mobileBottomBar(ctx, p, msgs.Workspace(), pages, layout.bottomInset, layout.leftInset, layout.rightInset)
@@ -427,9 +425,9 @@ func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locale
 		if iconsOnly || statusLabel != fullStatus {
 			pill.Tooltip(fullStatus)
 		}
-		pillBg := p.Inset
+		pillBg := p.Surface
 		if pill.Pressed() {
-			pillBg = p.Press
+			pillBg = p.Press.Over(p.Surface)
 		} else if pill.Hovered() || pill.FocusVisible() {
 			pillBg = p.SurfaceHi
 		}
@@ -437,6 +435,9 @@ func (d *dashboard) statusPillButton(ctx *ui.Context, p kit.Palette, msgs locale
 			kit.ControlMotion(pill)
 		}
 		kit.GlassFloatingButton(ctx, pill, p, kit.RadiusFull, pillBg, p.LineSoft)
+		if !p.LiquidGlass {
+			kit.ApplyCardShadow(pill, p)
+		}
 		pill.Children(func() {
 			kit.StatusDot(ctx, tone, 7)
 			if !iconsOnly {
