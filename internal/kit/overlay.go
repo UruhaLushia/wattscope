@@ -22,6 +22,9 @@ type MenuItem struct {
 }
 
 func surfaceChrome(ctx *ui.Context, el ui.Element, p Palette, radius float32) {
+	if !p.LiquidGlass || IsSoftware(ctx) {
+		el.Cache()
+	}
 	glassFloatingEl(ctx, el, p, radius, 0.1, false, p.Surface, p.Line.Mix(p.Text, 0.08)).
 		Shadow(0, 10, 28, 0, p.Shadow)
 }
@@ -47,6 +50,77 @@ func menuItemMetrics(touch, optionStyle bool) (minH, fontSize, padY, padX float3
 		minH, fontSize = 42, 14
 	}
 	return
+}
+
+type menuWidthCacheKey struct{}
+
+type menuWidthCache struct {
+	valid       bool
+	windowW     float32
+	zoom        float32
+	textScale   float32
+	touch       bool
+	optionStyle bool
+	hasIcon     bool
+	hasCheck    bool
+	labels      []string
+	width       float32
+}
+
+func cachedAdaptiveMenuWidth(ctx *ui.Context, host, fallback ui.Element, items []MenuItem, touch, optionStyle bool) float32 {
+	owner := host
+	if !owner.Valid() {
+		owner = fallback
+	}
+	cache := ui.Local(owner, menuWidthCacheKey{}, func() menuWidthCache { return menuWidthCache{} })
+	if cache == nil {
+		return adaptiveMenuWidth(ctx, items, touch, optionStyle)
+	}
+	windowW, _ := ctx.Size()
+	zoom := ctx.Zoom()
+	textScale := ctx.Preferences().TextScale
+	hasIcon := false
+	hasCheck := false
+	same := cache.valid &&
+		cache.windowW == windowW &&
+		cache.zoom == zoom &&
+		cache.textScale == textScale &&
+		cache.touch == touch &&
+		cache.optionStyle == optionStyle &&
+		len(cache.labels) == len(items)
+	for i, item := range items {
+		if item.Icon != nil {
+			hasIcon = true
+		}
+		if item.Active || item.Check || item.Radio {
+			hasCheck = true
+		}
+		if same && cache.labels[i] != item.Label {
+			same = false
+		}
+	}
+	if same && cache.hasIcon == hasIcon && cache.hasCheck == hasCheck {
+		return cache.width
+	}
+	width := adaptiveMenuWidth(ctx, items, touch, optionStyle)
+	if cap(cache.labels) < len(items) {
+		cache.labels = make([]string, len(items))
+	} else {
+		cache.labels = cache.labels[:len(items)]
+	}
+	for i, item := range items {
+		cache.labels[i] = item.Label
+	}
+	cache.valid = true
+	cache.windowW = windowW
+	cache.zoom = zoom
+	cache.textScale = textScale
+	cache.touch = touch
+	cache.optionStyle = optionStyle
+	cache.hasIcon = hasIcon
+	cache.hasCheck = hasCheck
+	cache.width = width
+	return width
 }
 
 func adaptiveMenuWidth(ctx *ui.Context, items []MenuItem, touch, optionStyle bool) float32 {
@@ -144,10 +218,10 @@ func styleMenuRow(ctx *ui.Context, p Palette, row ui.Element, entry MenuItem, fo
 
 func menuPopup(ctx *ui.Context, p Palette, menu ui.MenuParts, anchor ui.Element, touch bool, items []MenuItem) {
 	menu.Popup(func(panel ui.Element) {
-		panelW := adaptiveMenuWidth(ctx, items, touch, false)
+		panelW := cachedAdaptiveMenuWidth(ctx, anchor, panel, items, touch, false)
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0).
 			Scrollbars(false).Width(panelW).Padding(6).Gap(2)
-		popupMotion(panel)
+		popupMotion(ctx, panel)
 		surfaceChrome(ctx, panel, p, RadiusXL)
 
 		itemMinH, fontSize, padY, padX := menuItemMetrics(touch, false)
@@ -177,11 +251,11 @@ func menuPopup(ctx *ui.Context, p Palette, menu ui.MenuParts, anchor ui.Element,
 
 func optionMenuPopup(ctx *ui.Context, p Palette, trigger ui.Element, open *bool, topInset float32, items []MenuItem) {
 	ui.PopoverBase(ctx, trigger, open, func(panel ui.Element) {
-		panelW := adaptiveMenuWidth(ctx, items, false, true)
+		panelW := cachedAdaptiveMenuWidth(ctx, trigger, panel, items, false, true)
 		panel.AttachTo(trigger, ui.AnchorTopEnd, ui.AnchorTopEnd).Margin(-topInset-3, -formGroupInset-3, 0, 0).
 			Scrollbars(false).Width(panelW).Padding(5, 6).Gap(1)
 		surfaceChrome(ctx, panel, p, RadiusXL)
-		optionMenuMotion(panel)
+		optionMenuMotion(ctx, panel)
 
 		itemMinH, fontSize, padY, padX := menuItemMetrics(false, true)
 		for i, item := range items {
@@ -381,7 +455,7 @@ func OptionRow(ctx *ui.Context, p Palette, opts OptionRowOptions) {
 func Popover(ctx *ui.Context, p Palette, open *bool, anchor ui.Element, build func(panel ui.Element)) {
 	ui.PopoverBase(ctx, anchor, open, func(panel ui.Element) {
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0)
-		popupMotion(panel)
+		popupMotion(ctx, panel)
 		surfaceChrome(ctx, panel, p, RadiusL)
 		build(panel)
 	})
@@ -392,7 +466,7 @@ func Dialog(ctx *ui.Context, p Palette, open *bool, maxWidth, maxHeight float32,
 	width, height := ctx.Size()
 	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
 	ui.DialogBase(ctx, open, func(back, panel ui.Element) {
-		backdropMotion(back, p)
+		backdropMotion(ctx, back, p)
 		panelWidth := min(max(240, width-leftInset-rightInset-32), maxWidth)
 		panelHeight := min(max(200, height-topInset-bottomInset-40), maxHeight)
 		pad := float32(20)
@@ -400,7 +474,10 @@ func Dialog(ctx *ui.Context, p Palette, open *bool, maxWidth, maxHeight float32,
 			pad = 16
 		}
 		dialogRadius := glassRadius(p, RadiusL, RadiusXL)
-		glassFloatingEl(ctx, modalMotion(panel).Width(panelWidth).MaxHeight(panelHeight).Padding(pad).Gap(14),
+		if !p.LiquidGlass || IsSoftware(ctx) {
+			panel.Cache()
+		}
+		glassFloatingEl(ctx, modalMotion(ctx, panel).Width(panelWidth).MaxHeight(panelHeight).Padding(pad).Gap(14),
 			p, dialogRadius, 0.15, false, p.Surface, p.Line).
 			Shadow(0, 14, 36, 0, p.Shadow).
 			Children(content)
@@ -412,10 +489,13 @@ func BottomSheet(ctx *ui.Context, p Palette, open *bool, maxHeightFrac float32, 
 	_, height := ctx.Size()
 	topInset, rightInset, bottomInset, leftInset := ctx.SafeArea()
 	ui.DialogBase(ctx, open, func(back, panel ui.Element) {
-		backdropMotion(back, p).AlignItems(ui.Stretch).Justify(ui.End)
+		backdropMotion(ctx, back, p).AlignItems(ui.Stretch).Justify(ui.End)
 		availH := max(160, height-topInset-24)
 		maxH := min(availH, max(260, availH*maxHeightFrac))
-		sheetMotion(panel).FillWidth().MaxHeight(maxH).
+		if !p.LiquidGlass || IsSoftware(ctx) {
+			panel.Cache()
+		}
+		sheetMotion(ctx, panel).FillWidth().MaxHeight(maxH).
 			Padding(0, rightInset+16, max(16, bottomInset+8), leftInset+16).Gap(10).
 			Radius(RadiusL+6, RadiusL+6, 0, 0).
 			Shadow(0, -8, 28, 0, p.Shadow)

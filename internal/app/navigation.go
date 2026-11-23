@@ -264,7 +264,7 @@ func (d *dashboard) workspace(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 				}
 				desktopContent := ui.Column(ctx.Key("desktop-content")).Grow(1).MinWidth(0).MinHeight(0).FillHeight()
 				if !d.snapshotOnly && !kit.IsOrientationRotating(ctx) {
-					desktopContent.Transition(kit.SideContentTransition)
+					kit.SideContentMotion(ctx, desktopContent)
 				}
 				desktopContent.Children(renderContent)
 			})
@@ -362,7 +362,7 @@ func (d *dashboard) renderPageContent(ctx *ui.Context, p kit.Palette, msgs local
 	horizontalAnim := layout.position == navigationTop || layout.position == navigationBottom
 	motionWrap := ui.Column(ctx.Key(d.page)).Fill().MinWidth(0).MinHeight(0)
 	if !d.snapshotOnly {
-		kit.NavigationPageMotion(motionWrap, horizontalAnim, d.pageDirection)
+		kit.NavigationPageMotion(ctx, motionWrap, horizontalAnim, d.pageDirection)
 	}
 	in := computePageInsets(layout, page, contentFloatingTop)
 	motionWrap.Children(func() {
@@ -374,21 +374,23 @@ func (d *dashboard) renderPageContent(ctx *ui.Context, p kit.Palette, msgs local
 			} else {
 				container.Children(func() { page.list(in.innerBottom) })
 			}
-			return
-		}
-
-		scroll := ui.Scroll(ctx.Key(d.page)).Scrollbars(false).Fill().MinWidth(0).MinHeight(0).TrackScroll(&d.scroll)
-		if contentFloatingTop > 0 || layout.navReserve > 0 {
-			scroll.ScrollbarInsets(contentFloatingTop, 0, layout.navReserve)
-		}
-		scroll.Children(func() {
-			ui.Column(ctx).FillWidth().Shrink(0).
-				Padding(in.top, in.end, in.bottom, in.start).Gap(in.gap).Children(func() {
-				kit.FormColumn(ctx, func() {
-					ui.Column(ctx).FillWidth().Gap(in.gap).Children(page.content)
+		} else {
+			scroll := ui.Scroll(ctx.Key(d.page)).Scrollbars(false).Fill().MinWidth(0).MinHeight(0).TrackScroll(&d.scroll)
+			if contentFloatingTop > 0 || layout.navReserve > 0 {
+				scroll.ScrollbarInsets(contentFloatingTop, 0, layout.navReserve)
+			}
+			scroll.Children(func() {
+				ui.Column(ctx).FillWidth().Shrink(0).
+					Padding(in.top, in.end, in.bottom, in.start).Gap(in.gap).Children(func() {
+					kit.FormColumn(ctx, func() {
+						ui.Column(ctx).FillWidth().Gap(in.gap).Children(page.content)
+					})
 				})
 			})
-		})
+		}
+		if !d.snapshotOnly {
+			kit.NavigationPageVeil(ctx, p, d.page)
+		}
 	})
 }
 

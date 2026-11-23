@@ -142,6 +142,10 @@ type desktopNavScrubState struct {
 	pillIndex      int
 	pillInit       bool
 	pillSlideUntil time.Time
+	pillSolidOwned bool
+	pillSolidMain  float32
+	pillSolidExt   float32
+	stripPoseArmed bool
 }
 
 // DesktopNav renders desktop navigation as either a floating header capsule or
@@ -295,8 +299,13 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 			displayIndex, _ := st.stepTabs(ctx, tabsStrip, tabEls, axis, stripGap, st.slots, p.LiquidGlass, true, selected, items)
 
 			if !p.LiquidGlass && !IsOrientationRotating(ctx) {
-				stripPose, stripAnim := navSolidScrubPose(axis, st.active, navMainCoord(axis, st.lastX, st.lastY), stripMain, 3.0, 6)
-				tabsStrip.TransformOrigin(0.5, 0.5).AnimatePose(stripPose, stripAnim)
+				if st.active && !isStaticSnapshot(ctx) {
+					st.stripPoseArmed = true
+				}
+				if st.active || st.stripPoseArmed {
+					stripPose, stripAnim := navSolidScrubPose(axis, st.active, navMainCoord(axis, st.lastX, st.lastY), stripMain, 3.0, 6)
+					tabsStrip.TransformOrigin(0.5, 0.5).AnimatePose(stripPose, stripAnim)
+				}
 			}
 
 			pillStart, pillExtent := st.slots[displayIndex].start, st.slots[displayIndex].extent
@@ -359,15 +368,32 @@ func DesktopNav(ctx *ui.Context, p Palette, label string, selected *int, items [
 				}
 				pillOwnsPaint = !layoutSwitching && !isStaticSnapshot(ctx) &&
 					(sliding || st.active || tabEls[displayIndex].Pressed())
-				renderBg := pillColor
-				if !pillOwnsPaint {
-					renderBg = ui.Transparent
+				if pillOwnsPaint {
+					if jumpPill || isScaleReflow(ctx) || st.pillSolidExt <= 0 {
+						tabsStrip.Jump("dnav-solid-main", pillStart)
+						tabsStrip.Jump("dnav-solid-ext", pillExtent)
+					} else if !st.pillSolidOwned {
+						tabsStrip.Jump("dnav-solid-main", st.pillSolidMain)
+						tabsStrip.Jump("dnav-solid-ext", st.pillSolidExt)
+					}
+					curMain := tabsStrip.AnimateTo("dnav-solid-main", pillStart, pillAnim)
+					curExt := tabsStrip.AnimateTo("dnav-solid-ext", pillExtent, pillAnim)
+					st.pillSolidMain, st.pillSolidExt = curMain, curExt
+					st.pillSolidOwned = true
+					drawRect := ui.Rect{X: curMain, Y: crossOff, W: curExt, H: stripCross}
+					if opts.Sidebar {
+						drawRect = ui.Rect{X: crossOff, Y: curMain, W: stripCross, H: curExt}
+					}
+					renderNavSolidPillColor(ctx, selKey, drawRect, tabRadius,
+						pillColor, pillPose, pillAnim, pillPoseAnim,
+						false,
+						!opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
+					)
+				} else if !isStaticSnapshot(ctx) {
+					st.pillSolidOwned = false
+					st.pillSolidMain = pillStart
+					st.pillSolidExt = pillExtent
 				}
-				renderNavSolidPillColor(ctx, selKey, target, tabRadius,
-					renderBg, pillPose, pillAnim, pillPoseAnim,
-					!jumpPill && !layoutSwitching && !isStaticSnapshot(ctx) && !isScaleReflow(ctx),
-					pillOwnsPaint && !opts.Sidebar && !tabEls[displayIndex].Pressed() && !st.active, 2, p.CardShadow,
-				)
 			}
 			if measured && !layoutSwitching && !isStaticSnapshot(ctx) {
 				st.hasMeasured = true

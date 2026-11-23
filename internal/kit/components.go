@@ -405,6 +405,8 @@ func buttonColors(p Palette, variant ButtonVariant) (bg, hover, press, ink, bord
 	}
 }
 
+type pillPoseArmedKey struct{}
+
 func pillSurface(ctx *ui.Context, owner ui.Element, radius float32, bg ui.Color, borderW float32, border ui.Color, pressScale float32) {
 	surface := ui.Box(ctx).Absolute().Fill().ZIndex(-1).
 		Radius(radius).PassThrough()
@@ -413,11 +415,18 @@ func pillSurface(ctx *ui.Context, owner ui.Element, radius float32, bg ui.Color,
 		surface.Border(borderW, surface.AnimateColor("pill-bd", border, MotionFast))
 	}
 	if pressScale > 0 && pressScale != 1 {
-		pose := ui.Pose{}
-		if !owner.IsDisabled() && owner.Pressed() {
-			pose.Scale = pressScale
+		pressed := !owner.IsDisabled() && owner.Pressed()
+		poseArmed := ui.Local(surface, pillPoseArmedKey{}, func() bool { return false })
+		if pressed && poseArmed != nil {
+			*poseArmed = true
 		}
-		surface.TransformOrigin(0.5, 0.5).AnimatePose(pose, motionSpring)
+		if pressed || (poseArmed != nil && *poseArmed) {
+			pose := ui.Pose{}
+			if pressed {
+				pose.Scale = pressScale
+			}
+			surface.TransformOrigin(0.5, 0.5).AnimatePose(pose, motionSpring)
+		}
 	}
 }
 
@@ -645,7 +654,7 @@ func ToastViewport(ctx *ui.Context, p Palette, bottom float32, centered bool) {
 		for index := range toasts {
 			notice := toasts[index]
 			parts := ui.ToastBase(ctx, notice)
-			popupMotion(parts.Root)
+			popupMotion(ctx, parts.Root)
 			toastRadius := glassRadius(p, RadiusL, RadiusXL)
 			glassFloatingEl(ctx, parts.Root.Width(340).MaxWidthPercent(94).Row().AlignItems(ui.Center).Gap(10).
 				Padding(10, 12, 10, 14), p, toastRadius, 0.1, true, p.Surface, p.Line).

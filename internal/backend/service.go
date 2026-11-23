@@ -48,6 +48,50 @@ type Service struct {
 	checkingPDHost                                 bool
 }
 
+// UIRefreshDigest contains the service state that can affect a dashboard redraw.
+type UIRefreshDigest struct {
+	Connection         ConnectionStatus
+	Streaming          bool
+	HasLatest          bool
+	CSVRecordingActive bool
+	PDRecordingActive  bool
+	PDOldest           uint64
+	PDTotal            uint64
+	CanCheckPDHost     bool
+	SavedPDHostSet     bool
+	SavedPDHost        bool
+}
+
+// UIRefreshDigest returns redraw-relevant state under one read lock.
+func (s *Service) UIRefreshDigest() UIRefreshDigest {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	digest := UIRefreshDigest{
+		Connection: ConnectionStatus{
+			State:       s.snapshot.State,
+			DeviceID:    s.snapshot.Device.ID,
+			Connections: s.snapshot.Connections,
+			Error:       s.snapshot.Error,
+			ErrorKind:   s.snapshot.ErrorKind,
+		},
+		Streaming:          s.snapshot.State == Streaming,
+		HasLatest:          s.snapshot.Latest != nil,
+		CSVRecordingActive: s.snapshot.Recording.Active,
+		PDRecordingActive:  s.captureState.Active,
+		PDTotal:            s.packetSequence,
+		CanCheckPDHost:     s.snapshot.State == Streaming && s.pdHostChecker != nil,
+	}
+	if s.packetCount > 0 {
+		digest.PDOldest = s.packetRing[s.packetHead].Sequence
+	}
+	if s.snapshot.SavedPDHost != nil {
+		digest.SavedPDHostSet = true
+		digest.SavedPDHost = *s.snapshot.SavedPDHost
+	}
+	return digest
+}
+
 func New(opts Options) (*Service, error) {
 	if opts.Open == nil {
 		return nil, errors.New("device opener is required")

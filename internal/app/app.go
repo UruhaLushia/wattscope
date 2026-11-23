@@ -39,6 +39,7 @@ type dashboard struct {
 	notifyLanguage   atomic.Value
 	islandDisplay    atomic.Pointer[islandDisplay]
 	window           *mygo.Window
+	refreshWake      chan struct{}
 	service          *backend.Service
 	sessionCtx       context.Context
 	cancel           context.CancelFunc
@@ -134,7 +135,8 @@ func Run(parent context.Context, source session.Source, language, directory stri
 	defer cancel()
 	model := &dashboard{
 		ctx: ctx, source: source, dir: directory, logs: logs, windowSec: defaultWindowSec, fullSession: true,
-		mobile: runtime.GOOS == "android" || runtime.GOOS == "ios",
+		mobile:      runtime.GOOS == "android" || runtime.GOOS == "ios",
+		refreshWake: make(chan struct{}, 1),
 	}
 	model.source.Demo = false
 	mygo.App.SetName("WattScope")
@@ -147,6 +149,7 @@ func Run(parent context.Context, source session.Source, language, directory stri
 		defer offSuspend()
 		offResume := mygo.Power.OnResume(func() {
 			model.androidHidden.Store(false)
+			model.wakeRefresh()
 			if ctx.Err() == nil {
 				model.work.Go(ensureMeterForeground)
 			}
@@ -291,6 +294,17 @@ func (d *dashboard) goPage(page int) {
 	if page == pageSettings {
 		d.refreshMeterAccess()
 	}
+	d.wakeRefresh()
+}
+
+func (d *dashboard) wakeRefresh() {
+	if d.refreshWake == nil {
+		return
+	}
+	select {
+	case d.refreshWake <- struct{}{}:
+	default:
+	}
 }
 
 func (d *dashboard) connect() {
@@ -365,24 +379,65 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 		d.work.Go(func() {
 			updates, unsubscribe := service.Subscribe()
 			defer unsubscribe()
-			var last dashboardUpdate
-			var pausedRefresh <-chan time.Time
+			last := dashboardUpdate{page: -1}
+			cadence := cadenceStateOnly
+			var refreshTimer *time.Timer
+			var refreshTimerC <-chan time.Time
+			stopRefreshTimer := func() {
+				if refreshTimer != nil && !refreshTimer.Stop() {
+					select {
+					case <-refreshTimer.C:
+					default:
+					}
+				}
+				refreshTimerC = nil
+			}
+			resetRefreshTimer := func() {
+				if refreshTimer == nil {
+					refreshTimer = time.NewTimer(readoutInterval)
+				} else {
+					if !refreshTimer.Stop() {
+						select {
+						case <-refreshTimer.C:
+						default:
+						}
+					}
+					refreshTimer.Reset(readoutInterval)
+				}
+				refreshTimerC = refreshTimer.C
+			}
+			defer stopRefreshTimer()
+			processRefresh := func(force bool) {
+				page := int(d.activePage.Load())
+				update, nextCadence := readDashboardUpdate(service, page, d.chartPaused.Load())
+				if force || update != last || nextCadence == cadenceLive20Hz {
+					invalidate()
+				}
+				last = update
+				if nextCadence != cadence {
+					cadence = nextCadence
+					if cadence != cadenceReadout {
+						stopRefreshTimer()
+					}
+				}
+				if cadence == cadenceReadout && refreshTimerC == nil && !d.androidHidden.Load() {
+					resetRefreshTimer()
+				}
+			}
 			for ctx.Err() == nil {
 				select {
 				case <-updates:
-					page := int(d.activePage.Load())
-					update, live := readDashboardUpdate(service, page)
-					paused := runtime.GOOS == "android" && page == pageOverview && d.chartPaused.Load()
-					if update != last || live && !paused {
-						invalidate()
-					} else if live && pausedRefresh == nil && !d.androidHidden.Load() {
-						// While paused, only the surrounding status and counters need updating.
-						pausedRefresh = time.After(readoutInterval)
+					processRefresh(false)
+				case <-d.refreshWake:
+					processRefresh(true)
+				case <-refreshTimerC:
+					refreshTimerC = nil
+					if cadence == cadenceReadout && !d.androidHidden.Load() {
+						processRefresh(true)
+						if cadence == cadenceReadout && !d.androidHidden.Load() {
+							resetRefreshTimer()
+						}
 					}
-					last = update
-				case <-pausedRefresh:
-					pausedRefresh = nil
-					invalidate()
 				case <-done:
 					if ctx.Err() == nil {
 						invalidate()
@@ -397,24 +452,36 @@ func (d *dashboard) connectWith(parent context.Context, source session.Source) {
 }
 
 type dashboardUpdate struct {
-	page          int
-	connection    backend.ConnectionStatus
-	oldest, total uint64
-	recording     backend.CaptureRecording
+	page   int
+	digest backend.UIRefreshDigest
 }
 
-func readDashboardUpdate(service *backend.Service, page int) (dashboardUpdate, bool) {
-	update := dashboardUpdate{page: page}
+type refreshCadence uint8
+
+const (
+	cadenceStateOnly refreshCadence = iota
+	cadenceReadout
+	cadenceLive20Hz
+)
+
+func readDashboardUpdate(service *backend.Service, page int, chartPaused bool) (dashboardUpdate, refreshCadence) {
+	update := dashboardUpdate{page: page, digest: service.UIRefreshDigest()}
 	switch page {
 	case pageOverview:
-		update.connection = service.ConnectionStatus()
-		return update, true
-	case pageRecords, pageDevice:
-		return update, true
-	case pagePD:
-		packets := service.PacketSnapshot(0, 0)
-		update.oldest, update.total, update.recording = packets.Oldest, packets.Total, packets.Recording
+		if update.digest.Streaming {
+			if chartPaused {
+				return update, cadenceReadout
+			}
+			return update, cadenceLive20Hz
+		}
+	case pageRecords:
+		if update.digest.Streaming || update.digest.CSVRecordingActive || update.digest.PDRecordingActive {
+			return update, cadenceReadout
+		}
+	case pageDevice:
+		if update.digest.Streaming && update.digest.HasLatest {
+			return update, cadenceReadout
+		}
 	}
-	update.connection = service.ConnectionStatus()
-	return update, false
+	return update, cadenceStateOnly
 }

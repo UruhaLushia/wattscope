@@ -52,12 +52,27 @@ func attachLiquidLens(ctx *ui.Context, key string, radius, opacity float32, expa
 	})
 }
 
+func paintCPUTopSheen(p *ui.Painter, box ui.Rect, radius float32, topSheen ui.Color) {
+	grad := ui.LinearGradient{Angle: 180, From: topSheen, To: ui.Transparent, End: 0.45}
+	p.Clip(ui.Rect{X: box.X, Y: box.Y, W: box.W, H: box.H * 0.48}, 0, func() {
+		p.FillGradient(box, grad, radius)
+	})
+}
+
 func drawRestPillSheen(el ui.Element, radius float32, dark bool) {
 	el.Draw(func(p *ui.Painter, box ui.Rect) {
 		if box.W <= 2 || box.H <= 2 || p.Preferences().ReduceTransparency {
 			return
 		}
 		r := min(radius, min(box.W, box.H)*0.5)
+		if !p.Accelerated() {
+			topSheen := restPillTopLight
+			if dark {
+				topSheen = restPillTopDark
+			}
+			paintCPUTopSheen(p, box, r, topSheen)
+			return
+		}
 		gradient := restPillLight
 		if dark {
 			gradient = restPillDark
@@ -67,7 +82,9 @@ func drawRestPillSheen(el ui.Element, radius float32, dark bool) {
 }
 
 var (
-	restPillLight = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
+	restPillTopLight = ui.RGBA(255, 255, 255, 255).Alpha(0.14)
+	restPillTopDark  = ui.RGBA(232, 242, 255, 255).Alpha(0.06)
+	restPillLight    = ui.LinearGradient{Angle: 180, Stops: []ui.GradientStop{
 		{Color: ui.RGBA(255, 255, 255, 255).Alpha(0.14), At: 0},
 		{Color: ui.Transparent, At: 0.45},
 		{Color: ui.RGBA(255, 255, 255, 255).Alpha(0.04), At: 1},
@@ -277,24 +294,15 @@ func paintCPUGlass(p *ui.Painter, box ui.Rect, radii [4]float32, spec liquidLens
 		}
 		p.FillRadii(box, rr, scaleAlpha(base, alpha))
 		if uniformRadii {
-			var stops [3]ui.GradientStop
-			var strokeColor ui.Color
+			var topSheen, strokeColor ui.Color
 			if dark {
-				stops = [3]ui.GradientStop{
-					{Color: ui.RGBA(235, 244, 255, 0.18*alpha), At: 0},
-					{Color: ui.Transparent, At: 0.48},
-					{Color: ui.RGBA(235, 244, 255, 0.05*alpha), At: 1},
-				}
+				topSheen = ui.RGBA(235, 244, 255, 0.18*alpha)
 				strokeColor = ui.RGBA(226, 238, 255, (0.24+0.14*pressAmt)*alpha)
 			} else {
-				stops = [3]ui.GradientStop{
-					{Color: ui.RGBA(255, 255, 255, 0.34*alpha), At: 0},
-					{Color: ui.Transparent, At: 0.48},
-					{Color: ui.RGBA(255, 255, 255, 0.10*alpha), At: 1},
-				}
+				topSheen = ui.RGBA(255, 255, 255, 0.34*alpha)
 				strokeColor = ui.RGBA(148, 163, 184, (0.28+0.14*pressAmt)*alpha)
 			}
-			p.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: stops[:]}, strokeR)
+			paintCPUTopSheen(p, box, strokeR, topSheen)
 			p.Stroke(box, strokeColor, strokeR, 1)
 		}
 		return
@@ -322,24 +330,15 @@ func paintCPUGlass(p *ui.Painter, box ui.Rect, radii [4]float32, spec liquidLens
 	c.A = 255
 	p.FillRadii(box, rr, c.Alpha(baseAlpha*alpha))
 	if uniformRadii {
-		var stops [3]ui.GradientStop
-		var strokeColor ui.Color
+		var topSheen, strokeColor ui.Color
 		if dark {
-			stops = [3]ui.GradientStop{
-				{Color: ui.RGBA(235, 244, 255, (0.11+0.08*pressAmt)*alpha), At: 0},
-				{Color: ui.Transparent, At: 0.45},
-				{Color: ui.RGBA(255, 255, 255, 0.02*alpha), At: 1},
-			}
+			topSheen = ui.RGBA(235, 244, 255, (0.11+0.08*pressAmt)*alpha)
 			strokeColor = ui.RGBA(232, 242, 255, (0.14+0.08*pressAmt)*alpha)
 		} else {
-			stops = [3]ui.GradientStop{
-				{Color: ui.RGBA(255, 255, 255, (0.34+0.12*pressAmt)*alpha), At: 0},
-				{Color: ui.Transparent, At: 0.45},
-				{Color: ui.RGBA(15, 23, 42, 0.025*alpha), At: 1},
-			}
+			topSheen = ui.RGBA(255, 255, 255, (0.34+0.12*pressAmt)*alpha)
 			strokeColor = ui.RGBA(15, 23, 42, (0.09+0.05*pressAmt)*alpha)
 		}
-		p.FillGradient(box, ui.LinearGradient{Angle: 180, Stops: stops[:]}, strokeR)
+		paintCPUTopSheen(p, box, strokeR, topSheen)
 		p.Stroke(box, strokeColor, strokeR, 1)
 	}
 }

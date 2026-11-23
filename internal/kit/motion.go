@@ -2,24 +2,33 @@ package kit
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 )
 
 const (
-	motionFastDur        = 120 * time.Millisecond
-	motionNavDur         = 175 * time.Millisecond
-	motionMoveDur        = 220 * time.Millisecond
-	motionPopupOpenDur   = 180 * time.Millisecond
-	motionPopupCloseDur  = 110 * time.Millisecond
-	motionOptionCloseDur = 125 * time.Millisecond
-	motionPopupDur       = 230 * time.Millisecond
-	motionSheetDur       = 260 * time.Millisecond
-	motionPageDur        = 235 * time.Millisecond
-	motionUnfoldDur      = 280 * time.Millisecond
-	rotateWindowDur      = 380 * time.Millisecond
-	navLayoutSwitchDur   = 520 * time.Millisecond
+	motionFastDur         = 120 * time.Millisecond
+	motionNavDur          = 175 * time.Millisecond
+	motionMoveDur         = 220 * time.Millisecond
+	motionPopupOpenDur    = 180 * time.Millisecond
+	motionPopupCloseDur   = 110 * time.Millisecond
+	motionOptionCloseDur  = 125 * time.Millisecond
+	motionPopupDur        = 230 * time.Millisecond
+	motionSheetDur        = 260 * time.Millisecond
+	motionPageDur         = 235 * time.Millisecond
+	motionUnfoldDur       = 280 * time.Millisecond
+	rotateWindowDur       = 380 * time.Millisecond
+	navLayoutSwitchDur    = 520 * time.Millisecond
+	navLayoutSwitchDurCPU = 220 * time.Millisecond
+	pageVeilDur           = 140 * time.Millisecond
+)
+
+const (
+	backendUnknown     uint32 = 0
+	backendAccelerated uint32 = 1
+	backendSoftware    uint32 = 2
 )
 
 var (
@@ -42,14 +51,17 @@ var (
 	motionGlassMorph   = ui.Animation{Duration: 240 * time.Millisecond, Ease: easeStandard}
 	motionGlassShape   = ui.Animation{Spring: ui.SpringOptions{Duration: 280 * time.Millisecond, Bounce: 0.08}}
 	motionNavPanel     = ui.Animation{Spring: ui.SpringOptions{Duration: 340 * time.Millisecond, Bounce: 0.14}}
+	motionNavPanelCPU  = ui.Animation{Duration: 200 * time.Millisecond, Ease: easeStandard}
 	// MotionRotate is the spring animation used when elements transition across mobile orientations.
 	MotionRotate       = ui.Animation{Spring: ui.SpringOptions{Duration: 320 * time.Millisecond, Bounce: 0.04}}
 	motionRotatePanel  = ui.Animation{Spring: ui.SpringOptions{Duration: 290 * time.Millisecond, Bounce: 0.05}}
 	motionSpring       = ui.Animation{Spring: ui.SpringOptions{Duration: motionMoveDur, Bounce: 0.06}}
 	motionOptionSpring = ui.Animation{Spring: ui.SpringOptions{Duration: 230 * time.Millisecond, Bounce: 0.06}}
 	motionPopup        = ui.Animation{Duration: motionPopupOpenDur, Ease: easeStandard}
+	motionPopupCPU     = ui.Animation{Duration: 150 * time.Millisecond, Ease: easeStandard}
 	motionPopupSpring  = ui.Animation{Spring: ui.SpringOptions{Duration: 220 * time.Millisecond, Bounce: 0.09}}
 	motionDialogPop    = ui.Animation{Spring: ui.SpringOptions{Duration: motionPopupDur, Bounce: 0.06}}
+	motionDialogCPU    = ui.Animation{Duration: 160 * time.Millisecond, Ease: easeStandard}
 	motionSheet        = ui.Animation{Spring: ui.SpringOptions{Duration: motionSheetDur, Bounce: 0.04}}
 
 	localeTextTransition = ui.ContentTransition{Morph: true, Animation: &motionLocale}
@@ -62,12 +74,25 @@ var (
 		Size:      true,
 		Animation: &motionNavPanel,
 	}
+	sideContentTransitionCPU = ui.ElementTransition{
+		Position:  true,
+		Size:      true,
+		Animation: &motionNavPanelCPU,
+	}
 	popupTransition = ui.ElementTransition{
 		Animation:    &motionPopupSpring,
 		ExitDuration: motionPopupCloseDur,
 		ExitEase:     easeAccelerate,
 		Position:     true,
 		Enter:        &ui.Motion{Y: -3, Scale: 0.90, Flip: true},
+		Exit:         &ui.Motion{Y: -1, Scale: 0.94, Flip: true},
+	}
+	popupTransitionCPU = ui.ElementTransition{
+		Animation:    &motionPopupCPU,
+		ExitDuration: motionPopupCloseDur,
+		ExitEase:     easeAccelerate,
+		Position:     true,
+		Enter:        &ui.Motion{Y: -3, Scale: 0.925, Flip: true},
 		Exit:         &ui.Motion{Y: -1, Scale: 0.94, Flip: true},
 	}
 	optionPopupTransition = ui.ElementTransition{
@@ -77,14 +102,32 @@ var (
 		Enter:        &ui.Motion{Scale: 0.78, Opacity: 1},
 		Exit:         &ui.Motion{Scale: 0.88, Opacity: 0},
 	}
+	optionPopupTransitionCPU = ui.ElementTransition{
+		Animation:    &motionPopupCPU,
+		ExitDuration: motionOptionCloseDur,
+		ExitEase:     easeStandard,
+		Position:     true,
+		Enter:        &ui.Motion{Scale: 0.925, Opacity: 1},
+		Exit:         &ui.Motion{Scale: 0.925, Opacity: 0},
+	}
 	modalTransition = ui.ElementTransition{
 		Position: true, Colors: true, Animation: &motionDialogPop,
+		Enter: &ui.Motion{Y: 10, Scale: 0.94},
+		Exit:  &ui.Motion{Y: 6, Scale: 0.96},
+	}
+	modalTransitionCPU = ui.ElementTransition{
+		Position: true, Colors: true, Animation: &motionDialogCPU,
 		Enter: &ui.Motion{Y: 10, Scale: 0.94},
 		Exit:  &ui.Motion{Y: 6, Scale: 0.96},
 	}
 	sheetTransition = ui.ElementTransition{
 		Position: true, Colors: true, Animation: &motionSheet,
 		Enter: &ui.Motion{Y: 56},
+		Exit:  &ui.Motion{Y: 40},
+	}
+	sheetTransitionCPU = ui.ElementTransition{
+		Position: true, Colors: true, Animation: &motionDialogCPU,
+		Enter: &ui.Motion{Y: 48},
 		Exit:  &ui.Motion{Y: 40},
 	}
 	backdropTransition = ui.ElementTransition{
@@ -127,12 +170,33 @@ type frameLayoutState struct {
 	navSidebarInit           bool
 	navSidebar               bool
 	navSwitchUntil           time.Time
+	pageVeilInit             bool
+	pageVeilPage             int
+	pageVeilStart            time.Time
+	services                 ui.Services
+	accelState               *atomic.Uint32
+	probeDraw                func(*ui.Painter, ui.Rect)
+}
+
+func (s *frameLayoutState) recordPainterBackend(p *ui.Painter, _ ui.Rect) {
+	next := backendSoftware
+	if p.Accelerated() {
+		next = backendAccelerated
+	}
+	if s.accelState == nil {
+		s.accelState = new(atomic.Uint32)
+	}
+	prev := s.accelState.Swap(next)
+	if prev != next && s.services != (ui.Services{}) {
+		s.services.Invalidate()
+	}
 }
 
 type frameMotionState struct {
 	scaleReflow          bool
 	staticSnapshot       bool
 	orientationRotating  bool
+	software             bool
 	orientationRotateGen uint64
 	layout               *frameLayoutState
 }
@@ -155,6 +219,11 @@ func readFrameMotionState(ctx *ui.Context) frameMotionState {
 	}
 	frameStatesMu.RUnlock()
 	return out
+}
+
+// IsSoftware reports whether the window painter runs on the software CPU rasterizer.
+func IsSoftware(ctx *ui.Context) bool {
+	return readFrameMotionState(ctx).software
 }
 
 // IsOrientationRotating reports whether ctx is within a mobile orientation transition window.
@@ -216,10 +285,14 @@ func trackDesktopNavLayoutSwitch(ctx *ui.Context, sidebar bool) bool {
 		return false
 	}
 	if ls.navSidebar != sidebar {
+		dur := navLayoutSwitchDur
+		if st.software {
+			dur = navLayoutSwitchDurCPU
+		}
 		ls.navSidebar = sidebar
-		ls.navSwitchUntil = now.Add(navLayoutSwitchDur)
+		ls.navSwitchUntil = now.Add(dur)
 		frameStatesMu.Unlock()
-		ctx.After(navLayoutSwitchDur)
+		ctx.After(dur)
 		return true
 	}
 	if now.Before(ls.navSwitchUntil) {
@@ -269,8 +342,18 @@ func glassPressAnimation(pressed bool) ui.Animation {
 
 // Desktop navigation shares one spring so its tabs and toggle stay with the panel.
 func navMatchTransition(ctx *ui.Context, matchKey any) ui.ElementTransition {
-	if isStaticSnapshot(ctx) {
+	fs := readFrameMotionState(ctx)
+	if fs.staticSnapshot {
 		return ui.ElementTransition{}
+	}
+	if fs.software {
+		return ui.ElementTransition{
+			Position:  true,
+			Size:      true,
+			Animation: &motionNavPanelCPU,
+			Match:     matchKey,
+			Fly:       false,
+		}
 	}
 	return ui.ElementTransition{
 		Position:  true,
@@ -340,9 +423,17 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	ui.Overlay(ctx, func() {})
 	w, h := ctx.Size()
 	top, right, bottom, left := ctx.SafeArea()
-	state := ui.Local(ui.Box(ctx).Absolute().Size(0, 0).PassThrough(), "frame-layout", func() frameLayoutState {
-		return frameLayoutState{}
+	key := ctx.Services()
+	probe := ui.Box(ctx).Absolute().Size(0, 0).PassThrough()
+	state := ui.Local(probe, "frame-layout", func() frameLayoutState {
+		return frameLayoutState{accelState: new(atomic.Uint32)}
 	})
+	if state.probeDraw == nil {
+		state.services = key
+		state.probeDraw = state.recordPainterBackend
+	}
+	probe.Draw(state.probeDraw)
+	software := state.accelState.Load() == backendSoftware
 	now := ctx.Now()
 	insetSnap := false
 	resetNavSwitch := false
@@ -381,7 +472,6 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	}
 	scaleReflow := insetSnap || now.Before(state.until)
 	orientationRotating := mobile && now.Before(state.rotateUntil)
-	key := ctx.Services()
 	frameStatesMu.Lock()
 	if resetNavSwitch {
 		state.navSwitchUntil = time.Time{}
@@ -389,6 +479,7 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	frameStates[key] = &frameMotionState{
 		scaleReflow:          scaleReflow,
 		orientationRotating:  orientationRotating,
+		software:             software,
 		orientationRotateGen: state.rotateGen,
 		layout:               state,
 	}
@@ -406,8 +497,19 @@ func BeginFrame(ctx *ui.Context, mobile bool) func() {
 	}
 }
 
+// SideContentMotion animates content shifts beside a toggling navigation rail.
+func SideContentMotion(ctx *ui.Context, el ui.Element) ui.Element {
+	if IsSoftware(ctx) {
+		return el.Transition(sideContentTransitionCPU)
+	}
+	return el.Transition(SideContentTransition)
+}
+
 // NavigationPageMotion attaches a directional entrance transition for page switches.
-func NavigationPageMotion(el ui.Element, horizontal bool, direction int) ui.Element {
+func NavigationPageMotion(ctx *ui.Context, el ui.Element, horizontal bool, direction int) ui.Element {
+	if IsSoftware(ctx) {
+		return el
+	}
 	if direction == 0 {
 		direction = 1
 	}
@@ -420,6 +522,70 @@ func NavigationPageMotion(el ui.Element, horizontal bool, direction int) ui.Elem
 	return el.Transition(ui.ElementTransition{
 		Position: true, Animation: &motionPage, Enter: enter,
 	})
+}
+
+// NavigationPageVeil renders a lightweight flat canvas fade veil over newly switched
+// pages in software mode without offscreen groupLayer allocation or resampling.
+func NavigationPageVeil(ctx *ui.Context, p Palette, page int) {
+	if ctx == nil {
+		return
+	}
+	reduceMotion := ctx.Preferences().ReduceMotion
+	key := ctx.Services()
+	now := ctx.Now()
+	frameStatesMu.Lock()
+	st := frameStates[key]
+	if st == nil || st.staticSnapshot || st.layout == nil {
+		frameStatesMu.Unlock()
+		return
+	}
+	ls := st.layout
+	if !ls.pageVeilInit {
+		ls.pageVeilInit, ls.pageVeilPage = true, page
+		frameStatesMu.Unlock()
+		return
+	}
+	if !st.software {
+		ls.pageVeilPage = page
+		ls.pageVeilStart = time.Time{}
+		frameStatesMu.Unlock()
+		return
+	}
+	if st.scaleReflow || st.orientationRotating || reduceMotion {
+		ls.pageVeilPage = page
+		ls.pageVeilStart = time.Time{}
+		frameStatesMu.Unlock()
+		return
+	}
+	if ls.pageVeilPage != page {
+		ls.pageVeilPage = page
+		ls.pageVeilStart = now
+	}
+	start := ls.pageVeilStart
+	elapsed := now.Sub(start)
+	if start.IsZero() || elapsed < 0 || elapsed >= pageVeilDur {
+		if !start.IsZero() && elapsed >= pageVeilDur {
+			ls.pageVeilStart = time.Time{}
+		}
+		frameStatesMu.Unlock()
+		return
+	}
+	frameStatesMu.Unlock()
+
+	ctx.After(pageVeilDur - elapsed)
+	canvasColor := p.Canvas
+	ui.Box(ctx.Key("page-veil")).Absolute().Fill().PassThrough().IgnoreInput(true).AccessHidden(true).
+		Draw(func(painter *ui.Painter, box ui.Rect) {
+			dt := painter.Now().Sub(start)
+			if dt < 0 || dt >= pageVeilDur {
+				return
+			}
+			u := float32(dt) / float32(pageVeilDur)
+			inv := 1 - u
+			alpha := float32(0.55) * inv * inv * inv
+			painter.Fill(box, canvasColor.Alpha(alpha), 0)
+			painter.AnimationFrame()
+		})
 }
 
 // AnimatedLabel renders a text element that morphs smoothly across locale changes.
@@ -461,26 +627,43 @@ func InlineMotion(ctx *ui.Context, el ui.Element) ui.Element {
 	return el.Transition(inlineTransition)
 }
 
-func popupMotion(el ui.Element) {
+func popupMotion(ctx *ui.Context, el ui.Element) {
+	if IsSoftware(ctx) {
+		el.AttachedOrigin().Transition(popupTransitionCPU)
+		return
+	}
 	el.AttachedOrigin().Transition(popupTransition)
 }
 
-func optionMenuMotion(el ui.Element) ui.Element {
+func optionMenuMotion(ctx *ui.Context, el ui.Element) ui.Element {
+	if IsSoftware(ctx) {
+		return el.AttachedOrigin().Transition(optionPopupTransitionCPU)
+	}
 	return el.AttachedOrigin().Transition(optionPopupTransition)
 }
 
-func modalMotion(el ui.Element) ui.Element {
+func modalMotion(ctx *ui.Context, el ui.Element) ui.Element {
+	if IsSoftware(ctx) {
+		return el.TransformOrigin(0.5, 0.5).Transition(modalTransitionCPU)
+	}
 	return el.TransformOrigin(0.5, 0.5).Transition(modalTransition)
 }
 
-func sheetMotion(el ui.Element) ui.Element {
+func sheetMotion(ctx *ui.Context, el ui.Element) ui.Element {
+	if IsSoftware(ctx) {
+		return el.TransformOrigin(0.5, 1).Transition(sheetTransitionCPU)
+	}
 	return el.TransformOrigin(0.5, 1).Transition(sheetTransition)
 }
 
-func backdropMotion(el ui.Element, p Palette) ui.Element {
+func backdropMotion(ctx *ui.Context, el ui.Element, p Palette) ui.Element {
 	bg := p.Backdrop
 	if p.LiquidGlass {
 		bg = ui.RGBA(8, 10, 14, .24)
 	}
-	return el.Background(bg).Transition(backdropTransition)
+	el = el.Background(bg)
+	if IsSoftware(ctx) {
+		return el
+	}
+	return el.Transition(backdropTransition)
 }

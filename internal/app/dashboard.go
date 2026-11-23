@@ -104,6 +104,7 @@ func (d *dashboard) effectiveWindowFor(sessionSpan float64) float64 {
 func (d *dashboard) resumeLive() {
 	d.held = nil
 	d.chartPaused.Store(false)
+	d.wakeRefresh()
 	d.hasViewEnd = false
 	d.hasCursor = false
 	d.hasHover = false
@@ -934,6 +935,9 @@ func (d *dashboard) metricTab(ctx *ui.Context, p kit.Palette, msgs locales.Messa
 			} else {
 				cardBg = p.Surface.Mix(tone, 0.08).Alpha(0.88)
 			}
+			// metricTab renders directly over opaque p.Canvas; pre-composite to restore A == 255 fill and glyph fast paths.
+			cardBg = cardBg.Over(p.Canvas)
+			cardBg.A = 255
 		}
 		kit.ApplyCardShadow(kit.CardMotion(tab).Background(tab.AnimateColor("m-bg", cardBg, kit.MotionFast)).Border(borderW, border), p)
 	}

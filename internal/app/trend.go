@@ -628,6 +628,7 @@ func (d *dashboard) hold(snapshot backend.Snapshot) {
 	}
 	d.held = &snapshot
 	d.chartPaused.Store(true)
+	d.wakeRefresh()
 }
 
 func (d *dashboard) historyBounds(cw chartWindow) (bufStart, bufEnd float64, ok bool) {
@@ -774,6 +775,16 @@ func (d *dashboard) visibleChartStat(history []device.Sample, index int) channel
 	return cache.stats[index]
 }
 
+func (d *dashboard) hasVisibleChannelData(history []device.Sample, index int) bool {
+	if len(history) == 0 {
+		return false
+	}
+	if d.cachedHasChannelData(history, index) {
+		return true
+	}
+	return d.visibleChartStat(history, index).count > 0
+}
+
 func (d *dashboard) chartLegendRow(ctx *ui.Context, p kit.Palette, msgs locales.Messages, history []device.Sample, seriesMask uint8, compact bool) {
 	var visBuf [len(chartChannelOrder)]int
 	visible := visBuf[:0]
@@ -886,7 +897,7 @@ func seriesGapThreshold(history []device.Sample, scratch []float64) (float64, []
 	if n < 4 {
 		return baseGap, scratch[:0]
 	}
-	const maxSamples = 8192
+	const maxSamples = 256
 	// An odd stride samples both spacings when a bucket contributes two extrema.
 	stride := 1 + (n-2)/maxSamples
 	if stride%2 == 0 {
@@ -1197,7 +1208,11 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 	key := chartGeometryKey{samples: chartSamplesIdentity(source), rect: rect, scale: scale, start: start, end: end, primary: primary, series: series, smooth: d.settings.SmoothChart}
 	for index := range channels {
 		if index == primary || series&uint8(1<<index) != 0 {
-			axis := chartAxis(ranges[index], d.visibleChartStat(history, index))
+			var stat channelStat
+			if !ranges[index].Valid {
+				stat = d.visibleChartStat(history, index)
+			}
+			axis := chartAxis(ranges[index], stat)
 			key.axes[index] = [2]float64{axis.Lo, axis.Hi}
 		}
 	}
@@ -1228,8 +1243,7 @@ func (d *dashboard) prepareChartGeometry(history []device.Sample, ranges [7]back
 		if index != primary && series&uint8(1<<index) == 0 {
 			continue
 		}
-		stat := d.visibleChartStat(history, index)
-		if stat.count == 0 {
+		if !d.hasVisibleChannelData(history, index) {
 			continue
 		}
 		axis := chart.NewLinear(key.axes[index][0], key.axes[index][1])
@@ -1442,9 +1456,14 @@ func (d *dashboard) pixelPoints(points [][2]float32, origin ui.Rect, scale float
 	return out
 }
 
-func secondaryCurveColor(ch measurement, p kit.Palette, wellAlpha float32) ui.Color {
+func chartWellBackground(p kit.Palette, wellAlpha float32) ui.Color {
 	wellBg := p.Inset.Alpha(wellAlpha).Over(p.Surface)
-	c := ch.color(p).Mix(wellBg, 0.14)
+	wellBg.A = 255
+	return wellBg
+}
+
+func secondaryCurveColor(ch measurement, p kit.Palette, wellAlpha float32) ui.Color {
+	c := ch.color(p).Mix(chartWellBackground(p, wellAlpha), 0.14)
 	c.A = 255
 	return c
 }
@@ -1467,7 +1486,12 @@ func (d *dashboard) drawChartPlotLayer(painter *ui.Painter, rect ui.Rect, scale 
 		edge = lineW * 0.5
 	}
 	left, top, right, bottom := rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H
-	painter.Fill(rect, p.Inset.Alpha(wellAlpha), 4*strokeScale)
+	wellBg := chartWellBackground(p, wellAlpha)
+	if pixelSpace {
+		// Cover the rounded corner exteriors with opaque surface pixels so canvas blits hit the no-blend fast path.
+		painter.Fill(rect, p.Surface, 0)
+	}
+	painter.Fill(rect, wellBg, 4*strokeScale)
 
 	gridV := p.LineSoft.Alpha(0.65)
 	for i := 1; i < xDivs; i++ {
@@ -1702,16 +1726,121 @@ func (d *dashboard) handleChartInput(ctx *ui.Context, history []device.Sample, c
 	}
 }
 
-func (d *dashboard) drawChartOverlay(painter *ui.Painter, p kit.Palette, msgs locales.Messages, rect, plotRect ui.Rect, history []device.Sample, sample *device.Sample, channel measurement, geometry *chartGeometry, axis chart.Linear, tickMetrics, secTickMetrics chartTickMetricsCache, secIdx int, rightMargin, xLabelOffset float32, xDivs int, cw chartWindow, seriesMask uint8) {
+type chartDrawCacheKey struct{}
+
+type chartOverlayTextCache struct {
+	scale  float32
+	font   string
+	xTicks [8]struct {
+		tenths int64
+		kind   uint8
+		valid  bool
+		label  string
+		width  float32
+	}
+	livePills [2]struct {
+		valid bool
+		text  string
+		width float32
+	}
+}
+
+type chartDrawCache struct {
+	lastDirectKey chartPlotCanvasKey
+	overlayText   chartOverlayTextCache
+}
+
+func newChartDrawCache() chartDrawCache {
+	return chartDrawCache{}
+}
+
+func chartTimeCacheKey(seconds float64) (kind uint8, key int64, ok bool) {
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < -1e12 || seconds > 1e12 {
+		return 0, 0, false
+	}
+	if seconds >= 3600 {
+		return 4, int64(math.Round(seconds)) / 60, true
+	}
+	if seconds >= 60 {
+		return 3, int64(math.Round(seconds)), true
+	}
+	rounded := math.Round(seconds)
+	if math.Abs(seconds-rounded) < 0.05 {
+		return 1, int64(rounded), true
+	}
+	scaled := seconds * 10
+	tenths := math.Round(scaled)
+	if math.Abs(scaled-tenths) < 0.45 {
+		return 2, int64(tenths), true
+	}
+	return 0, 0, false
+}
+
+func measureOverlayText(painter *ui.Painter, text string) float32 {
+	w, _ := painter.MeasureText(1<<20, ui.Span{Text: text, Size: 10})
+	return w
+}
+
+func measureCachedOverlayPill(painter *ui.Painter, cache *chartOverlayTextCache, slotIdx int, text string) float32 {
+	if cache != nil && slotIdx >= 0 && slotIdx < len(cache.livePills) {
+		slot := &cache.livePills[slotIdx]
+		if slot.valid && slot.text == text {
+			return slot.width
+		}
+		w := measureOverlayText(painter, text)
+		slot.valid = true
+		slot.text = text
+		slot.width = w
+		return w
+	}
+	return measureOverlayText(painter, text)
+}
+
+func (d *dashboard) drawChartOverlay(painter *ui.Painter, p kit.Palette, msgs locales.Messages, rect, plotRect ui.Rect, history []device.Sample, sample *device.Sample, channel measurement, geometry *chartGeometry, axis chart.Linear, tickMetrics, secTickMetrics chartTickMetricsCache, secIdx int, rightMargin, xLabelOffset float32, xDivs int, cw chartWindow, seriesMask uint8, overlayCache *chartOverlayTextCache) {
 	winStart, winEnd := cw.winStart, cw.winEnd
 	left, top, right, bottom := plotRect.X, plotRect.Y, plotRect.X+plotRect.W, plotRect.Y+plotRect.H
 	tone := channel.color(p)
 
+	scale := painter.Scale()
+	if scale <= 0 {
+		scale = 1
+	}
+	font := ""
+	if theme := painter.Theme(); theme != nil {
+		font = theme.Font
+	}
+	if overlayCache != nil && (overlayCache.scale != scale || overlayCache.font != font) {
+		*overlayCache = chartOverlayTextCache{scale: scale, font: font}
+	}
+
 	for i := 0; i <= xDivs; i++ {
 		frac := float32(i) / float32(xDivs)
 		gx := left + plotRect.W*frac
-		label := formatChartTime(winStart + float64(frac)*(winEnd-winStart))
-		labelWidth, _ := painter.MeasureText(1<<20, ui.Span{Text: label, Size: 10})
+		t := winStart + float64(frac)*(winEnd-winStart)
+		var label string
+		var labelWidth float32
+		if overlayCache != nil && i < len(overlayCache.xTicks) {
+			slot := &overlayCache.xTicks[i]
+			kind, key, canKey := chartTimeCacheKey(t)
+			if canKey && slot.valid && slot.kind == kind && slot.tenths == key {
+				label, labelWidth = slot.label, slot.width
+			} else {
+				label = formatChartTime(t)
+				if !slot.valid || slot.label != label {
+					labelWidth = measureOverlayText(painter, label)
+				} else {
+					labelWidth = slot.width
+				}
+				slot.tenths = key
+				slot.kind = kind
+				slot.valid = true
+				slot.label = label
+				slot.width = labelWidth
+			}
+		} else {
+			label = formatChartTime(t)
+			labelWidth = measureOverlayText(painter, label)
+		}
 		lx := clampOrder(gx-labelWidth/2, left, right-labelWidth)
 		painter.Text(lx, bottom+xLabelOffset, label, 10, p.Muted)
 	}
@@ -1777,13 +1906,19 @@ func (d *dashboard) drawChartOverlay(painter *ui.Painter, p kit.Palette, msgs lo
 
 		if liveStr != "" {
 			pillStr := liveStr
+			var lw float32
+			measured := false
 			if topTickSkipped {
 				withUnit := liveStr + " " + channel.unit
-				if uw, _ := painter.MeasureText(1<<20, ui.Span{Text: withUnit, Size: 10}); uw+8 <= rightMargin-3 {
+				if uw := measureCachedOverlayPill(painter, overlayCache, 1, withUnit); uw+8 <= rightMargin-3 {
 					pillStr = withUnit
+					lw = uw
+					measured = true
 				}
 			}
-			lw, _ := painter.MeasureText(1<<20, ui.Span{Text: pillStr, Size: 10})
+			if !measured {
+				lw = measureCachedOverlayPill(painter, overlayCache, 0, pillStr)
+			}
 			pillW := min(rightMargin-3, lw+8)
 			pillX := rect.X + rect.W - pillW
 			painter.Fill(ui.Rect{X: pillX, Y: livePillY, W: pillW, H: 18}, tone, 4)
@@ -1844,8 +1979,14 @@ func (d *dashboard) drawChartOverlay(painter *ui.Painter, p kit.Palette, msgs lo
 func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages, snap, live backend.Snapshot, channel measurement, sample *device.Sample, cw chartWindow, height float32, empty string, touch bool, seriesMask uint8, wideLeftAxis bool) {
 	history := snap.History
 	primary := d.channel
-	stat := d.visibleChartStat(history, primary)
-	if stat.count == 0 {
+	var stat channelStat
+	if !snap.ChartRanges[primary].Valid {
+		stat = d.visibleChartStat(history, primary)
+		if stat.count == 0 {
+			d.trendEmptyState(ctx, p, msgs, live, height, empty, touch)
+			return
+		}
+	} else if !d.hasVisibleChannelData(history, primary) {
 		d.trendEmptyState(ctx, p, msgs, live, height, empty, touch)
 		return
 	}
@@ -1863,7 +2004,13 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 
 	var secTickMetrics chartTickMetricsCache
 	if hasLeftAxis {
-		if secStat := d.visibleChartStat(history, secIdx); secStat.count > 0 {
+		var secStat channelStat
+		hasSecData := true
+		if !snap.ChartRanges[secIdx].Valid {
+			secStat = d.visibleChartStat(history, secIdx)
+			hasSecData = secStat.count > 0
+		}
+		if hasSecData {
 			secCh := channels[secIdx]
 			secAxis := chartAxis(snap.ChartRanges[secIdx], secStat)
 			secTickMetrics = d.resolveChartTicks(ctx, 1, secIdx, secAxis, secCh.unit, compactMobile, false)
@@ -1890,6 +2037,7 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 
 	canPan := cw.bufEnd-cw.bufStart > cw.windowSec+1e-3 || (d.hasViewEnd && d.viewEnd < cw.bufEnd-1e-3)
 	plot := ui.Box(ctx.Key("chart")).FillWidth()
+	drawCache := ui.Local(plot, chartDrawCacheKey{}, newChartDrawCache)
 	if !d.snapshotOnly {
 		plot.Bind(&d.chartHandle)
 		plot.HandleInput(d.handleChartInput(ctx, history, cw, leftMargin, rightMargin))
@@ -1942,8 +2090,16 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		if compactMobile {
 			plotTop, plotBottom, xLabelOffset = 4, 18, 4
 		}
-		left, right := rect.X+leftMargin, rect.X+rect.W-rightMargin
-		top, bottom := rect.Y+plotTop, rect.Y+rect.H-plotBottom
+		scale := painter.Scale()
+		if scale <= 0 {
+			scale = 1
+		}
+		leftPx := math.Round(float64((rect.X + leftMargin) * scale))
+		rightPx := math.Round(float64((rect.X + rect.W - rightMargin) * scale))
+		topPx := math.Round(float64((rect.Y + plotTop) * scale))
+		bottomPx := math.Round(float64((rect.Y + rect.H - plotBottom) * scale))
+		left, right := float32(leftPx)/scale, float32(rightPx)/scale
+		top, bottom := float32(topPx)/scale, float32(bottomPx)/scale
 		if right <= left+4 || bottom <= top+4 {
 			return
 		}
@@ -1957,16 +2113,13 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		if plotRect.W < 420 {
 			xDivs = 2
 		}
-		scale := painter.Scale()
-		if scale <= 0 {
-			scale = 1
-		}
 		wPx := max(1, int(math.Round(float64(plotRect.W*scale))))
 		hPx := max(1, int(math.Round(float64(plotRect.H*scale))))
 
+		navSwitching := !d.snapshotOnly && navSwitch.Active(painter.Now())
 		canvasPtr, canvasKeyPtr, canCache := d.chartCanvasState()
 		freezeCanvas := false
-		if canCache && !d.snapshotOnly && navSwitch.Active(painter.Now()) && *canvasPtr != nil {
+		if canCache && navSwitching && *canvasPtr != nil {
 			cwPx, chPx := (*canvasPtr).Size()
 			freezeCanvas = wPx <= 4096 && hPx <= 4096 &&
 				cwPx > 0 && chPx > 0 && cwPx <= 4096 && chPx <= 4096 &&
@@ -1982,34 +2135,56 @@ func (d *dashboard) trend(ctx *ui.Context, p kit.Palette, msgs locales.Messages,
 		}
 		geometry := d.prepareChartGeometry(history, snap.ChartRanges, drawRect, scale, winStart, winEnd, primary, seriesMask)
 
+		liveAdvancing := live.State == backend.Streaming && d.held == nil && !d.hasViewEnd && !d.snapshotOnly
 		overlayXDivs := xDivs
 		if canCache && drawWPx <= 4096 && drawHPx <= 4096 {
 			plotKey := makeChartPlotCanvasKey(geometry.key, drawWPx, drawHPx, scale, p, drawXDivs, ticks, primary, seriesMask, hasLeftAxis)
-			canvas := *canvasPtr
-			if canvas == nil {
-				canvas = ui.NewCanvas(drawWPx, drawHPx)
-				*canvasPtr = canvas
-			} else if cwPx, chPx := canvas.Size(); cwPx != drawWPx || chPx != drawHPx {
-				canvas = ui.NewCanvas(drawWPx, drawHPx)
-				*canvasPtr = canvas
-				*canvasKeyPtr = chartPlotCanvasKey{}
+			if liveAdvancing && !navSwitching && !freezeCanvas && *canvasKeyPtr != plotKey && (drawCache == nil || drawCache.lastDirectKey != plotKey) {
+				if canvasKeyPtr.wPx != wPx || canvasKeyPtr.hPx != hPx || canvasKeyPtr.scale != scale {
+					// Keep *canvasPtr allocation intact, but drop stale dimensions so NavToggle seeds at the current plot size.
+					*canvasKeyPtr = chartPlotCanvasKey{}
+				}
+				if drawCache != nil {
+					drawCache.lastDirectKey = plotKey
+				}
+				d.drawChartPlotLayer(painter, plotRect, scale, p, wellAlpha, xDivs, ticks, geometry, axis, primary, hasLeftAxis, false)
+			} else {
+				canvas := *canvasPtr
+				if canvas == nil {
+					canvas = ui.NewCanvas(drawWPx, drawHPx)
+					*canvasPtr = canvas
+				} else if cwPx, chPx := canvas.Size(); cwPx != drawWPx || chPx != drawHPx {
+					canvas = ui.NewCanvas(drawWPx, drawHPx)
+					*canvasPtr = canvas
+					*canvasKeyPtr = chartPlotCanvasKey{}
+				}
+				if *canvasKeyPtr != plotKey {
+					canvas.Draw(painter, func(cp *ui.Painter) {
+						d.drawChartPlotLayer(cp, ui.Rect{W: float32(drawWPx), H: float32(drawHPx)}, scale, p, wellAlpha, drawXDivs, ticks, geometry, axis, primary, hasLeftAxis, true)
+					})
+					*canvasKeyPtr = plotKey
+					if drawCache != nil {
+						drawCache.lastDirectKey = chartPlotCanvasKey{}
+					}
+				}
+				overlayXDivs = drawXDivs
+				painter.Image(canvas.Bitmap(), plotRect, ui.FillBox)
 			}
-			if *canvasKeyPtr != plotKey {
-				canvas.Draw(painter, func(cp *ui.Painter) {
-					d.drawChartPlotLayer(cp, ui.Rect{W: float32(drawWPx), H: float32(drawHPx)}, scale, p, wellAlpha, drawXDivs, ticks, geometry, axis, primary, hasLeftAxis, true)
-				})
-				*canvasKeyPtr = plotKey
-			}
-			overlayXDivs = drawXDivs
-			painter.Image(canvas.Bitmap(), plotRect, ui.FillBox)
 		} else {
 			if canCache {
 				*canvasKeyPtr = chartPlotCanvasKey{}
 			}
+			if drawCache != nil {
+				drawCache.lastDirectKey = chartPlotCanvasKey{}
+			}
 			d.drawChartPlotLayer(painter, plotRect, scale, p, wellAlpha, xDivs, ticks, geometry, axis, primary, hasLeftAxis, false)
 		}
 
-		d.drawChartOverlay(painter, p, msgs, rect, plotRect, history, sample, channel, geometry, axis, tickMetrics, secTickMetrics, secIdx, rightMargin, xLabelOffset, overlayXDivs, cw, seriesMask)
+		var overlayCache *chartOverlayTextCache
+		if drawCache != nil {
+			overlayCache = &drawCache.overlayText
+		}
+		d.drawChartOverlay(painter, p, msgs, rect, plotRect, history, sample, channel, geometry, axis, tickMetrics, secTickMetrics, secIdx, rightMargin, xLabelOffset, overlayXDivs, cw, seriesMask, overlayCache)
 	})
 }
 
