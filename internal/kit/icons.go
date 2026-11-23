@@ -9,9 +9,29 @@ func svgIcon(body string) *ui.SVG {
 	return ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">` + body + `</svg>`))
 }
 
+func brandMarkSVG(track, fg string) *ui.SVG {
+	return ui.MustParseSVG([]byte(
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="156 156 712 712">` +
+			`<path d="M262 682 A290 290 0 1 1 762 682" fill="none" stroke="` + track + `" stroke-width="68" stroke-linecap="round"/>` +
+			`<path d="M262 682 A290 290 0 0 1 657 284" fill="none" stroke="` + fg + `" stroke-width="68" stroke-linecap="round"/>` +
+			`<path d="M556 340 L408 568 H510 L478 740 L628 506 H526 Z" fill="` + fg + `" stroke="` + fg + `" stroke-width="28" stroke-linejoin="round"/>` +
+			`</svg>`,
+	))
+}
+
+// BrandMark returns the transparent vector brand mark tailored for light or dark canvases.
+func BrandMark(dark bool) *ui.SVG {
+	if dark {
+		return brandMarkDark
+	}
+	return brandMarkLight
+}
+
 // BrandLogo and Icon* SVG assets provide WattScope's vector icons.
 var (
-	BrandLogo = ui.MustParseSVG(appicon.SVG)
+	BrandLogo      = ui.MustParseSVG(appicon.SVG)
+	brandMarkLight = brandMarkSVG("#d5dff8", "#3e63dd")
+	brandMarkDark  = brandMarkSVG("#2c3752", "#6e92ff")
 
 	// Navigation & brand
 	IconActivity  = svgIcon(`<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>`)

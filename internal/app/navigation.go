@@ -36,9 +36,10 @@ const (
 	navigationSidebarWidth = kit.DesktopSidebarWidth + kit.DesktopSidebarMargin
 	compactSidebarWidth    = kit.DesktopCompactRailWidth + kit.DesktopSidebarMargin
 	workspacePadding       = 16
-	headerHeight           = 44
+	headerHeight           = 48
+	headerTopPad           = 8
 	mobileHeaderHeight     = 50
-	headerLeading          = 16
+	headerLeading          = 20
 	headerGap              = 8
 	navTabPadding          = 10
 	navLabelGap            = 7
@@ -303,7 +304,7 @@ func computePageInsets(layout workspaceLayout, page workspacePage, contentFloati
 	padX := float32(20)
 	var padY, padBottom float32
 	if page.list != nil || page.fixed != nil {
-		padY, in.gap = 16, 12
+		padY, in.gap = 12, 12
 		switch {
 		case layout.portraitMobile:
 			padY, padX, in.gap = 10, 14, 10
@@ -324,7 +325,7 @@ func computePageInsets(layout workspaceLayout, page workspacePage, contentFloati
 			padBottom = max(6, layout.bottomInset+4)
 		}
 	} else {
-		padY = 16
+		padY = 12
 		switch {
 		case layout.portraitMobile:
 			padY, padX, in.gap = 12, 14, 12
@@ -542,7 +543,7 @@ func (d *dashboard) workspaceHeader(ctx *ui.Context, p kit.Palette, msgs locales
 		plan := d.computeDesktopHeaderPlan(ctx, topPages, pageTitle, name, status, metrics)
 		header.Gap(headerGap)
 		if !d.mobile {
-			header.Height(headerHeight).Padding(0, metrics.padEnd, 0, metrics.padStart).DragWindow()
+			header.Height(headerHeight).Padding(headerTopPad, metrics.padEnd, 0, metrics.padStart).DragWindow()
 		} else {
 			header.Height(mobileHeaderHeight+layout.topInset).
 				Padding(layout.topInset, layout.rightInset+metrics.padEnd, 0, layout.leftInset+metrics.padStart)
@@ -555,9 +556,9 @@ func (d *dashboard) workspaceHeader(ctx *ui.Context, p kit.Palette, msgs locales
 					title.Transition(kit.NavRotateMatchTransition(ctx, navHeaderTitleMatchKey{}))
 				}
 			} else {
-				ui.Row(ctx).AlignItems(ui.Center).Gap(7).Shrink(0).Children(func() {
-					ui.Image(ctx, kit.BrandLogo).Size(22, 22).Shrink(0).AccessHidden(true)
-					ui.Text(ctx, "WattScope").FontSize(13).FontWeight(750).SingleLine().Shrink(0).
+				ui.Row(ctx).AlignItems(ui.Center).Gap(8).Shrink(0).Children(func() {
+					ui.Image(ctx, kit.BrandMark(p.Dark)).Size(20, 20).Shrink(0).AccessHidden(true)
+					ui.Text(ctx, "WattScope").FontSize(14).FontWeight(650).SingleLine().Shrink(0).
 						Role(ui.RoleHeading).Level(1)
 				})
 			}
@@ -713,7 +714,7 @@ func (d *dashboard) headerLayoutMetrics(ctx *ui.Context) desktopHeaderMetrics {
 	if !d.mobile {
 		return desktopHeaderMetrics{
 			padStart:     headerLeading,
-			padEnd:       workspacePadding,
+			padEnd:       20,
 			pillHeight:   kit.DesktopTopNavHeight,
 			themeBtnSize: kit.DesktopTopNavHeight,
 			tabsMargin:   6,
@@ -821,8 +822,8 @@ func (d *dashboard) computeDesktopHeaderPlan(ctx *ui.Context, pages []workspaceP
 		brandW = titleW
 		available -= leftInset + rightInset
 	} else {
-		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: "WattScope", Size: 13, Weight: 750})
-		brandW = 22 + 7 + titleW
+		titleW, _ := ctx.MeasureText(1<<20, ui.Span{Text: "WattScope", Size: 14, Weight: 650})
+		brandW = 20 + 8 + titleW
 		rightW += windowButtonGap + windowButtonsWidth
 	}
 	fullText := statusPillText(name, status)

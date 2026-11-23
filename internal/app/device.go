@@ -279,7 +279,7 @@ func (d *dashboard) deviceSubnav(ctx *ui.Context, p kit.Palette, msgs locales.Me
 		selected = 1
 	}
 	landscape := d.isLandscape(ctx)
-	padTop, padBottom, padX := floatingTop+16, float32(6), float32(20)
+	padTop, padBottom, padX := floatingTop+12, float32(6), float32(20)
 	if landscape {
 		padTop, padBottom, padX = floatingTop+4, 4, 12
 	}
